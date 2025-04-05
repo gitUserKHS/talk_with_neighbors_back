@@ -2,6 +2,8 @@ package com.talkwithneighbors.repository;
 
 import com.talkwithneighbors.entity.Message;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import java.util.List;
@@ -26,4 +28,10 @@ public interface MessageRepository extends JpaRepository<Message, String> {
      * @param chatRoomId 채팅방 ID
      */
     void deleteByChatRoomId(String chatRoomId);
-} 
+
+    @Query("SELECT m FROM Message m WHERE m.chatRoom.id = :roomId AND :userId NOT IN (SELECT u FROM m.readByUsers u)")
+    List<Message> findUnreadMessages(@Param("roomId") String roomId, @Param("userId") Long userId);
+    
+    @Query("SELECT COUNT(m) FROM Message m WHERE m.chatRoom.id = :roomId AND :userId NOT IN (SELECT u FROM m.readByUsers u)")
+    long countUnreadMessages(@Param("roomId") String roomId, @Param("userId") Long userId);
+}

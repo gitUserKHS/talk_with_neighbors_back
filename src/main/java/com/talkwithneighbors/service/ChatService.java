@@ -12,10 +12,12 @@ import com.talkwithneighbors.repository.MessageRepository;
 import com.talkwithneighbors.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
+import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Collectors;
 
 @Service
@@ -25,6 +27,7 @@ public class ChatService {
     private final ChatRoomRepository chatRoomRepository;
     private final MessageRepository messageRepository;
     private final UserRepository userRepository;
+    private final SimpMessagingTemplate messagingTemplate;
 
     @Transactional(readOnly = true)
     public List<ChatRoomDto> getUserChatRooms(String userId) {
@@ -136,4 +139,78 @@ public class ChatService {
             chatRoomRepository.save(chatRoom);
         }
     }
-} 
+
+    @Transactional
+    public MessageDto updateMessage(String messageId, String content, String userId) {
+        Message message = messageRepository.findById(messageId)
+                .orElseThrow(() -> new ChatException("메시지를 찾을 수 없습니다.", HttpStatus.NOT_FOUND));
+
+        if (!message.getSender().getId().toString().equals(userId)) {
+            throw new ChatException("메시지를 수정할 권한이 없습니다.", HttpStatus.FORBIDDEN);
+        }
+
+        message.setContent(content);
+        Message updatedMessage = messageRepository.save(message);
+        
+        // WebSocket을 통해 메시지 업데이트 알림
+        messagingTemplate.convertAndSend(
+            "/topic/chat/" + message.getChatRoom().getId() + "/message-updated",
+            MessageDto.fromEntity(updatedMessage)
+        );
+
+        return MessageDto.fromEntity(updatedMessage);
+    }
+
+    @Transactional
+    public void deleteMessage(String messageId, String userId) {
+        Message message = messageRepository.findById(messageId)
+                .orElseThrow(() -> new ChatException("메시지를 찾을 수 없습니다.", HttpStatus.NOT_FOUND));
+
+        if (!message.getSender().getId().toString().equals(userId)) {
+            throw new ChatException("메시지를 삭제할 권한이 없습니다.", HttpStatus.FORBIDDEN);
+        }
+
+        message.setDeleted(true);
+        message.setContent("이 메시지는 삭제되었습니다.");
+        messageRepository.save(message);
+        
+        // WebSocket을 통해 메시지 삭제 알림
+        messagingTemplate.convertAndSend(
+            "/topic/chat/" + message.getChatRoom().getId() + "/message-deleted",
+            messageId
+        );
+    }
+
+    @Transactional
+    public void markMessageAsRead(String messageId, String userId) {
+        Message message = messageRepository.findById(messageId)
+                .orElseThrow(() -> new ChatException("메시지를 찾을 수 없습니다.", HttpStatus.NOT_FOUND));
+
+        message.getReadByUsers().add(Long.parseLong(userId));
+        messageRepository.save(message);
+        
+        // WebSocket을 통해 메시지 읽음 상태 업데이트 알림
+        messagingTemplate.convertAndSend(
+            "/topic/chat/" + message.getChatRoom().getId() + "/message-read",
+            Map.of("messageId", messageId, "userId", userId)
+        );
+    }
+
+    @Transactional
+    public void markAllMessagesAsRead(String roomId, String userId) {
+        ChatRoom chatRoom = chatRoomRepository.findById(roomId)
+                .orElseThrow(() -> new ChatException("채팅방을 찾을 수 없습니다.", HttpStatus.NOT_FOUND));
+
+        List<Message> unreadMessages = messageRepository.findUnreadMessages(roomId, Long.parseLong(userId));
+        for (Message message : unreadMessages) {
+            message.getReadByUsers().add(Long.parseLong(userId));
+            messageRepository.save(message);
+        }
+        
+        // WebSocket을 통해 모든 메시지 읽음 상태 업데이트 알림
+        messagingTemplate.convertAndSend(
+            "/topic/chat/" + roomId + "/all-messages-read",
+            userId
+        );
+    }
+}

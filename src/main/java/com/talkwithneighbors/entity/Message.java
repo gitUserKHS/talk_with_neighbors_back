@@ -5,6 +5,8 @@ import lombok.Getter;
 import lombok.Setter;
 import lombok.NoArgsConstructor;
 import java.time.LocalDateTime;
+import java.util.HashSet;
+import java.util.Set;
 
 /**
  * 채팅 메시지를 관리하는 엔티티 클래스
@@ -50,6 +52,30 @@ public class Message {
      * 메시지 생성 시간
      */
     private LocalDateTime createdAt;
+    
+    /**
+     * 메시지 타입
+     */
+    @Enumerated(EnumType.STRING)
+    private MessageType type = MessageType.TEXT;
+    
+    /**
+     * 메시지 수정 시간
+     */
+    private LocalDateTime updatedAt;
+    
+    /**
+     * 메시지 삭제 상태
+     */
+    private boolean isDeleted = false;
+    
+    /**
+     * 메시지 읽음 상태
+     */
+    @ElementCollection
+    @CollectionTable(name = "message_read_status", 
+        joinColumns = @JoinColumn(name = "message_id"))
+    private Set<Long> readByUsers = new HashSet<>();
 
     /**
      * 엔티티가 데이터베이스에 저장되기 전에 실행되는 메서드
@@ -65,5 +91,15 @@ public class Message {
         if (createdAt == null) {
             createdAt = LocalDateTime.now();
         }
+        updatedAt = createdAt;
     }
-} 
+    
+    /**
+     * 엔티티가 데이터베이스에 업데이트되기 전에 실행되는 메서드
+     * 수정 시간을 현재 시간으로 설정합니다.
+     */
+    @PreUpdate
+    protected void onUpdate() {
+        updatedAt = LocalDateTime.now();
+    }
+}

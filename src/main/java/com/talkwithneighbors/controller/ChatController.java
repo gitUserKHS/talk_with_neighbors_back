@@ -73,4 +73,48 @@ public class ChatController {
         chatService.leaveRoom(roomId, userSession.getUserId());
         return ResponseEntity.ok().build();
     }
-} 
+
+    @RequireLogin
+    @PutMapping("/messages/{messageId}")
+    public ResponseEntity<MessageDto> updateMessage(
+            @PathVariable String messageId,
+            @RequestBody MessageDto request,
+            HttpSession session
+    ) {
+        UserSession userSession = (UserSession) session.getAttribute("user");
+        return ResponseEntity.ok(chatService.updateMessage(messageId, request.getContent(), userSession.getUserId()));
+    }
+
+    @RequireLogin
+    @DeleteMapping("/messages/{messageId}")
+    public ResponseEntity<Void> deleteMessage(
+            @PathVariable String messageId,
+            HttpSession session
+    ) {
+        UserSession userSession = (UserSession) session.getAttribute("user");
+        chatService.deleteMessage(messageId, userSession.getUserId());
+        return ResponseEntity.ok().build();
+    }
+
+    @RequireLogin
+    @PostMapping("/messages/{messageId}/read")
+    public ResponseEntity<Void> markMessageAsRead(
+            @PathVariable String messageId,
+            HttpSession session
+    ) {
+        UserSession userSession = (UserSession) session.getAttribute("user");
+        chatService.markMessageAsRead(messageId, userSession.getUserId());
+        return ResponseEntity.ok().build();
+    }
+
+    @RequireLogin
+    @PostMapping("/rooms/{roomId}/read-all")
+    public ResponseEntity<Void> markAllMessagesAsRead(
+            @PathVariable String roomId,
+            HttpSession session
+    ) {
+        UserSession userSession = (UserSession) session.getAttribute("user");
+        chatService.markAllMessagesAsRead(roomId, userSession.getUserId());
+        return ResponseEntity.ok().build();
+    }
+}
