@@ -8,6 +8,8 @@ import lombok.AllArgsConstructor;
 import lombok.Builder;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.ArrayList;
+import com.fasterxml.jackson.annotation.JsonIgnore;
 
 /**
  * 사용자 정보를 관리하는 엔티티 클래스
@@ -33,15 +35,15 @@ public class User {
      * 사용자의 이메일 주소
      * 유니크한 값으로 설정됩니다.
      */
-    @Column(unique = true, nullable = false)
+    @Column(nullable = false, unique = true)
     private String email;
 
     /**
      * 사용자의 닉네임
      * 유니크한 값으로 설정됩니다.
      */
-    @Column(unique = true, nullable = false)
-    private String username;
+    @Column(nullable = false)
+    private String nickname;
 
     /**
      * 사용자의 비밀번호
@@ -80,7 +82,8 @@ public class User {
     @ElementCollection
     @CollectionTable(name = "user_interests", joinColumns = @JoinColumn(name = "user_id"))
     @Column(name = "interest")
-    private List<String> interests;
+    @JsonIgnore
+    private List<String> interests = new ArrayList<>();
     
     /**
      * 사용자의 자기소개
@@ -92,8 +95,10 @@ public class User {
     /**
      * 사용자의 위치 정보
      */
+    @Column(nullable = false)
     private Double latitude;
       
+    @Column(nullable = false)
     private Double longitude;
     
     @Column(nullable = false)
@@ -107,6 +112,25 @@ public class User {
     
     @Column(name = "last_online_at")
     private LocalDateTime lastOnlineAt;
+
+    @Column(name = "last_location_update")
+    private LocalDateTime lastLocationUpdate;
+
+    @OneToMany(mappedBy = "creator", cascade = CascadeType.ALL)
+    private List<ChatRoom> createdRooms = new ArrayList<>();
+
+    @ManyToMany(mappedBy = "participants")
+    private List<ChatRoom> joinedRooms = new ArrayList<>();
+
+    @OneToMany(mappedBy = "sender", cascade = CascadeType.ALL)
+    private List<Message> sentMessages = new ArrayList<>();
+
+    /**
+     * 사용자의 사용자 이름
+     * 유니크한 값으로 설정됩니다.
+     */
+    @Column(nullable = false, unique = true)
+    private String username;
 }
 
 /**

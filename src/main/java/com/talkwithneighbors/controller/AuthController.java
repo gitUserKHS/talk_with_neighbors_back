@@ -37,8 +37,7 @@ public class AuthController {
     }
 
     @GetMapping("/me")
-    public ResponseEntity<UserDto> getCurrentUser(HttpSession session) {
-        UserSession userSession = (UserSession) session.getAttribute("userSession");
+    public ResponseEntity<UserDto> getCurrentUser(UserSession userSession) {
         if (userSession == null) {
             return ResponseEntity.ok(null);
         }
@@ -47,11 +46,8 @@ public class AuthController {
     }
 
     @PutMapping("/profile")
-    public ResponseEntity<UserDto> updateProfile(@RequestBody UserDto request, HttpSession session) {
-        UserSession userSession = (UserSession) session.getAttribute("userSession");
-        if (userSession == null) {
-            return ResponseEntity.ok(null);
-        }
+    @RequireLogin
+    public ResponseEntity<UserDto> updateProfile(@RequestBody UserDto request, UserSession userSession) {
         UserDto updatedUser = authService.updateProfile(userSession.getUserId(), request);
         return ResponseEntity.ok(updatedUser);
     }
@@ -64,8 +60,8 @@ public class AuthController {
      */
     @GetMapping("/check-duplicates")
     public ResponseEntity<AuthService.DuplicateCheckResponse> checkDuplicates(
-            @RequestParam(required = false) String email,
-            @RequestParam(required = false) String username) {
+            @RequestParam(name = "email", required = false) String email,
+            @RequestParam(name = "username", required = false) String username) {
         return ResponseEntity.ok(authService.checkDuplicates(email, username));
     }
 } 

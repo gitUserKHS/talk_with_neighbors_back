@@ -41,7 +41,7 @@ public class RedisSessionService {
             LocalDateTime now = LocalDateTime.now();
             Session session = new Session();
             session.setSessionId(sessionId);
-            session.setUser(userRepository.findById(Long.parseLong(userSession.getUserId()))
+            session.setUser(userRepository.findById(userSession.getUserId())
                     .orElseThrow(() -> new RuntimeException("User not found")));
             session.setExpiresAt(now.plusSeconds(SESSION_EXPIRATION));
             session.setLastAccessedAt(now);  // 마지막 접근 시간 설정
@@ -49,7 +49,7 @@ public class RedisSessionService {
             userSessionRepository.save(session);
             
             // 사용자를 온라인 상태로 표시
-            setUserOnline(userSession.getUserId());
+            setUserOnline(userSession.getUserId().toString());
             
             log.info("Session saved successfully for user: {}", userSession.getUsername());
         } catch (Exception e) {
@@ -75,7 +75,7 @@ public class RedisSessionService {
                 
                 // 새로운 세션 객체 생성
                 UserSession userSession = UserSession.of(
-                    user.getId().toString(),
+                    user.getId(),
                     user.getUsername(),
                     user.getEmail()
                 );
@@ -85,7 +85,7 @@ public class RedisSessionService {
                 redisTemplate.opsForValue().set(key, sessionValue, SESSION_EXPIRATION, TimeUnit.SECONDS);
                 
                 // 사용자를 온라인 상태로 표시
-                setUserOnline(userSession.getUserId());
+                setUserOnline(userSession.getUserId().toString());
                 
                 log.info("Session recreated from RDB and cached in Redis: {}", sessionId);
                 return userSession;
@@ -97,7 +97,7 @@ public class RedisSessionService {
             redisTemplate.expire(key, SESSION_EXPIRATION, TimeUnit.SECONDS);
             
             // 사용자를 온라인 상태로 표시
-            setUserOnline(userSession.getUserId());
+            setUserOnline(userSession.getUserId().toString());
             
             return userSession;
         } catch (Exception e) {

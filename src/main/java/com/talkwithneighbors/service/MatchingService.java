@@ -61,7 +61,7 @@ public class MatchingService {
      * @param userId 사용자 ID
      */
     @Transactional
-    public void saveMatchingPreferences(MatchingPreferencesDto preferences, String userId) {
+    public void saveMatchingPreferences(MatchingPreferencesDto preferences, Long userId) {
         User user = getUserById(userId);
         MatchingPreferences matchingPreferences = preferences.toEntity(user);
         matchingPreferencesRepository.save(matchingPreferences);
@@ -74,42 +74,47 @@ public class MatchingService {
      * @param userId 사용자 ID
      */
     @Transactional
-    public void startMatching(MatchingPreferencesDto preferences, String userId) {
+    public void startMatching(MatchingPreferencesDto preferences, Long userId) {
         User user = getUserById(userId);
-        MatchingPreferences matchingPreferences = preferences.toEntity(user);
-        matchingPreferencesRepository.save(matchingPreferences);
-
-        // 주변 사용자 검색
-        List<User> potentialMatches = findPotentialMatches(user, matchingPreferences);
         
-        // 매칭 가능한 사용자들에게 매칭 요청 전송
-        for (User potentialMatch : potentialMatches) {
-            if (!matchRepository.existsByUsersAndStatus(
-                    user.getId(), potentialMatch.getId(), MatchStatus.PENDING)) {
-                Match match = new Match();
-                match.setUser1(user);
-                match.setUser2(potentialMatch);
-                match.setStatus(MatchStatus.PENDING);
-                match.setCreatedAt(LocalDateTime.now());
-                match.setExpiresAt(LocalDateTime.now().plusHours(24)); // 24시간 후 만료
-                matchRepository.save(match);
-
-                // 상대방이 온라인인지 확인
-                if (redisSessionService.isUserOnline(potentialMatch.getId().toString())) {
-                    // WebSocket을 통해 매칭 요청 알림 전송
-                    messagingTemplate.convertAndSendToUser(
-                        potentialMatch.getId().toString(),
-                        "/queue/matches",
-                        MatchProfileDto.fromUser(user, calculateDistance(
-                            user.getLatitude(), user.getLongitude(),
-                            potentialMatch.getLatitude(), potentialMatch.getLongitude()
-                        ))
-                    );
-                } else {
-                    // 오프라인 사용자에게는 대기 중인 매칭 요청으로 저장
-                    redisSessionService.savePendingMatch(potentialMatch.getId().toString(), match.getId().toString());
-                    log.info("Saved pending match for offline user: {}", potentialMatch.getId());
-                }
+        // 기존 매칭 중지
+        stopMatching(userId);
+        
+        // 새로운 매칭 선호도 저장
+        saveMatchingPreferences(preferences, userId);
+        
+        // 주변 사용자 검색 및 매칭 요청
+        List<User> nearbyUsers = userRepository.findNearbyUsers(
+            user.getLatitude(), 
+            user.getLongitude(), 
+            5.0 // 기본 반경 5km
+        );
+        
+        for (User nearbyUser : nearbyUsers) {
+            // 매칭 생성
+            Match match = new Match();
+            match.setUser1(user);
+            match.setUser2(nearbyUser);
+            match.setStatus(MatchStatus.PENDING);
+            match.setCreatedAt(LocalDateTime.now());
+            match.setExpiresAt(LocalDateTime.now().plusHours(24)); // 24시간 후 만료
+            matchRepository.save(match);
+            
+            // 상대방이 온라인인지 확인
+            if (redisSessionService.isUserOnline(nearbyUser.getId().toString())) {
+                // WebSocket을 통해 매칭 요청 알림 전송
+                messagingTemplate.convertAndSendToUser(
+                    nearbyUser.getId().toString(),
+                    "/queue/matches",
+                    MatchProfileDto.fromUser(user, calculateDistance(
+                        user.getLatitude(), user.getLongitude(),
+                        nearbyUser.getLatitude(), nearbyUser.getLongitude()
+                    ))
+                );
+            } else {
+                // 오프라인 사용자에게는 대기 중인 매칭 요청으로 저장
+                redisSessionService.savePendingMatch(nearbyUser.getId().toString(), match.getId().toString());
+                log.info("Saved pending match for offline user: {}", nearbyUser.getId());
             }
         }
     }
@@ -118,8 +123,8 @@ public class MatchingService {
      * 사용자가 온라인 상태가 되었을 때 대기 중인 매칭 요청을 처리합니다.
      */
     @Transactional
-    public void processPendingMatches(String userId) {
-        List<String> pendingMatchIds = redisSessionService.getPendingMatches(userId);
+    public void processPendingMatches(Long userId) {
+        List<String> pendingMatchIds = redisSessionService.getPendingMatches(userId.toString());
         
         if (pendingMatchIds != null && !pendingMatchIds.isEmpty()) {
             log.info("Processing {} pending matches for user: {}", pendingMatchIds.size(), userId);
@@ -134,10 +139,10 @@ public class MatchingService {
                     
                     // WebSocket을 통해 매칭 요청 알림 전송
                     messagingTemplate.convertAndSendToUser(
-                        userId,
+                        userId.toString(),
                         "/queue/matches",
                         MatchProfileDto.fromUser(
-                            match.getUser1().getId().toString().equals(userId) ? match.getUser2() : match.getUser1(),
+                            match.getUser1().getId().equals(userId) ? match.getUser2() : match.getUser1(),
                             calculateDistance(
                                 match.getUser1().getLatitude(), match.getUser1().getLongitude(),
                                 match.getUser2().getLatitude(), match.getUser2().getLongitude()
@@ -160,29 +165,17 @@ public class MatchingService {
      * @param userId 사용자 ID
      */
     @Transactional
-    public void stopMatching(String userId) {
+    public void stopMatching(Long userId) {
         User user = getUserById(userId);
-        List<Match> pendingMatches = matchRepository.findByUserIdAndStatus(
-                user.getId(), MatchStatus.PENDING);
         
-        // 대기 중인 매칭들을 만료 처리
+        // 대기 중인 매칭 요청 만료 처리
+        List<Match> pendingMatches = matchRepository.findByUser1IdOrUser2IdAndStatus(
+            userId, userId, MatchStatus.PENDING);
+        
         for (Match match : pendingMatches) {
             match.setStatus(MatchStatus.EXPIRED);
             match.setRespondedAt(LocalDateTime.now());
             matchRepository.save(match);
-
-            // 상대방에게 매칭 취소 알림 전송
-            User otherUser = match.getUser1().getId().equals(user.getId()) 
-                    ? match.getUser2() : match.getUser1();
-            
-            // 상대방이 온라인인 경우에만 알림 전송
-            if (redisSessionService.isUserOnline(otherUser.getId().toString())) {
-                messagingTemplate.convertAndSendToUser(
-                    otherUser.getId().toString(),
-                    "/queue/match-expired",
-                    match.getId()
-                );
-            }
         }
     }
 
@@ -194,8 +187,8 @@ public class MatchingService {
      * @throws MatchingException 매칭이 없거나 이미 처리된 경우
      */
     @Transactional
-    public void acceptMatch(String matchId, String userId) {
-        Match match = matchRepository.findByIdAndUserId(matchId, Long.parseLong(userId))
+    public void acceptMatch(String matchId, Long userId) {
+        Match match = matchRepository.findByIdAndUserId(matchId, userId)
                 .orElseThrow(() -> new MatchingException("매칭을 찾을 수 없습니다.", HttpStatus.NOT_FOUND));
 
         if (match.getStatus() != MatchStatus.PENDING) {
@@ -213,7 +206,7 @@ public class MatchingService {
         matchRepository.save(match);
 
         // 매칭 수락 알림 전송
-        User otherUser = match.getUser1().getId().toString().equals(userId) 
+        User otherUser = match.getUser1().getId().equals(userId) 
                 ? match.getUser2() : match.getUser1();
         
         // 상대방이 온라인인 경우에만 알림 전송
@@ -237,8 +230,8 @@ public class MatchingService {
      * @throws MatchingException 매칭이 없거나 이미 처리된 경우
      */
     @Transactional
-    public void rejectMatch(String matchId, String userId) {
-        Match match = matchRepository.findByIdAndUserId(matchId, Long.parseLong(userId))
+    public void rejectMatch(String matchId, Long userId) {
+        Match match = matchRepository.findByIdAndUserId(matchId, userId)
                 .orElseThrow(() -> new MatchingException("매칭을 찾을 수 없습니다.", HttpStatus.NOT_FOUND));
 
         if (match.getStatus() != MatchStatus.PENDING) {
@@ -248,19 +241,6 @@ public class MatchingService {
         match.setStatus(MatchStatus.REJECTED);
         match.setRespondedAt(LocalDateTime.now());
         matchRepository.save(match);
-
-        // 매칭 거절 알림 전송
-        User otherUser = match.getUser1().getId().toString().equals(userId) 
-                ? match.getUser2() : match.getUser1();
-        
-        // 상대방이 온라인인 경우에만 알림 전송
-        if (redisSessionService.isUserOnline(otherUser.getId().toString())) {
-            messagingTemplate.convertAndSendToUser(
-                otherUser.getId().toString(),
-                "/queue/match-rejected",
-                match.getId()
-            );
-        }
     }
 
     /**
@@ -273,16 +253,23 @@ public class MatchingService {
      * @return 주변 사용자 프로필 목록
      */
     @Transactional(readOnly = true)
-    public List<MatchProfileDto> searchNearbyUsers(Double latitude, Double longitude, Double radius, String userId) {
-        User currentUser = getUserById(userId);
+    public List<MatchProfileDto> searchNearbyUsers(Double latitude, Double longitude, Double radius, Long userId) {
+        User user = getUserById(userId);
+        
+        // 사용자의 위치 정보 업데이트
+        user.setLatitude(latitude);
+        user.setLongitude(longitude);
+        userRepository.save(user);
+        
+        // 주변 사용자 검색
         List<User> nearbyUsers = userRepository.findNearbyUsers(latitude, longitude, radius);
         
         return nearbyUsers.stream()
-                .filter(user -> !user.getId().toString().equals(userId))
-                .map(user -> MatchProfileDto.fromUser(user, calculateDistance(
-                        latitude, longitude,
-                        user.getLatitude(), user.getLongitude()
-                )))
+                .filter(nearbyUser -> !nearbyUser.getId().equals(userId))
+                .map(nearbyUser -> MatchProfileDto.fromUser(
+                    nearbyUser,
+                    calculateDistance(latitude, longitude, nearbyUser.getLatitude(), nearbyUser.getLongitude())
+                ))
                 .collect(Collectors.toList());
     }
 
@@ -361,8 +348,8 @@ public class MatchingService {
      * @return 사용자 정보
      * @throws MatchingException 사용자를 찾을 수 없는 경우
      */
-    private User getUserById(String userId) {
-        return userRepository.findById(Long.parseLong(userId))
+    private User getUserById(Long userId) {
+        return userRepository.findById(userId)
                 .orElseThrow(() -> new MatchingException("사용자를 찾을 수 없습니다.", HttpStatus.NOT_FOUND));
     }
 
@@ -385,5 +372,40 @@ public class MatchingService {
                 * Math.sin(lonDistance / 2) * Math.sin(lonDistance / 2);
         double c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
         return R * c;
+    }
+
+    public List<MatchProfileDto> searchNearbyUsers(User user, double radius) {
+        // 사용자의 현재 위치 저장
+        user.setLastLocationUpdate(LocalDateTime.now());
+        userRepository.save(user);
+
+        // 주변 사용자 검색
+        double lat = user.getLatitude();
+        double lng = user.getLongitude();
+        
+        // 위도/경도 범위 계산 (약 111km = 1도)
+        double latDelta = radius / 111.0;
+        double lngDelta = radius / (111.0 * Math.cos(Math.toRadians(lat)));
+        
+        List<User> nearbyUsers = userRepository.findByLatitudeBetweenAndLongitudeBetween(
+            lat - latDelta, lat + latDelta,
+            lng - lngDelta, lng + lngDelta
+        );
+
+        // 현재 사용자 제외 및 거리 계산
+        return nearbyUsers.stream()
+            .filter(u -> !u.getId().equals(user.getId()))
+            .map(u -> {
+                double distance = calculateDistance(
+                    lat, lng,
+                    u.getLatitude(), u.getLongitude()
+                );
+                if (distance <= radius) {
+                    return MatchProfileDto.fromUser(u, distance);
+                }
+                return null;
+            })
+            .filter(dto -> dto != null)
+            .collect(Collectors.toList());
     }
 } 

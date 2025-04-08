@@ -9,6 +9,10 @@ import java.time.LocalDateTime;
 import java.util.HashSet;
 import java.util.Set;
 import java.util.UUID;
+import java.util.ArrayList;
+import java.util.List;
+import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 
 /**
  * 채팅방을 관리하는 엔티티 클래스
@@ -20,6 +24,7 @@ import java.util.UUID;
 @Setter
 @NoArgsConstructor
 @AllArgsConstructor
+@JsonIgnoreProperties({"hibernateLazyInitializer", "handler"})
 public class ChatRoom {
     /**
      * 채팅방의 고유 식별자
@@ -27,6 +32,27 @@ public class ChatRoom {
      */
     @Id
     private String id;
+
+    /**
+     * 채팅방의 이름
+     */
+    @Column(nullable = false)
+    private String name;
+
+    /**
+     * 채팅방의 타입
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false)
+    private ChatRoomType type;
+
+    /**
+     * 채팅방을 생성한 사용자
+     */
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "creator_id", nullable = false)
+    @JsonIgnore
+    private User creator;
 
     /**
      * 채팅방에 참여하는 사용자 목록
@@ -39,7 +65,8 @@ public class ChatRoom {
         joinColumns = @JoinColumn(name = "chat_room_id"),
         inverseJoinColumns = @JoinColumn(name = "user_id")
     )
-    private Set<User> participants = new HashSet<>();
+    @JsonIgnore
+    private List<User> participants = new ArrayList<>();
 
     /**
      * 채팅방의 마지막 메시지 내용

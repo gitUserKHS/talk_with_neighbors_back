@@ -44,6 +44,7 @@ spring:
       http-only: true
       secure: false
       max-age: 86400 # 24시간
+      same-site: lax
   data:
     redis:
       host: localhost

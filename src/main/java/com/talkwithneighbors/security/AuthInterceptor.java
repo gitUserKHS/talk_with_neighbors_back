@@ -1,12 +1,10 @@
 package com.talkwithneighbors.security;
 
-import com.talkwithneighbors.exception.AuthException;
-import com.talkwithneighbors.service.RedisSessionService;
+import com.talkwithneighbors.service.SessionValidationService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.servlet.http.HttpSession;
 import lombok.RequiredArgsConstructor;
-import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
 import org.springframework.web.method.HandlerMethod;
 import org.springframework.web.servlet.HandlerInterceptor;
@@ -15,7 +13,7 @@ import org.springframework.web.servlet.HandlerInterceptor;
 @RequiredArgsConstructor
 public class AuthInterceptor implements HandlerInterceptor {
 
-    private final RedisSessionService redisSessionService;
+    private final SessionValidationService sessionValidationService;
 
     @Override
     public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) {
@@ -40,25 +38,11 @@ public class AuthInterceptor implements HandlerInterceptor {
             return true;
         }
 
-        // 세션 ID 확인
+        // 세션 검증 및 사용자 정보 설정
         HttpSession session = request.getSession(false);
-        if (session == null) {
-            throw new AuthException("로그인이 필요합니다.", HttpStatus.UNAUTHORIZED);
-        }
-        
-        String sessionId = (String) session.getAttribute("sessionId");
-        if (sessionId == null) {
-            throw new AuthException("로그인이 필요합니다.", HttpStatus.UNAUTHORIZED);
-        }
-        
-        UserSession userSession = redisSessionService.getSession(sessionId);
-
-        if (userSession == null) {
-            throw new AuthException("로그인이 필요합니다.", HttpStatus.UNAUTHORIZED);
-        }
-
-        // 요청 속성에 사용자 정보 추가
+        UserSession userSession = sessionValidationService.validateSession(session);
         request.setAttribute("USER_SESSION", userSession);
+        
         return true;
     }
 } 

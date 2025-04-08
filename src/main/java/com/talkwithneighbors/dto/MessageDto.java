@@ -1,7 +1,7 @@
 package com.talkwithneighbors.dto;
 
 import com.talkwithneighbors.entity.Message;
-import com.talkwithneighbors.entity.MessageType;
+import com.talkwithneighbors.entity.Message.MessageType;
 
 import lombok.Getter;
 import lombok.Setter;
@@ -32,7 +32,7 @@ public class MessageDto {
         dto.setId(message.getId());
         dto.setRoomId(message.getChatRoom().getId());
         dto.setSenderId(message.getSender().getId().toString());
-        dto.setSenderName(message.getSender().getUsername());
+        dto.setSenderName(message.getSender().getNickname());
         dto.setContent(message.getContent());
         dto.setCreatedAt(message.getCreatedAt().format(formatter));
         dto.setUpdatedAt(message.getUpdatedAt().format(formatter));

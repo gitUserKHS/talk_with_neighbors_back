@@ -24,8 +24,8 @@ public class MatchProfileDto {
     public static MatchProfileDto fromUser(User user, Double distance) {
         MatchProfileDto dto = new MatchProfileDto();
         dto.setId(user.getId().toString());
-        dto.setNickname(user.getUsername());
-        dto.setAge(user.getAge().toString());
+        dto.setNickname(user.getNickname());
+        dto.setAge(user.getAge() != null ? user.getAge().toString() : null);
         dto.setGender(user.getGender());
         dto.setInterests(user.getInterests());
         dto.setBio(user.getBio());

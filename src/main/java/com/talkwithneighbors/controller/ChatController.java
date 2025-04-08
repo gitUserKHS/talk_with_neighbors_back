@@ -1,120 +1,115 @@
 package com.talkwithneighbors.controller;
 
-import com.talkwithneighbors.dto.ChatRoomDto;
-import com.talkwithneighbors.dto.MessageDto;
-import com.talkwithneighbors.dto.chat.CreateRoomRequestDto;
+import com.talkwithneighbors.dto.ChatMessageDto;
+import com.talkwithneighbors.dto.CreateRoomRequest;
+import com.talkwithneighbors.entity.ChatRoom;
+import com.talkwithneighbors.entity.ChatRoomType;
+import com.talkwithneighbors.entity.Message;
+import com.talkwithneighbors.entity.User;
+import com.talkwithneighbors.repository.UserRepository;
 import com.talkwithneighbors.security.RequireLogin;
 import com.talkwithneighbors.security.UserSession;
 import com.talkwithneighbors.service.ChatService;
-import jakarta.servlet.http.HttpSession;
+import com.talkwithneighbors.service.RedisSessionService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
+import org.springframework.messaging.handler.annotation.MessageMapping;
+import org.springframework.messaging.handler.annotation.Payload;
+import org.springframework.messaging.simp.SimpMessageHeaderAccessor;
 import org.springframework.web.bind.annotation.*;
 
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpSession;
 import java.util.List;
+import org.springframework.http.HttpStatus;
 
 @RestController
 @RequestMapping("/api/chat")
 @RequiredArgsConstructor
+@RequireLogin
 public class ChatController {
 
     private final ChatService chatService;
+    private final UserRepository userRepository;
+    private final RedisSessionService redisSessionService;
 
-    @RequireLogin
-    @GetMapping("/rooms")
-    public ResponseEntity<List<ChatRoomDto>> getRooms(@SessionAttribute("userSession") UserSession userSession) {
-        return ResponseEntity.ok(chatService.getUserChatRooms(userSession.getUserId()));
+    private User getCurrentUser(UserSession userSession) {
+        if (userSession == null || userSession.getUserId() == null) {
+            throw new RuntimeException("User not authenticated");
+        }
+        return userRepository.findById(userSession.getUserId())
+                .orElseThrow(() -> new RuntimeException("User not found"));
     }
 
-    @RequireLogin
-    @GetMapping("/rooms/{roomId}")
-    public ResponseEntity<ChatRoomDto> getRoom(@PathVariable String roomId, HttpSession session) {
-        UserSession userSession = (UserSession) session.getAttribute("user");
-        return ResponseEntity.ok(chatService.getRoom(roomId, userSession.getUserId()));
-    }
-
-    @RequireLogin
     @PostMapping("/rooms")
-    public ResponseEntity<ChatRoomDto> createRoom(@RequestBody CreateRoomRequestDto request, HttpSession session) {
-        UserSession userSession = (UserSession) session.getAttribute("user");
-        return ResponseEntity.ok(chatService.createRoom(request, userSession.getUserId()));
+    public ResponseEntity<ChatRoom> createRoom(
+            @RequestBody CreateRoomRequest createRoomRequest,
+            UserSession userSession) {
+        User user = getCurrentUser(userSession);
+        return ResponseEntity.ok(chatService.createRoom(createRoomRequest.getName(), user, createRoomRequest.getType(), createRoomRequest.getParticipantIds()));
     }
 
-    @RequireLogin
-    @GetMapping("/rooms/{roomId}/messages")
-    public ResponseEntity<List<MessageDto>> getMessages(@PathVariable String roomId, HttpSession session) {
-        UserSession userSession = (UserSession) session.getAttribute("user");
-        return ResponseEntity.ok(chatService.getMessages(roomId, userSession.getUserId()));
+    @GetMapping("/rooms")
+    public ResponseEntity<List<ChatRoom>> getRooms(UserSession userSession) {
+        User user = getCurrentUser(userSession);
+        return ResponseEntity.ok(chatService.getRoomsByUser(user));
     }
 
-    @RequireLogin
-    @PostMapping("/rooms/{roomId}/messages")
-    public ResponseEntity<MessageDto> sendMessage(
-            @PathVariable String roomId,
-            @RequestBody MessageDto request,
-            HttpSession session
-    ) {
-        UserSession userSession = (UserSession) session.getAttribute("user");
-        return ResponseEntity.ok(chatService.sendMessage(roomId, request.getContent(), userSession.getUserId()));
+    @GetMapping("/rooms/{roomId}")
+    public ResponseEntity<ChatRoom> getRoom(@PathVariable String roomId, UserSession userSession) {
+        User user = getCurrentUser(userSession);
+        return ResponseEntity.ok(chatService.getRoom(roomId, user));
     }
 
-    @RequireLogin
-    @DeleteMapping("/rooms/{roomId}")
-    public ResponseEntity<Void> deleteRoom(@PathVariable String roomId, HttpSession session) {
-        UserSession userSession = (UserSession) session.getAttribute("user");
-        chatService.deleteRoom(roomId, userSession.getUserId());
+    @PostMapping("/rooms/{roomId}/join")
+    public ResponseEntity<Void> joinRoom(@PathVariable String roomId, UserSession userSession) {
+        User user = getCurrentUser(userSession);
+        chatService.joinRoom(roomId, user);
         return ResponseEntity.ok().build();
     }
 
-    @RequireLogin
     @PostMapping("/rooms/{roomId}/leave")
-    public ResponseEntity<Void> leaveRoom(@PathVariable String roomId, HttpSession session) {
-        UserSession userSession = (UserSession) session.getAttribute("user");
-        chatService.leaveRoom(roomId, userSession.getUserId());
+    public ResponseEntity<Void> leaveRoom(@PathVariable String roomId, UserSession userSession) {
+        User user = getCurrentUser(userSession);
+        chatService.leaveRoom(roomId, user);
         return ResponseEntity.ok().build();
     }
 
-    @RequireLogin
-    @PutMapping("/messages/{messageId}")
-    public ResponseEntity<MessageDto> updateMessage(
-            @PathVariable String messageId,
-            @RequestBody MessageDto request,
-            HttpSession session
-    ) {
-        UserSession userSession = (UserSession) session.getAttribute("user");
-        return ResponseEntity.ok(chatService.updateMessage(messageId, request.getContent(), userSession.getUserId()));
-    }
-
-    @RequireLogin
-    @DeleteMapping("/messages/{messageId}")
-    public ResponseEntity<Void> deleteMessage(
-            @PathVariable String messageId,
-            HttpSession session
-    ) {
-        UserSession userSession = (UserSession) session.getAttribute("user");
-        chatService.deleteMessage(messageId, userSession.getUserId());
-        return ResponseEntity.ok().build();
-    }
-
-    @RequireLogin
-    @PostMapping("/messages/{messageId}/read")
-    public ResponseEntity<Void> markMessageAsRead(
-            @PathVariable String messageId,
-            HttpSession session
-    ) {
-        UserSession userSession = (UserSession) session.getAttribute("user");
-        chatService.markMessageAsRead(messageId, userSession.getUserId());
-        return ResponseEntity.ok().build();
-    }
-
-    @RequireLogin
-    @PostMapping("/rooms/{roomId}/read-all")
-    public ResponseEntity<Void> markAllMessagesAsRead(
+    @GetMapping("/rooms/{roomId}/messages")
+    public ResponseEntity<List<Message>> getMessages(
             @PathVariable String roomId,
-            HttpSession session
-    ) {
-        UserSession userSession = (UserSession) session.getAttribute("user");
-        chatService.markAllMessagesAsRead(roomId, userSession.getUserId());
+            @RequestParam(name = "page", defaultValue = "0") int page,
+            @RequestParam(name = "size", defaultValue = "20") int size,
+            UserSession userSession) {
+        return ResponseEntity.ok(chatService.getMessages(roomId, page, size));
+    }
+
+    @PostMapping("/rooms/{roomId}/messages/read")
+    public ResponseEntity<Void> markMessageAsRead(
+            @PathVariable String roomId,
+            @RequestParam(name = "messageId") String messageId,
+            UserSession userSession) {
+        User user = getCurrentUser(userSession);
+        chatService.markMessageAsRead(messageId, user);
         return ResponseEntity.ok().build();
+    }
+
+    @MessageMapping("/chat.send")
+    public void sendMessage(@Payload ChatMessageDto message) {
+        chatService.sendMessage(message);
+    }
+
+    @MessageMapping("/chat.join")
+    public void addUser(
+            @Payload ChatMessageDto message,
+            SimpMessageHeaderAccessor headerAccessor) {
+        headerAccessor.getSessionAttributes().put("userId", message.getSenderId());
+    }
+
+    @GetMapping("/rooms/search")
+    public ResponseEntity<List<ChatRoom>> searchGroupRooms(
+            @RequestParam(name = "keyword", required = false) String keyword,
+            UserSession userSession) {
+        return ResponseEntity.ok(chatService.searchGroupRooms(keyword));
     }
 }

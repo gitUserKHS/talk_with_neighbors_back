@@ -4,9 +4,11 @@ import jakarta.persistence.*;
 import lombok.Getter;
 import lombok.Setter;
 import lombok.NoArgsConstructor;
+import lombok.AllArgsConstructor;
 import java.time.LocalDateTime;
 import java.util.HashSet;
 import java.util.Set;
+import java.util.UUID;
 
 /**
  * 채팅 메시지를 관리하는 엔티티 클래스
@@ -17,6 +19,7 @@ import java.util.Set;
 @Getter
 @Setter
 @NoArgsConstructor
+@AllArgsConstructor
 public class Message {
     /**
      * 메시지의 고유 식별자
@@ -30,7 +33,7 @@ public class Message {
      * 지연 로딩(LAZY) 방식으로 ChatRoom 엔티티와 연결됩니다.
      */
     @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "chat_room_id")
+    @JoinColumn(name = "chat_room_id", nullable = false)
     private ChatRoom chatRoom;
 
     /**
@@ -38,26 +41,28 @@ public class Message {
      * 지연 로딩(LAZY) 방식으로 User 엔티티와 연결됩니다.
      */
     @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "sender_id")
+    @JoinColumn(name = "sender_id", nullable = false)
     private User sender;
 
     /**
      * 메시지 내용
      * TEXT 타입으로 저장됩니다.
      */
-    @Column(columnDefinition = "TEXT")
+    @Column(nullable = false, columnDefinition = "TEXT")
     private String content;
 
     /**
      * 메시지 생성 시간
      */
+    @Column(name = "created_at")
     private LocalDateTime createdAt;
     
     /**
      * 메시지 타입
      */
     @Enumerated(EnumType.STRING)
-    private MessageType type = MessageType.TEXT;
+    @Column(nullable = false)
+    private MessageType type;
     
     /**
      * 메시지 수정 시간
@@ -73,8 +78,8 @@ public class Message {
      * 메시지 읽음 상태
      */
     @ElementCollection
-    @CollectionTable(name = "message_read_status", 
-        joinColumns = @JoinColumn(name = "message_id"))
+    @CollectionTable(name = "message_read_by")
+    @Column(name = "user_id")
     private Set<Long> readByUsers = new HashSet<>();
 
     /**
@@ -85,7 +90,7 @@ public class Message {
     protected void onCreate() {
         // UUID가 없으면 새로 생성
         if (id == null) {
-            id = java.util.UUID.randomUUID().toString();
+            id = UUID.randomUUID().toString();
         }
         // 생성 시간이 없으면 현재 시간으로 설정
         if (createdAt == null) {
@@ -101,5 +106,14 @@ public class Message {
     @PreUpdate
     protected void onUpdate() {
         updatedAt = LocalDateTime.now();
+    }
+
+    public enum MessageType {
+        ENTER,      // 입장
+        LEAVE,      // 퇴장
+        TEXT,       // 일반 메시지
+        IMAGE,      // 이미지
+        FILE,       // 파일
+        SYSTEM      // 시스템 메시지
     }
 }

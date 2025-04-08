@@ -33,14 +33,14 @@ public class AuthService {
         log.info("Registering new user with email: {}", request.getEmail());
         
         try {
-            // 이메일과 닉네임 중복 체크
+            // 이메일과 사용자명 중복 체크
             boolean emailExists = userRepository.existsByEmail(request.getEmail());
             boolean usernameExists = userRepository.existsByUsername(request.getUsername());
             
             if (emailExists || usernameExists) {
                 log.warn("Registration failed: emailExists={}, usernameExists={}", emailExists, usernameExists);
                 throw new AuthException(
-                    String.format("이메일 중복: %s, 닉네임 중복: %s", 
+                    String.format("이메일 중복: %s, 사용자명 중복: %s", 
                         emailExists ? "있음" : "없음", 
                         usernameExists ? "있음" : "없음"), 
                     HttpStatus.CONFLICT
@@ -67,7 +67,7 @@ public class AuthService {
             
             // Redis에 세션 저장 (새로운 세션이므로 직접 저장)
             UserSession userSession = UserSession.of(
-                savedUser.getId().toString(),
+                savedUser.getId(),
                 savedUser.getUsername(),
                 savedUser.getEmail()
             );
@@ -99,7 +99,7 @@ public class AuthService {
             
             // Redis에 세션 저장 (새로운 세션이므로 직접 저장)
             UserSession userSession = UserSession.of(
-                user.getId().toString(),
+                user.getId(),
                 user.getUsername(),
                 user.getEmail()
             );
@@ -125,21 +125,21 @@ public class AuthService {
         }
         
         if (userSession != null) {
-            redisSessionService.setUserOffline(userSession.getUserId());
+            redisSessionService.setUserOffline(userSession.getUserId().toString());
         }
         
         session.invalidate();
     }
 
-    public UserDto getUserById(String userId) {
-        User user = userRepository.findById(Long.parseLong(userId))
+    public UserDto getUserById(Long userId) {
+        User user = userRepository.findById(userId)
                 .orElseThrow(() -> new AuthException("사용자를 찾을 수 없습니다.", HttpStatus.NOT_FOUND));
         return UserDto.fromEntity(user);
     }
 
     @Transactional(rollbackFor = Exception.class)
-    public UserDto updateProfile(String userId, UserDto request) {
-        User user = userRepository.findById(Long.parseLong(userId))
+    public UserDto updateProfile(Long userId, UserDto request) {
+        User user = userRepository.findById(userId)
                 .orElseThrow(() -> new AuthException("사용자를 찾을 수 없습니다.", HttpStatus.NOT_FOUND));
 
         user.setUsername(request.getUsername());
@@ -155,9 +155,9 @@ public class AuthService {
     }
 
     /**
-     * 이메일과 닉네임 중복 여부를 확인합니다.
+     * 이메일과 사용자명 중복 여부를 확인합니다.
      * @param email 확인할 이메일
-     * @param username 확인할 닉네임
+     * @param username 확인할 사용자명
      * @return 중복 여부를 담은 객체
      */
     public DuplicateCheckResponse checkDuplicates(String email, String username) {
