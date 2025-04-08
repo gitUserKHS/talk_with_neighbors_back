@@ -22,12 +22,14 @@ public class AuthController {
 
     @PostMapping("/login")
     public ResponseEntity<UserDto> login(@RequestBody LoginRequestDto request, HttpSession session) {
-        return ResponseEntity.ok(authService.login(request, session));
+        UserDto user = authService.login(request, session);
+        return ResponseEntity.ok(user);
     }
 
     @PostMapping("/register")
     public ResponseEntity<UserDto> register(@RequestBody RegisterRequestDto request, HttpSession session) {
-        return ResponseEntity.ok(authService.register(request, session));
+        UserDto user = authService.register(request, session);
+        return ResponseEntity.ok(user);
     }
 
     @PostMapping("/logout")
@@ -38,7 +40,7 @@ public class AuthController {
 
     @GetMapping("/me")
     public ResponseEntity<UserDto> getCurrentUser(UserSession userSession) {
-        if (userSession == null) {
+        if (userSession == null || userSession.getUserId() == null) {
             return ResponseEntity.ok(null);
         }
         UserDto user = authService.getUserById(userSession.getUserId());

@@ -26,6 +26,11 @@ public class RequireLoginAspect {
         HttpServletRequest request = ((ServletRequestAttributes) RequestContextHolder.getRequestAttributes()).getRequest();
         UserSession userSession = (UserSession) request.getAttribute("USER_SESSION");
 
+        // 인증 여부 확인
+        if (userSession == null || userSession.getUserId() == null) {
+            throw new RuntimeException("User not authenticated");
+        }
+
         // 메서드 파라미터에 UserSession 타입이 있으면 주입
         for (int i = 0; i < parameters.length; i++) {
             if (parameters[i].getType().equals(UserSession.class)) {

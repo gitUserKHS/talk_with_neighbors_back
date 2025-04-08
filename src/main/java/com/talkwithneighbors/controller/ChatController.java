@@ -12,6 +12,7 @@ import com.talkwithneighbors.security.UserSession;
 import com.talkwithneighbors.service.ChatService;
 import com.talkwithneighbors.service.RedisSessionService;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
 import org.springframework.messaging.handler.annotation.MessageMapping;
 import org.springframework.messaging.handler.annotation.Payload;
@@ -27,6 +28,7 @@ import org.springframework.http.HttpStatus;
 @RequestMapping("/api/chat")
 @RequiredArgsConstructor
 @RequireLogin
+@Slf4j
 public class ChatController {
 
     private final ChatService chatService;
@@ -34,11 +36,23 @@ public class ChatController {
     private final RedisSessionService redisSessionService;
 
     private User getCurrentUser(UserSession userSession) {
-        if (userSession == null || userSession.getUserId() == null) {
-            throw new RuntimeException("User not authenticated");
+        log.debug("Getting current user from session: {}", userSession);
+        
+        if (userSession == null) {
+            log.error("UserSession is null");
+            throw new RuntimeException("User session is null - user is not authenticated");
         }
+        
+        if (userSession.getUserId() == null) {
+            log.error("UserSession userId is null for session: {}", userSession);
+            throw new RuntimeException("User ID is null in session - user is not properly authenticated");
+        }
+        
         return userRepository.findById(userSession.getUserId())
-                .orElseThrow(() -> new RuntimeException("User not found"));
+                .orElseThrow(() -> {
+                    log.error("User not found for ID: {}", userSession.getUserId());
+                    return new RuntimeException("User not found with ID: " + userSession.getUserId());
+                });
     }
 
     @PostMapping("/rooms")
