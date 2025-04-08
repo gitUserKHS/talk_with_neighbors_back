@@ -12,7 +12,7 @@ public class SessionCookieInterceptor implements HandlerInterceptor {
 
     @Override
     public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) throws Exception {
-        // 클라이언트가 보낸 세션 ID 확인
+        // 클라이언트에서 전송된 세션 ID 확인
         String clientSessionId = request.getHeader("X-Session-Id");
         if (clientSessionId != null && !clientSessionId.isEmpty()) {
             log.debug("클라이언트에서 전송된 세션 ID: {}", clientSessionId);
@@ -23,7 +23,7 @@ public class SessionCookieInterceptor implements HandlerInterceptor {
                 log.debug("쉼표로 구분된 세션 ID에서 첫 번째 ID 추출: {}", clientSessionId);
             }
             
-            // 세션 ID를 요청 속성에 저장 (컨트롤러에서 사용 가능)
+            // 세션 ID를 요청 속성에 저장
             request.setAttribute("CLIENT_SESSION_ID", clientSessionId);
         }
         

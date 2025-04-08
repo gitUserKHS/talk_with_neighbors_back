@@ -25,7 +25,7 @@ public interface ChatRoomRepository extends JpaRepository<ChatRoom, String> {
      */
     List<ChatRoom> findByParticipantsId(Long userId);
 
-    @Query("SELECT cr FROM ChatRoom cr JOIN cr.participants p WHERE p = :user")
+    @Query("SELECT cr FROM ChatRoom cr JOIN FETCH cr.participants p WHERE p = :user")
     List<ChatRoom> findByParticipantsContaining(@Param("user") User user);
     
     @Query("SELECT cr FROM ChatRoom cr JOIN cr.participants p1 JOIN cr.participants p2 " +
@@ -51,5 +51,15 @@ public interface ChatRoomRepository extends JpaRepository<ChatRoom, String> {
     List<ChatRoom> findByTypeAndNameContainingIgnoreCaseOrTypeAndIdContainingIgnoreCase(
         ChatRoomType type1, String name, ChatRoomType type2, String id);
 
-    Optional<ChatRoom> findByIdAndParticipantsContaining(String id, User user);
+    /**
+     * 채팅방 이름 또는 ID로 모든 유형의 채팅방을 조회합니다.
+     * @param name 채팅방 이름 (부분 일치)
+     * @param id 채팅방 ID (부분 일치)
+     * @return 채팅방 목록
+     */
+    List<ChatRoom> findByNameContainingIgnoreCaseOrIdContainingIgnoreCase(
+        String name, String id);
+
+    @Query("SELECT cr FROM ChatRoom cr JOIN FETCH cr.participants p WHERE cr.id = :id AND :user MEMBER OF cr.participants")
+    Optional<ChatRoom> findByIdAndParticipantsContaining(@Param("id") String id, @Param("user") User user);
 } 

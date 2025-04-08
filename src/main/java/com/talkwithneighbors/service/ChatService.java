@@ -58,4 +58,21 @@ public interface ChatService {
      * @return 채팅방
      */
     ChatRoom getRoom(String roomId, User user);
+    
+    /**
+     * 채팅방을 삭제합니다. 방장만 삭제 가능합니다.
+     * @param roomId 채팅방 ID
+     * @param user 삭제 요청한 사용자 (방장인지 확인)
+     * @return 삭제 성공 여부
+     */
+    @Transactional
+    boolean deleteRoom(String roomId, User user);
+    
+    /**
+     * 모든 유형의 채팅방을 키워드로 검색합니다.
+     * @param keyword 검색 키워드 (채팅방 이름, ID)
+     * @param type 채팅방 타입 (null인 경우 모든 타입)
+     * @return 검색된 채팅방 목록
+     */
+    List<ChatRoom> searchRooms(String keyword, ChatRoomType type);
 }

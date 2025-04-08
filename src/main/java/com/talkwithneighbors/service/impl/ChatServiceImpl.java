@@ -144,4 +144,48 @@ public class ChatServiceImpl implements ChatService {
         return chatRoomRepository.findByTypeAndNameContainingIgnoreCaseOrTypeAndIdContainingIgnoreCase(
             ChatRoomType.GROUP, trimmedKeyword, ChatRoomType.GROUP, trimmedKeyword);
     }
+
+    @Override
+    @Transactional
+    public boolean deleteRoom(String roomId, User user) {
+        ChatRoom chatRoom = chatRoomRepository.findById(roomId)
+                .orElseThrow(() -> new RuntimeException("Chat room not found"));
+        
+        // 방장 권한 확인
+        if (!chatRoom.getCreator().getId().equals(user.getId())) {
+            throw new RuntimeException("Only the creator can delete the room");
+        }
+        
+        // 방에 있는 모든 메시지 삭제
+        messageRepository.deleteByChatRoomId(roomId);
+        
+        // 채팅방 삭제
+        chatRoomRepository.delete(chatRoom);
+        
+        return true;
+    }
+    
+    @Override
+    public List<ChatRoom> searchRooms(String keyword, ChatRoomType type) {
+        // 키워드가 없으면 타입에 맞는 모든 채팅방 반환
+        if (keyword == null || keyword.trim().isEmpty()) {
+            if (type == null) {
+                return chatRoomRepository.findAll();
+            } else {
+                return chatRoomRepository.findByType(type);
+            }
+        }
+        
+        String trimmedKeyword = keyword.trim().toLowerCase();
+        
+        // 타입이 지정된 경우 타입에 맞는 채팅방만 검색
+        if (type != null) {
+            return chatRoomRepository.findByTypeAndNameContainingIgnoreCaseOrTypeAndIdContainingIgnoreCase(
+                type, trimmedKeyword, type, trimmedKeyword);
+        }
+        
+        // 타입이 지정되지 않은 경우 모든 채팅방 검색
+        return chatRoomRepository.findByNameContainingIgnoreCaseOrIdContainingIgnoreCase(
+            trimmedKeyword, trimmedKeyword);
+    }
 } 
