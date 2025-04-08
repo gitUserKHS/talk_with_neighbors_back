@@ -32,9 +32,9 @@ public interface UserRepository extends JpaRepository<User, Long> {
     boolean existsByEmail(String email);
 
     /**
-     * 닉네임이 이미 존재하는지 확인합니다.
+     * 사용자명이 이미 존재하는지 확인합니다.
      * 
-     * @param username 확인할 닉네임
+     * @param username 확인할 사용자명
      * @return 존재 여부
      */
     boolean existsByUsername(String username);
@@ -79,9 +79,9 @@ public interface UserRepository extends JpaRepository<User, Long> {
     );
 
     /**
-     * 닉네임으로 사용자를 조회합니다.
+     * 사용자명으로 사용자를 조회합니다.
      * 
-     * @param username 사용자 닉네임
+     * @param username 사용자명
      * @return 사용자 정보 (Optional)
      */
     Optional<User> findByUsername(String username);

@@ -32,7 +32,7 @@ public class MessageDto {
         dto.setId(message.getId());
         dto.setRoomId(message.getChatRoom().getId());
         dto.setSenderId(message.getSender().getId().toString());
-        dto.setSenderName(message.getSender().getNickname());
+        dto.setSenderName(message.getSender().getUsername());
         dto.setContent(message.getContent());
         dto.setCreatedAt(message.getCreatedAt().format(formatter));
         dto.setUpdatedAt(message.getUpdatedAt().format(formatter));

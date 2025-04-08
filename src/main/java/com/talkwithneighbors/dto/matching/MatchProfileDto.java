@@ -12,7 +12,7 @@ import java.util.List;
 @NoArgsConstructor
 public class MatchProfileDto {
     private String id;
-    private String nickname;
+    private String username;
     private String age;
     private String gender;
     private List<String> interests;
@@ -24,7 +24,7 @@ public class MatchProfileDto {
     public static MatchProfileDto fromUser(User user, Double distance) {
         MatchProfileDto dto = new MatchProfileDto();
         dto.setId(user.getId().toString());
-        dto.setNickname(user.getNickname());
+        dto.setUsername(user.getUsername());
         dto.setAge(user.getAge() != null ? user.getAge().toString() : null);
         dto.setGender(user.getGender());
         dto.setInterests(user.getInterests());

@@ -1,0 +1,1 @@
+1. httpSession을 통해 redis에만 접근한 것을 rdb에도 접근할 수 있도록 해주기.

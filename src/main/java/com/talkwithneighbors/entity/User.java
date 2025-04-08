@@ -39,11 +39,11 @@ public class User {
     private String email;
 
     /**
-     * 사용자의 닉네임
+     * 사용자의 사용자 이름
      * 유니크한 값으로 설정됩니다.
      */
-    @Column(nullable = false)
-    private String nickname;
+    @Column(nullable = false, unique = true)
+    private String username;
 
     /**
      * 사용자의 비밀번호
@@ -124,13 +124,6 @@ public class User {
 
     @OneToMany(mappedBy = "sender", cascade = CascadeType.ALL)
     private List<Message> sentMessages = new ArrayList<>();
-
-    /**
-     * 사용자의 사용자 이름
-     * 유니크한 값으로 설정됩니다.
-     */
-    @Column(nullable = false, unique = true)
-    private String username;
 }
 
 /**
