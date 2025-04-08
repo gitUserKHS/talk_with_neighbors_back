@@ -29,7 +29,7 @@ public class AuthService {
     private final RedisSessionService redisSessionService;
 
     @Transactional(rollbackFor = Exception.class)
-    public UserDto register(RegisterRequestDto request, HttpSession session) {
+    public AuthResponse register(RegisterRequestDto request) {
         log.info("Registering new user with email: {}", request.getEmail());
         
         try {
@@ -69,15 +69,12 @@ public class AuthService {
             UserSession userSession = UserSession.of(
                 savedUser.getId(),
                 savedUser.getUsername(),
-                savedUser.getEmail()
+                savedUser.getEmail(),
+                savedUser.getUsername()  // nickname은 username과 동일하게 설정
             );
             redisSessionService.saveSession(sessionId, userSession);
             
-            // HTTP 세션에 새로운 세션 ID 저장
-            session.setAttribute("sessionId", sessionId);
-            session.setAttribute("userSession", userSession);
-            
-            return UserDto.fromEntity(savedUser);
+            return new AuthResponse(UserDto.fromEntity(savedUser), sessionId);
         } catch (Exception e) {
             log.error("Error during user registration", e);
             throw e;
@@ -85,7 +82,7 @@ public class AuthService {
     }
 
     @Transactional(rollbackFor = Exception.class)
-    public UserDto login(LoginRequestDto request, HttpSession session) {
+    public AuthResponse login(LoginRequestDto request) {
         try {
             User user = userRepository.findByEmail(request.getEmail())
                     .orElseThrow(() -> new AuthException("이메일 또는 비밀번호가 올바르지 않습니다.", HttpStatus.UNAUTHORIZED));
@@ -101,45 +98,39 @@ public class AuthService {
             UserSession userSession = UserSession.of(
                 user.getId(),
                 user.getUsername(),
-                user.getEmail()
+                user.getEmail(),
+                user.getUsername()  // nickname은 username과 동일하게 설정
             );
             redisSessionService.saveSession(sessionId, userSession);
             
-            // HTTP 세션에 새로운 세션 ID 저장
-            session.setAttribute("sessionId", sessionId);
-            session.setAttribute("userSession", userSession);
-            
-            return UserDto.fromEntity(user);
+            return new AuthResponse(UserDto.fromEntity(user), sessionId);
         } catch (Exception e) {
             log.error("Login error occurred", e);
             throw e;
         }
     }
 
-    public void logout(HttpSession session) {
-        String sessionId = (String) session.getAttribute("sessionId");
-        UserSession userSession = (UserSession) session.getAttribute("userSession");
-        
-        if (sessionId != null) {
-            redisSessionService.deleteSession(sessionId);
-        }
-        
-        if (userSession != null) {
-            redisSessionService.setUserOffline(userSession.getUserId().toString());
-        }
-        
-        session.invalidate();
+    public void logout(String sessionId) {
+        redisSessionService.deleteSession(sessionId);
     }
 
-    public UserDto getUserById(Long userId) {
-        User user = userRepository.findById(userId)
+    public UserDto getCurrentUser(String sessionId) {
+        UserSession userSession = redisSessionService.getSession(sessionId);
+        if (userSession == null) {
+            throw new AuthException("세션을 찾을 수 없습니다.", HttpStatus.NOT_FOUND);
+        }
+        User user = userRepository.findById(userSession.getUserId())
                 .orElseThrow(() -> new AuthException("사용자를 찾을 수 없습니다.", HttpStatus.NOT_FOUND));
         return UserDto.fromEntity(user);
     }
 
     @Transactional(rollbackFor = Exception.class)
-    public UserDto updateProfile(Long userId, UserDto request) {
-        User user = userRepository.findById(userId)
+    public UserDto updateProfile(String sessionId, UserDto request) {
+        UserSession userSession = redisSessionService.getSession(sessionId);
+        if (userSession == null) {
+            throw new AuthException("세션을 찾을 수 없습니다.", HttpStatus.NOT_FOUND);
+        }
+        User user = userRepository.findById(userSession.getUserId())
                 .orElseThrow(() -> new AuthException("사용자를 찾을 수 없습니다.", HttpStatus.NOT_FOUND));
 
         user.setUsername(request.getUsername());
@@ -152,6 +143,12 @@ public class AuthService {
 
         User updatedUser = userRepository.save(user);
         return UserDto.fromEntity(updatedUser);
+    }
+
+    public UserDto getUserById(Long userId) {
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new AuthException("사용자를 찾을 수 없습니다.", HttpStatus.NOT_FOUND));
+        return UserDto.fromEntity(user);
     }
 
     /**
@@ -176,5 +173,13 @@ public class AuthService {
     public static class DuplicateCheckResponse {
         private boolean emailExists;
         private boolean usernameExists;
+    }
+
+    @Getter
+    @Setter
+    @AllArgsConstructor
+    public static class AuthResponse {
+        private UserDto user;
+        private String sessionId;
     }
 } 

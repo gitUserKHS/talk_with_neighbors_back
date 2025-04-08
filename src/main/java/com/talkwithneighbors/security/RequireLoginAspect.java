@@ -1,5 +1,6 @@
 package com.talkwithneighbors.security;
 
+import com.talkwithneighbors.service.SessionValidationService;
 import org.aspectj.lang.JoinPoint;
 import org.aspectj.lang.annotation.Aspect;
 import org.aspectj.lang.annotation.Before;
@@ -9,12 +10,16 @@ import org.springframework.web.context.request.RequestContextHolder;
 import org.springframework.web.context.request.ServletRequestAttributes;
 
 import jakarta.servlet.http.HttpServletRequest;
+import lombok.RequiredArgsConstructor;
 import java.lang.reflect.Method;
 import java.lang.reflect.Parameter;
 
 @Aspect
 @Component
+@RequiredArgsConstructor
 public class RequireLoginAspect {
+
+    private final SessionValidationService sessionValidationService;
 
     @Before("@annotation(com.talkwithneighbors.security.RequireLogin) || @within(com.talkwithneighbors.security.RequireLogin)")
     public void beforeMethodExecution(JoinPoint joinPoint) {
@@ -24,12 +29,8 @@ public class RequireLoginAspect {
         Object[] args = joinPoint.getArgs();
 
         HttpServletRequest request = ((ServletRequestAttributes) RequestContextHolder.getRequestAttributes()).getRequest();
-        UserSession userSession = (UserSession) request.getAttribute("USER_SESSION");
-
-        // 인증 여부 확인
-        if (userSession == null || userSession.getUserId() == null) {
-            throw new RuntimeException("User not authenticated");
-        }
+        String sessionId = request.getHeader("X-Session-Id");
+        UserSession userSession = sessionValidationService.validateSession(sessionId);
 
         // 메서드 파라미터에 UserSession 타입이 있으면 주입
         for (int i = 0; i < parameters.length; i++) {

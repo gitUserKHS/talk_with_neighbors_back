@@ -28,6 +28,7 @@ public class WebConfig implements WebMvcConfigurer {
             .allowedOrigins("http://localhost:3000") // 프론트엔드 URL
             .allowedMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
             .allowedHeaders("*")
+            .exposedHeaders("X-Session-Id") // 응답 헤더에 X-Session-Id를 노출
             .allowCredentials(true)
             .maxAge(3600);
     }

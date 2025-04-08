@@ -12,10 +12,14 @@ import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.cache.annotation.Cacheable;
 
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
+import java.util.Optional;
+import java.util.UUID;
 
 @Service
 @Slf4j
@@ -30,9 +34,11 @@ public class RedisSessionService {
     private static final String PENDING_MATCH_PREFIX = "pending_match:";
     private static final long SESSION_EXPIRATION = 24 * 60 * 60; // 24시간
     private static final long ONLINE_EXPIRATION = 5 * 60; // 5분
+    private static final long SESSION_TIMEOUT_MINUTES = 30;
 
     public void saveSession(String sessionId, UserSession userSession) {
         try {
+            // Redis에 세션 저장
             String key = SESSION_PREFIX + sessionId;
             String value = objectMapper.writeValueAsString(userSession);
             redisTemplate.opsForValue().set(key, value, SESSION_EXPIRATION, TimeUnit.SECONDS);
@@ -41,85 +47,64 @@ public class RedisSessionService {
             LocalDateTime now = LocalDateTime.now();
             Session session = new Session();
             session.setSessionId(sessionId);
-            session.setUser(userRepository.findById(userSession.getUserId())
-                    .orElseThrow(() -> new RuntimeException("User not found")));
-            session.setExpiresAt(now.plusSeconds(SESSION_EXPIRATION));
-            session.setLastAccessedAt(now);  // 마지막 접근 시간 설정
             
+            // 사용자 정보 조회 및 설정
+            User user = userRepository.findById(userSession.getUserId())
+                    .orElseThrow(() -> new RuntimeException("User not found: " + userSession.getUserId()));
+            session.setUser(user);
+            session.setExpiresAt(now.plusSeconds(SESSION_EXPIRATION));
+            session.setLastAccessedAt(now);
+            
+            // 세션 저장
             userSessionRepository.save(session);
             
             // 사용자를 온라인 상태로 표시
             setUserOnline(userSession.getUserId().toString());
             
-            log.info("Session saved successfully for user: {}", userSession.getUsername());
+            log.info("Session saved successfully for user: {} with sessionId: {}", userSession.getUsername(), sessionId);
         } catch (Exception e) {
-            log.error("Error saving session to Redis", e);
-            throw new RuntimeException("Failed to save session", e);
+            log.error("Error saving session to Redis/RDB", e);
+            throw new RuntimeException("Failed to save session: " + e.getMessage(), e);
         }
     }
 
+    @Transactional(readOnly = true)
+    @Cacheable(value = "sessions", key = "#sessionId")
     public UserSession getSession(String sessionId) {
+        log.info("Cache miss for session: {}, attempting to load from RDB", sessionId);
+        
         try {
-            String key = SESSION_PREFIX + sessionId;
-            String value = redisTemplate.opsForValue().get(key);
-            
-            if (value == null) {
-                log.info("Cache miss for session: {}, attempting to load from RDB", sessionId);
-                // RDB에서 세션 정보 조회
-                Session session = userSessionRepository.findBySessionId(sessionId)
-                        .orElseThrow(() -> new RuntimeException("Session not found in database"));
-                
-                // RDB에서 사용자 정보 조회
-                User user = userRepository.findById(session.getUser().getId())
-                        .orElseThrow(() -> new RuntimeException("User not found in database"));
-                
-                // 새로운 세션 객체 생성
-                UserSession userSession = UserSession.of(
-                    user.getId(),
-                    user.getUsername(),
-                    user.getEmail()
-                );
-                
-                // Redis 캐시에 저장 (다음 요청을 위해)
-                String sessionValue = objectMapper.writeValueAsString(userSession);
-                redisTemplate.opsForValue().set(key, sessionValue, SESSION_EXPIRATION, TimeUnit.SECONDS);
-                
-                // 사용자를 온라인 상태로 표시
-                setUserOnline(userSession.getUserId().toString());
-                
-                log.info("Session recreated from RDB and cached in Redis: {}", sessionId);
-                return userSession;
-            }
-
-            UserSession userSession = objectMapper.readValue(value, UserSession.class);
-            
-            // Redis에 세션이 있으면 만료 시간 갱신
-            redisTemplate.expire(key, SESSION_EXPIRATION, TimeUnit.SECONDS);
-            
-            // 사용자를 온라인 상태로 표시
-            setUserOnline(userSession.getUserId().toString());
-            
-            return userSession;
+            return userSessionRepository.findById(sessionId)
+                    .map(session -> {
+                        User user = session.getUser();
+                        // 지연 로딩 문제를 해결하기 위해 값을 미리 가져옴
+                        Long userId = user.getId();
+                        String username = user.getUsername();
+                        String email = user.getEmail();
+                        
+                        return UserSession.of(
+                            userId,
+                            username,
+                            email,
+                            username  // nickname은 username과 동일하게 설정
+                        );
+                    })
+                    .orElseThrow(() -> new RuntimeException("Session not found in database"));
         } catch (Exception e) {
             log.error("Error retrieving session from Redis", e);
-            throw new RuntimeException("Failed to retrieve session", e);
+            throw new RuntimeException("Session not found in database");
         }
+    }
+    
+    private UserSession createNewSession() {
+        // 새로운 세션을 생성하지 않고 예외를 발생시킵니다.
+        throw new RuntimeException("Session not found in database");
     }
 
     @Transactional
+    @CacheEvict(value = "sessions", key = "#sessionId")
     public void deleteSession(String sessionId) {
-        try {
-            String key = SESSION_PREFIX + sessionId;
-            redisTemplate.delete(key);
-            
-            // RDB에서도 세션 삭제
-            userSessionRepository.deleteBySessionId(sessionId);
-            
-            log.info("Session deleted successfully: {}", sessionId);
-        } catch (Exception e) {
-            log.error("Error deleting session from Redis", e);
-            throw new RuntimeException("Failed to delete session", e);
-        }
+        userSessionRepository.deleteById(sessionId);
     }
     
     /**
@@ -259,5 +244,24 @@ public class RedisSessionService {
         if (!inactiveUsers.isEmpty()) {
             log.info("{} users set to offline due to inactivity", inactiveUsers.size());
         }
+    }
+
+    @Transactional
+    @CacheEvict(value = "sessions", key = "#sessionId")
+    public void updateSession(String sessionId, Long userId, String nickname) {
+        Session session = userSessionRepository.findById(sessionId)
+                .orElseGet(() -> {
+                    Session newSession = new Session();
+                    newSession.setSessionId(sessionId);
+                    return newSession;
+                });
+        
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new RuntimeException("User not found"));
+        session.setUser(user);
+        session.setLastAccessedAt(LocalDateTime.now());
+        session.setExpiresAt(LocalDateTime.now().plusMinutes(SESSION_TIMEOUT_MINUTES));
+        
+        userSessionRepository.save(session);
     }
 } 

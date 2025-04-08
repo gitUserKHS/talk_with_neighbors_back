@@ -12,25 +12,28 @@ import lombok.AllArgsConstructor;
 @Getter
 @Setter
 @NoArgsConstructor
+@AllArgsConstructor
 public class UserSession implements Serializable {
     private static final long serialVersionUID = -1554712050816392803L;  // Redis에 저장된 기존 값과 일치시킴
     
     private transient Long userId; // transient로 표시하여 직접 직렬화하지 않음
     private String username;
     private String email;
+    private String nickname;
     
     // 직렬화를 위한 임시 필드
     private String userIdStr;
 
     // 생성자 추가 (userIdStr은 직렬화 용도로만 사용되므로 생성자에서 초기화하지 않음)
-    public UserSession(Long userId, String username, String email) {
+    public UserSession(Long userId, String username, String email, String nickname) {
         this.userId = userId;
         this.username = username;
         this.email = email;
+        this.nickname = nickname;
     }
 
-    public static UserSession of(Long userId, String username, String email) {
-        return new UserSession(userId, username, email);
+    public static UserSession of(Long userId, String username, String email, String nickname) {
+        return new UserSession(userId, username, email, nickname);
     }
     
     // 직렬화 전 호출됨

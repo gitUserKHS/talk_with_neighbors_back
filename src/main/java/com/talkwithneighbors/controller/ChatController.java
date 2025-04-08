@@ -11,12 +11,15 @@ import com.talkwithneighbors.security.RequireLogin;
 import com.talkwithneighbors.security.UserSession;
 import com.talkwithneighbors.service.ChatService;
 import com.talkwithneighbors.service.RedisSessionService;
+import com.talkwithneighbors.service.SessionValidationService;
+import com.talkwithneighbors.service.UserService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
 import org.springframework.messaging.handler.annotation.MessageMapping;
 import org.springframework.messaging.handler.annotation.Payload;
 import org.springframework.messaging.simp.SimpMessageHeaderAccessor;
+import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.web.bind.annotation.*;
 
 import jakarta.servlet.http.HttpServletRequest;
@@ -34,6 +37,9 @@ public class ChatController {
     private final ChatService chatService;
     private final UserRepository userRepository;
     private final RedisSessionService redisSessionService;
+    private final UserService userService;
+    private final SessionValidationService sessionValidationService;
+    private final SimpMessagingTemplate messagingTemplate;
 
     private User getCurrentUser(UserSession userSession) {
         log.debug("Getting current user from session: {}", userSession);
@@ -58,32 +64,48 @@ public class ChatController {
     @PostMapping("/rooms")
     public ResponseEntity<ChatRoom> createRoom(
             @RequestBody CreateRoomRequest createRoomRequest,
-            UserSession userSession) {
+            @RequestHeader("X-Session-Id") String sessionId) {
+        UserSession userSession = sessionValidationService.validateSession(sessionId);
         User user = getCurrentUser(userSession);
-        return ResponseEntity.ok(chatService.createRoom(createRoomRequest.getName(), user, createRoomRequest.getType(), createRoomRequest.getParticipantIds()));
+        return ResponseEntity.ok(chatService.createRoom(
+            createRoomRequest.getName(), 
+            user, 
+            createRoomRequest.getTypeEnum(),
+            createRoomRequest.getParticipantIds()
+        ));
     }
 
     @GetMapping("/rooms")
-    public ResponseEntity<List<ChatRoom>> getRooms(UserSession userSession) {
+    public ResponseEntity<List<ChatRoom>> getRooms(@RequestHeader("X-Session-Id") String sessionId) {
+        UserSession userSession = sessionValidationService.validateSession(sessionId);
         User user = getCurrentUser(userSession);
         return ResponseEntity.ok(chatService.getRoomsByUser(user));
     }
 
     @GetMapping("/rooms/{roomId}")
-    public ResponseEntity<ChatRoom> getRoom(@PathVariable String roomId, UserSession userSession) {
+    public ResponseEntity<ChatRoom> getRoom(
+            @PathVariable String roomId,
+            @RequestHeader("X-Session-Id") String sessionId) {
+        UserSession userSession = sessionValidationService.validateSession(sessionId);
         User user = getCurrentUser(userSession);
         return ResponseEntity.ok(chatService.getRoom(roomId, user));
     }
 
     @PostMapping("/rooms/{roomId}/join")
-    public ResponseEntity<Void> joinRoom(@PathVariable String roomId, UserSession userSession) {
+    public ResponseEntity<Void> joinRoom(
+            @PathVariable String roomId,
+            @RequestHeader("X-Session-Id") String sessionId) {
+        UserSession userSession = sessionValidationService.validateSession(sessionId);
         User user = getCurrentUser(userSession);
         chatService.joinRoom(roomId, user);
         return ResponseEntity.ok().build();
     }
 
     @PostMapping("/rooms/{roomId}/leave")
-    public ResponseEntity<Void> leaveRoom(@PathVariable String roomId, UserSession userSession) {
+    public ResponseEntity<Void> leaveRoom(
+            @PathVariable String roomId,
+            @RequestHeader("X-Session-Id") String sessionId) {
+        UserSession userSession = sessionValidationService.validateSession(sessionId);
         User user = getCurrentUser(userSession);
         chatService.leaveRoom(roomId, user);
         return ResponseEntity.ok().build();
@@ -94,7 +116,9 @@ public class ChatController {
             @PathVariable String roomId,
             @RequestParam(name = "page", defaultValue = "0") int page,
             @RequestParam(name = "size", defaultValue = "20") int size,
-            UserSession userSession) {
+            @RequestHeader("X-Session-Id") String sessionId) {
+        UserSession userSession = sessionValidationService.validateSession(sessionId);
+        User user = getCurrentUser(userSession);
         return ResponseEntity.ok(chatService.getMessages(roomId, page, size));
     }
 
@@ -102,7 +126,8 @@ public class ChatController {
     public ResponseEntity<Void> markMessageAsRead(
             @PathVariable String roomId,
             @RequestParam(name = "messageId") String messageId,
-            UserSession userSession) {
+            @RequestHeader("X-Session-Id") String sessionId) {
+        UserSession userSession = sessionValidationService.validateSession(sessionId);
         User user = getCurrentUser(userSession);
         chatService.markMessageAsRead(messageId, user);
         return ResponseEntity.ok().build();
