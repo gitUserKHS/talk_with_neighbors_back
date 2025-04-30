@@ -34,6 +34,8 @@ spring:
           time_zone: UTC
           batch_size: 30
           batch_versioned_data: true
+          order_inserts: true
+          order_updates: true
     open-in-view: false
   session:
     store-type: redis

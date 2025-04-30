@@ -35,8 +35,13 @@ public class RequireLoginAspect {
         // 메서드 파라미터에 UserSession 타입이 있으면 주입
         for (int i = 0; i < parameters.length; i++) {
             if (parameters[i].getType().equals(UserSession.class)) {
+                // userId가 null이면 로그 출력 및 예외 발생
+                if (userSession.getUserId() == null) {
+                    System.err.println("[RequireLoginAspect] userId is null! userIdStr=" + userSession.getUserIdStr() + ", session=" + userSession);
+                    throw new RuntimeException("세션에서 userId를 찾을 수 없습니다. userIdStr=" + userSession.getUserIdStr());
+                }
                 args[i] = userSession;
             }
         }
     }
-} 
+}

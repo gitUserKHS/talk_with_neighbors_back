@@ -18,6 +18,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -63,7 +64,25 @@ public class MatchingService {
     @Transactional
     public void saveMatchingPreferences(MatchingPreferencesDto preferences, Long userId) {
         User user = getUserById(userId);
-        MatchingPreferences matchingPreferences = preferences.toEntity(user);
+        
+        // 기존 설정이 있으면 업데이트, 없으면 새로 생성
+        MatchingPreferences matchingPreferences = matchingPreferencesRepository
+            .findByUserId(userId)
+            .orElseGet(() -> {
+                MatchingPreferences p = new MatchingPreferences();
+                p.setUser(user);
+                return p;
+            });
+        
+        // 엔티티 필드 업데이트
+        matchingPreferences.setLatitude(preferences.getLocation().getLatitude());
+        matchingPreferences.setLongitude(preferences.getLocation().getLongitude());
+        matchingPreferences.setAddress(preferences.getLocation().getAddress());
+        matchingPreferences.setMaxDistance(preferences.getMaxDistance());
+        matchingPreferences.setMinAge(preferences.getAgeRange()[0]);
+        matchingPreferences.setMaxAge(preferences.getAgeRange()[1]);
+        matchingPreferences.setPreferredGender(preferences.getGender());
+        matchingPreferences.setPreferredInterests(preferences.getInterests());
         matchingPreferencesRepository.save(matchingPreferences);
     }
 
@@ -75,6 +94,7 @@ public class MatchingService {
      */
     @Transactional
     public void startMatching(MatchingPreferencesDto preferences, Long userId) {
+        log.info("[startMatching] userId: {}", userId);
         User user = getUserById(userId);
         
         // 기존 매칭 중지
@@ -90,19 +110,26 @@ public class MatchingService {
             5.0 // 기본 반경 5km
         );
         
+        // 배치용 매칭 엔티티 생성
+        List<Match> matches = new ArrayList<>();
         for (User nearbyUser : nearbyUsers) {
-            // 매칭 생성
             Match match = new Match();
             match.setUser1(user);
             match.setUser2(nearbyUser);
             match.setStatus(MatchStatus.PENDING);
             match.setCreatedAt(LocalDateTime.now());
             match.setExpiresAt(LocalDateTime.now().plusHours(24)); // 24시간 후 만료
-            matchRepository.save(match);
-            
-            // 상대방이 온라인인지 확인
+            matches.add(match);
+        }
+        
+        // 일괄 저장
+        List<Match> savedMatches = matchRepository.saveAll(matches);
+        
+        // 저장된 매칭에 대해 알림 또는 대기 처리
+        for (int i = 0; i < savedMatches.size(); i++) {
+            Match match = savedMatches.get(i);
+            User nearbyUser = nearbyUsers.get(i);
             if (redisSessionService.isUserOnline(nearbyUser.getId().toString())) {
-                // WebSocket을 통해 매칭 요청 알림 전송
                 messagingTemplate.convertAndSendToUser(
                     nearbyUser.getId().toString(),
                     "/queue/matches",
@@ -112,7 +139,6 @@ public class MatchingService {
                     ))
                 );
             } else {
-                // 오프라인 사용자에게는 대기 중인 매칭 요청으로 저장
                 redisSessionService.savePendingMatch(nearbyUser.getId().toString(), match.getId().toString());
                 log.info("Saved pending match for offline user: {}", nearbyUser.getId());
             }
@@ -154,6 +180,13 @@ public class MatchingService {
                     match.setStatus(MatchStatus.EXPIRED);
                     match.setRespondedAt(LocalDateTime.now());
                     matchRepository.save(match);
+                    log.info("[processPendingMatches] match saved: user1={}, user2={}, matchId={}",
+                        match.getUser1() != null ? match.getUser1().getId() : null,
+                        match.getUser2() != null ? match.getUser2().getId() : null,
+                        match.getId());
+                    if (match.getId() == null) {
+                        log.error("[processPendingMatches] ERROR: match.getId() is null after save! match object: {}", match);
+                    }
                 }
             }
         }
@@ -168,15 +201,14 @@ public class MatchingService {
     public void stopMatching(Long userId) {
         User user = getUserById(userId);
         
-        // 대기 중인 매칭 요청 만료 처리
-        List<Match> pendingMatches = matchRepository.findByUser1IdOrUser2IdAndStatus(
-            userId, userId, MatchStatus.PENDING);
-        
-        for (Match match : pendingMatches) {
-            match.setStatus(MatchStatus.EXPIRED);
-            match.setRespondedAt(LocalDateTime.now());
-            matchRepository.save(match);
-        }
+        // 대기 중인 매칭을 일괄 만료 처리 (bulk update)
+        int expiredCount = matchRepository.bulkExpireMatches(
+            MatchStatus.EXPIRED,
+            LocalDateTime.now(),
+            userId,
+            MatchStatus.PENDING
+        );
+        log.info("[stopMatching] expired {} pending matches for user {}", expiredCount, userId);
     }
 
     /**

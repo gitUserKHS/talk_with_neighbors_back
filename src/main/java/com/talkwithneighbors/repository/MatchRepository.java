@@ -3,10 +3,12 @@ package com.talkwithneighbors.repository;
 import com.talkwithneighbors.entity.Match;
 import com.talkwithneighbors.entity.MatchStatus;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
-import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -80,4 +82,16 @@ public interface MatchRepository extends JpaRepository<Match, String> {
     List<Match> findByUserId(@Param("userId") Long userId);
 
     List<Match> findByUser1IdOrUser2IdAndStatus(Long user1Id, Long user2Id, MatchStatus status);
-} 
+
+    /**
+     * 대기 중인 매칭을 일괄 만료 처리합니다.
+     */
+    @Modifying
+    @Transactional
+    @Query("UPDATE Match m SET m.status = :expiredStatus, m.respondedAt = :now " +
+           "WHERE (m.user1.id = :userId OR m.user2.id = :userId) AND m.status = :pendingStatus")
+    int bulkExpireMatches(@Param("expiredStatus") MatchStatus expiredStatus,
+                          @Param("now") LocalDateTime now,
+                          @Param("userId") Long userId,
+                          @Param("pendingStatus") MatchStatus pendingStatus);
+}

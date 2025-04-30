@@ -182,7 +182,7 @@ public class RedisSessionService {
                 .orElseThrow(() -> new RuntimeException("User not found"));
         
         // RDB에서 온라인 상태가 true이고 마지막 온라인 시간이 5분 이내면 온라인으로 간주
-        if (user.getIsOnline() && user.getLastOnlineAt() != null) {
+        if (Boolean.TRUE.equals(user.getIsOnline()) && user.getLastOnlineAt() != null) {
             LocalDateTime fiveMinutesAgo = LocalDateTime.now().minusMinutes(5);
             return user.getLastOnlineAt().isAfter(fiveMinutesAgo);
         }

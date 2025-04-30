@@ -36,13 +36,35 @@ public class MatchingController {
             @RequestBody MatchingPreferencesDto preferences,
             UserSession userSession
     ) {
-        matchingService.startMatching(preferences, userSession.getUserId());
+        log.info("[MatchingController] 매칭 시작 요청: userSession={}", userSession);
+        if (userSession == null) {
+            log.error("[MatchingController] userSession is null! 세션 미인증 상태");
+            return ResponseEntity.badRequest().build();
+        }
+        Long userId = userSession.getUserId();
+        log.info("[MatchingController] 추출된 userId: {}", userId);
+        if (userId == null) {
+            log.error("[MatchingController] userId가 null! userSession={}", userSession);
+            return ResponseEntity.badRequest().build();
+        }
+        matchingService.startMatching(preferences, userId);
         return ResponseEntity.ok().build();
     }
 
     @PostMapping("/stop")
     public ResponseEntity<Void> stopMatching(UserSession userSession) {
-        matchingService.stopMatching(userSession.getUserId());
+        log.info("[MatchingController] 매칭 중지 요청: userSession={}", userSession);
+        if (userSession == null) {
+            log.error("[MatchingController] userSession is null! 세션 미인증 상태");
+            return ResponseEntity.badRequest().build();
+        }
+        Long userId = userSession.getUserId();
+        log.info("[MatchingController] 추출된 userId: {}", userId);
+        if (userId == null) {
+            log.error("[MatchingController] userId가 null! userSession={}", userSession);
+            return ResponseEntity.badRequest().build();
+        }
+        matchingService.stopMatching(userId);
         return ResponseEntity.ok().build();
     }
 

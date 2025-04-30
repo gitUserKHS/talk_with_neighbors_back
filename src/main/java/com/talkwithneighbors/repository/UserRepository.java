@@ -48,7 +48,7 @@ public interface UserRepository extends JpaRepository<User, Long> {
      * @param radius 검색 반경 (킬로미터)
      * @return 주변 사용자 목록
      */
-    @Query("SELECT u FROM User u WHERE " +
+    @Query("SELECT DISTINCT u FROM User u LEFT JOIN FETCH u.interests WHERE " +
            "6371 * acos(cos(radians(:latitude)) * cos(radians(u.latitude)) * " +
            "cos(radians(u.longitude) - radians(:longitude)) + " +
            "sin(radians(:latitude)) * sin(radians(u.latitude))) <= :radius")
