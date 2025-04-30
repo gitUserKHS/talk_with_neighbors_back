@@ -5,16 +5,17 @@ import com.talkwithneighbors.dto.LocationDto;
 import com.talkwithneighbors.dto.matching.MatchProfileDto;
 import com.talkwithneighbors.dto.matching.MatchingPreferencesDto;
 import com.talkwithneighbors.exception.MatchingException;
-import com.talkwithneighbors.security.UserSession;
 import com.talkwithneighbors.service.MatchingService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
-import org.springframework.http.MediaType;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
+import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
+import org.springframework.security.test.context.support.WithMockUser;
 import org.springframework.test.web.servlet.MockMvc;
 
 import java.util.Arrays;
@@ -25,16 +26,38 @@ import static org.mockito.ArgumentMatchers.anyDouble;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doNothing;
-import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.anyLong;
+import static org.mockito.Mockito.anyString;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
-@WebMvcTest(MatchingController.class)
-class MatchingControllerTest {
+import org.springframework.context.annotation.Import;
+import org.mockito.Mockito;
+import org.springframework.context.ApplicationContext;
+import org.springframework.core.MethodParameter;
+import org.springframework.web.method.support.HandlerMethodArgumentResolver;
+import org.springframework.web.method.support.ModelAndViewContainer;
+import org.springframework.web.context.request.NativeWebRequest;
+import org.springframework.web.bind.support.WebDataBinderFactory;
+
+@SpringBootTest
+@WithMockUser(username = "testuser", roles = {"USER"})
+public class MatchingControllerTest {
+    @MockBean
+    private com.talkwithneighbors.security.AuthInterceptor authInterceptor;
+
+
+
+
+
+    private MockMvc mockMvc;
 
     @Autowired
-    private MockMvc mockMvc;
+    private ApplicationContext context;
 
     @Autowired
     private ObjectMapper objectMapper;
@@ -42,11 +65,36 @@ class MatchingControllerTest {
     @MockBean
     private MatchingService matchingService;
 
+    @MockBean
+    private com.talkwithneighbors.service.SessionValidationService sessionValidationService;
     private MatchingPreferencesDto preferencesDto;
-    private UserSession userSession;
 
     @BeforeEach
     void setUp() {
+        Mockito.when(authInterceptor.preHandle(any(), any(), any())).thenReturn(true);
+        Mockito.when(sessionValidationService.validateSession(any())).thenReturn(
+            new com.talkwithneighbors.security.UserSession(1L, "testuser", "test@test.com", "testnick")
+        );
+
+        MatchingController controller = context.getBean(MatchingController.class);
+
+        mockMvc = org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup(controller)
+            .setControllerAdvice(new com.talkwithneighbors.exception.GlobalExceptionHandler())
+            .setCustomArgumentResolvers(new org.springframework.web.method.support.HandlerMethodArgumentResolver() {
+                @Override
+                public boolean supportsParameter(org.springframework.core.MethodParameter parameter) {
+                    System.out.println("[StandaloneArgumentResolver] supportsParameter: " + parameter.getParameterType());
+                    return parameter.getParameterType().equals(com.talkwithneighbors.security.UserSession.class);
+                }
+                @Override
+                public Object resolveArgument(org.springframework.core.MethodParameter parameter, org.springframework.web.method.support.ModelAndViewContainer mavContainer,
+                                             org.springframework.web.context.request.NativeWebRequest webRequest, org.springframework.web.bind.support.WebDataBinderFactory binderFactory) {
+                    System.out.println("[StandaloneArgumentResolver] resolveArgument called");
+                    return new com.talkwithneighbors.security.UserSession(1L, "testuser", "test@test.com", "testnick");
+                }
+            })
+            .build();
+
         LocationDto locationDto = new LocationDto();
         locationDto.setLatitude(37.5665);
         locationDto.setLongitude(126.9780);
@@ -57,8 +105,6 @@ class MatchingControllerTest {
         preferencesDto.setMaxDistance(5.0);
         preferencesDto.setAgeRange(new Integer[]{20, 30});
         preferencesDto.setGender("F");
-
-        userSession = UserSession.of(1L, "testuser", "test@example.com", "testuser");
     }
 
     @Test
@@ -69,9 +115,10 @@ class MatchingControllerTest {
 
         // when & then
         mockMvc.perform(post("/api/matching/preferences")
+                .with(csrf())
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(preferencesDto))
-                .sessionAttr("USER_SESSION", userSession))
+                )
                 .andExpect(status().isOk());
     }
 
@@ -84,9 +131,10 @@ class MatchingControllerTest {
 
         // when & then
         mockMvc.perform(post("/api/matching/preferences")
+                .with(csrf())
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(preferencesDto))
-                .sessionAttr("USER_SESSION", userSession))
+                )
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.message").value("잘못된 위치 정보입니다."));
     }
@@ -99,9 +147,10 @@ class MatchingControllerTest {
 
         // when & then
         mockMvc.perform(post("/api/matching/start")
+                .with(csrf())
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(preferencesDto))
-                .sessionAttr("USER_SESSION", userSession))
+                )
                 .andExpect(status().isOk());
     }
 
@@ -114,9 +163,10 @@ class MatchingControllerTest {
 
         // when & then
         mockMvc.perform(post("/api/matching/start")
+                .with(csrf())
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(preferencesDto))
-                .sessionAttr("USER_SESSION", userSession))
+                )
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.message").value("이미 매칭 중입니다."));
     }
@@ -129,7 +179,8 @@ class MatchingControllerTest {
 
         // when & then
         mockMvc.perform(post("/api/matching/stop")
-                .sessionAttr("USER_SESSION", userSession))
+                .with(csrf())
+                )
                 .andExpect(status().isOk());
     }
 
@@ -142,7 +193,8 @@ class MatchingControllerTest {
 
         // when & then
         mockMvc.perform(post("/api/matching/stop")
-                .sessionAttr("USER_SESSION", userSession))
+                .with(csrf())
+                )
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.message").value("매칭 중이 아닙니다."));
     }
@@ -155,9 +207,14 @@ class MatchingControllerTest {
         doNothing().when(matchingService).acceptMatch(anyString(), anyLong());
 
         // when & then
-        mockMvc.perform(post("/api/matching/{matchId}/accept", matchId)
-                .sessionAttr("USER_SESSION", userSession))
-                .andExpect(status().isOk());
+        var result = mockMvc.perform(post("/api/matching/{matchId}/accept", matchId)
+                .with(csrf()))
+                .andReturn();
+        System.out.println("[acceptMatchSuccess] 응답 본문: " + result.getResponse().getContentAsString());
+        System.out.println("[acceptMatchSuccess] 응답 상태: " + result.getResponse().getStatus());
+        // 실제로 호출됐는지 검증
+        org.mockito.Mockito.verify(matchingService, org.mockito.Mockito.times(1)).acceptMatch(anyString(), anyLong());
+        org.junit.jupiter.api.Assertions.assertEquals(200, result.getResponse().getStatus());
     }
 
     @Test
@@ -170,7 +227,8 @@ class MatchingControllerTest {
 
         // when & then
         mockMvc.perform(post("/api/matching/{matchId}/accept", matchId)
-                .sessionAttr("USER_SESSION", userSession))
+                .with(csrf())
+                )
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.message").value("존재하지 않는 매칭입니다."));
     }
@@ -183,9 +241,15 @@ class MatchingControllerTest {
         doNothing().when(matchingService).rejectMatch(anyString(), anyLong());
 
         // when & then
-        mockMvc.perform(post("/api/matching/{matchId}/reject", matchId)
-                .sessionAttr("USER_SESSION", userSession))
-                .andExpect(status().isOk());
+        var result = mockMvc.perform(post("/api/matching/{matchId}/reject", matchId)
+                .with(csrf())
+                )
+                .andReturn();
+        if (result.getResponse().getStatus() != 200) {
+            System.out.println("[rejectMatchSuccess] 응답 본문: " + result.getResponse().getContentAsString());
+            System.out.println("[rejectMatchSuccess] 응답 상태: " + result.getResponse().getStatus());
+        }
+        org.junit.jupiter.api.Assertions.assertEquals(200, result.getResponse().getStatus());
     }
 
     @Test
@@ -198,7 +262,8 @@ class MatchingControllerTest {
 
         // when & then
         mockMvc.perform(post("/api/matching/{matchId}/reject", matchId)
-                .sessionAttr("USER_SESSION", userSession))
+                .with(csrf())
+                )
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.message").value("이미 처리된 매칭입니다."));
     }
@@ -245,7 +310,7 @@ class MatchingControllerTest {
                 .param("latitude", latitude.toString())
                 .param("longitude", longitude.toString())
                 .param("radius", radius.toString())
-                .sessionAttr("USER_SESSION", userSession))
+                )
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$").isArray())
                 .andExpect(jsonPath("$[0].id").value("2"))
@@ -268,7 +333,7 @@ class MatchingControllerTest {
                 .param("latitude", latitude.toString())
                 .param("longitude", longitude.toString())
                 .param("radius", radius.toString())
-                .sessionAttr("USER_SESSION", userSession))
+                )
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.message").value("잘못된 위치 정보입니다."));
     }
@@ -281,7 +346,7 @@ class MatchingControllerTest {
 
         // when & then
         mockMvc.perform(post("/api/matching/process-pending")
-                .sessionAttr("USER_SESSION", userSession))
+                )
                 .andExpect(status().isOk());
     }
 
@@ -294,7 +359,7 @@ class MatchingControllerTest {
 
         // when & then
         mockMvc.perform(post("/api/matching/process-pending")
-                .sessionAttr("USER_SESSION", userSession))
+                )
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.message").value("매칭을 처리할 권한이 없습니다."));
     }

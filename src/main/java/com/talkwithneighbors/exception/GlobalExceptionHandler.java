@@ -11,6 +11,14 @@ import org.springframework.http.HttpStatus;
 @RestControllerAdvice
 public class GlobalExceptionHandler {
 
+    @ExceptionHandler(MatchingException.class)
+    public ResponseEntity<ErrorResponse> handleMatchingException(MatchingException e) {
+        log.error("Matching error: {} at {}", e.getMessage(), e.getStackTrace()[0]);
+        return ResponseEntity
+                .status(e.getStatus())
+                .body(new ErrorResponse(e.getMessage()));
+    }
+
     @ExceptionHandler(AuthException.class)
     public ResponseEntity<ErrorResponse> handleAuthException(AuthException e) {
         log.error("Auth error: {} at {}", e.getMessage(), e.getStackTrace()[0]);

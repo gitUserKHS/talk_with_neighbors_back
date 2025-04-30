@@ -5,7 +5,6 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
-import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
@@ -15,7 +14,6 @@ import java.util.Optional;
  * 세션 관련 데이터베이스 작업을 처리합니다.
  */
 @Repository
-@EnableJpaRepositories
 public interface UserSessionRepository extends JpaRepository<Session, String> {
     /**
      * 특정 사용자의 모든 세션을 조회합니다.

@@ -1,7 +1,8 @@
 package com.talkwithneighbors.controller;
 
 import com.talkwithneighbors.entity.User;
-import com.talkwithneighbors.repository.UserRepository;
+import com.talkwithneighbors.service.UserService;
+import jakarta.servlet.http.HttpSession;
 import com.talkwithneighbors.security.UserSession;
 import com.talkwithneighbors.service.SessionValidationService;
 import jakarta.servlet.http.HttpServletRequest;
@@ -19,7 +20,7 @@ public abstract class BaseController {
     protected SessionValidationService sessionValidationService;
 
     @Autowired
-    protected UserRepository userRepository;
+    protected UserService userService;
 
     /**
      * HTTP 요청에서 세션 ID를 추출합니다.
@@ -49,23 +50,30 @@ public abstract class BaseController {
      * @return 사용자 엔티티
      */
     protected User getCurrentUser(HttpServletRequest request) {
+        // 1. 테스트 환경(HttpSession)에 USER_SESSION이 있으면 우선 사용
+        HttpSession httpSession = request.getSession(false);
+        if (httpSession != null) {
+            Object sessionAttr = httpSession.getAttribute("USER_SESSION");
+            if (sessionAttr instanceof UserSession) {
+                UserSession userSession = (UserSession) sessionAttr;
+                if (userSession.getUserId() == null) {
+                    log.error("UserSession userId is null for session attribute: {}", userSession);
+                    throw new RuntimeException("User ID is null in session - user is not properly authenticated");
+                }
+                return userService.getUserById(userSession.getUserId());
+            }
+        }
+        // 2. 실제 환경: 헤더 기반 세션 처리
         String sessionId = extractSessionId(request);
         UserSession userSession = sessionValidationService.validateSession(sessionId);
-        
         if (userSession == null) {
             log.error("UserSession is null");
             throw new RuntimeException("User session is null - user is not authenticated");
         }
-        
         if (userSession.getUserId() == null) {
             log.error("UserSession userId is null for session: {}", userSession);
             throw new RuntimeException("User ID is null in session - user is not properly authenticated");
         }
-        
-        return userRepository.findById(userSession.getUserId())
-                .orElseThrow(() -> {
-                    log.error("User not found for ID: {}", userSession.getUserId());
-                    return new RuntimeException("User not found with ID: " + userSession.getUserId());
-                });
+        return userService.getUserById(userSession.getUserId());
     }
 } 

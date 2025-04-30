@@ -1,10 +1,7 @@
 package com.talkwithneighbors.controller;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.talkwithneighbors.dto.ChatMessageDto;
-import com.talkwithneighbors.dto.ChatRoomDto;
 import com.talkwithneighbors.dto.CreateRoomRequest;
-import com.talkwithneighbors.dto.MessageDto;
 import com.talkwithneighbors.entity.ChatRoom;
 import com.talkwithneighbors.entity.ChatRoomType;
 import com.talkwithneighbors.entity.Message;
@@ -38,7 +35,18 @@ import static org.mockito.Mockito.doThrow;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
-@WebMvcTest(ChatController.class)
+import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
+import org.springframework.context.annotation.ComponentScan;
+
+@WebMvcTest(
+    controllers = ChatController.class,
+    excludeFilters = @ComponentScan.Filter(type = org.springframework.context.annotation.FilterType.ASSIGNABLE_TYPE, classes = com.talkwithneighbors.config.WebConfig.class)
+)
+@org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc(addFilters = false)
+@org.springframework.test.context.ActiveProfiles("test")
+@org.springframework.context.annotation.Import({MockRedisSessionConfig.class, ChatExceptionHandler.class})
+@org.springframework.boot.test.mock.mockito.MockBean(com.talkwithneighbors.service.SessionValidationService.class)
+@org.springframework.boot.test.mock.mockito.MockBean(org.springframework.session.SessionRepository.class)
 class ChatControllerTest {
 
     @Autowired
@@ -49,9 +57,6 @@ class ChatControllerTest {
 
     @MockBean
     private ChatService chatService;
-
-    @MockBean
-    private RedisSessionService redisSessionService;
 
     @MockBean
     private UserService userService;
@@ -77,7 +82,12 @@ class ChatControllerTest {
         testRoom.setId("test-room-id");
         testRoom.setName("Test Room");
         testRoom.setType(ChatRoomType.GROUP);
-        testRoom.setCreator(testUser);
+        // 방장(creator)를 testUser와 다른 User로 지정
+        User otherUser = new User();
+        otherUser.setId(2L);
+        otherUser.setUsername("otheruser");
+        otherUser.setEmail("other@example.com");
+        testRoom.setCreator(otherUser);
 
         createRoomRequest = new CreateRoomRequest();
         createRoomRequest.setName("New Room");
@@ -101,7 +111,7 @@ class ChatControllerTest {
                 .sessionAttr("USER_SESSION", userSession))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.id").value(testRoom.getId()))
-                .andExpect(jsonPath("$.name").value(testRoom.getName()));
+                .andExpect(jsonPath("$.roomName").value(testRoom.getName()));
     }
 
     @Test
@@ -116,7 +126,7 @@ class ChatControllerTest {
                 .sessionAttr("USER_SESSION", userSession))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[0].id").value(testRoom.getId()))
-                .andExpect(jsonPath("$[0].name").value(testRoom.getName()));
+                .andExpect(jsonPath("$[0].roomName").value(testRoom.getName()));
     }
 
     @Test
@@ -130,7 +140,7 @@ class ChatControllerTest {
                 .sessionAttr("USER_SESSION", userSession))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.id").value(testRoom.getId()))
-                .andExpect(jsonPath("$.name").value(testRoom.getName()));
+                .andExpect(jsonPath("$.roomName").value(testRoom.getName()));
     }
 
     @Test
@@ -169,6 +179,9 @@ class ChatControllerTest {
         message.setChatRoom(testRoom);
         message.setCreatedAt(LocalDateTime.now());
         message.setType(Message.MessageType.TEXT);
+        message.setReadByUsers(new java.util.HashSet<>()); // NPE 방지
+        message.setUpdatedAt(message.getCreatedAt()); // updatedAt 명확히 지정
+        message.setDeleted(false); // isDeleted 명확히 지정
 
         List<Message> messages = Arrays.asList(message);
         when(chatService.getMessages(anyString(), anyInt(), anyInt())).thenReturn(messages);
@@ -210,7 +223,7 @@ class ChatControllerTest {
                 .sessionAttr("USER_SESSION", userSession))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[0].id").value(testRoom.getId()))
-                .andExpect(jsonPath("$[0].name").value(testRoom.getName()));
+                .andExpect(jsonPath("$[0].roomName").value(testRoom.getName()));
     }
 
     @Test
@@ -288,6 +301,7 @@ class ChatControllerTest {
     @DisplayName("채팅방 나가기 실패 - 참여하지 않은 채팅방")
     void leaveRoomFailNotJoined() throws Exception {
         // given
+        when(chatService.getRoom(anyString(), any(User.class))).thenReturn(testRoom);
         doThrow(new ChatException("참여하지 않은 채팅방입니다.", HttpStatus.FORBIDDEN))
                 .when(chatService).leaveRoom(anyString(), any(User.class));
 

@@ -48,7 +48,7 @@ public class MatchingController {
 
     @PostMapping("/{matchId}/accept")
     public ResponseEntity<Void> acceptMatch(
-            @PathVariable String matchId,
+            @PathVariable("matchId") String matchId,
             UserSession userSession
     ) {
         matchingService.acceptMatch(matchId, userSession.getUserId());
@@ -57,7 +57,7 @@ public class MatchingController {
 
     @PostMapping("/{matchId}/reject")
     public ResponseEntity<Void> rejectMatch(
-            @PathVariable String matchId,
+            @PathVariable("matchId") String matchId,
             UserSession userSession
     ) {
         matchingService.rejectMatch(matchId, userSession.getUserId());
@@ -66,9 +66,9 @@ public class MatchingController {
 
     @GetMapping("/nearby")
     public ResponseEntity<List<MatchProfileDto>> searchNearbyUsers(
-            @RequestParam Double latitude,
-            @RequestParam Double longitude,
-            @RequestParam Double radius,
+            @RequestParam("latitude") Double latitude,
+            @RequestParam("longitude") Double longitude,
+            @RequestParam("radius") Double radius,
             UserSession userSession
     ) {
         List<MatchProfileDto> nearbyUsers = matchingService.searchNearbyUsers(
