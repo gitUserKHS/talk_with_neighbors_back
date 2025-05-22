@@ -62,4 +62,7 @@ public interface ChatRoomRepository extends JpaRepository<ChatRoom, String> {
 
     @Query("SELECT cr FROM ChatRoom cr JOIN FETCH cr.participants p WHERE cr.id = :id AND :user MEMBER OF cr.participants")
     Optional<ChatRoom> findByIdAndParticipantsContaining(@Param("id") String id, @Param("user") User user);
+
+    @Query("SELECT size(cr.participants) FROM ChatRoom cr WHERE cr.id = :roomId")
+    Integer getParticipantCount(@Param("roomId") String roomId);
 } 

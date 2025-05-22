@@ -5,18 +5,31 @@ import com.talkwithneighbors.entity.User;
 import com.talkwithneighbors.repository.UserRepository;
 import com.talkwithneighbors.service.UserService;
 import lombok.RequiredArgsConstructor;
+import org.springframework.security.core.GrantedAuthority;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
+import org.springframework.security.core.userdetails.UserDetails;
+import org.springframework.security.core.userdetails.UserDetailsService;
+import org.springframework.security.core.userdetails.UsernameNotFoundException;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.Collections;
 import java.util.List;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 @Service
-@RequiredArgsConstructor
 @Transactional(readOnly = true)
-public class UserServiceImpl implements UserService {
+public class UserServiceImpl implements UserService, UserDetailsService {
 
     private final UserRepository userRepository;
+    private final PasswordEncoder passwordEncoder;
+
+    public UserServiceImpl(UserRepository userRepository, PasswordEncoder passwordEncoder) {
+        this.userRepository = userRepository;
+        this.passwordEncoder = passwordEncoder;
+    }
 
     @Override
     @Transactional
@@ -27,25 +40,26 @@ public class UserServiceImpl implements UserService {
         if (existsByUsername(user.getUsername())) {
             throw new IllegalArgumentException("이미 존재하는 사용자명입니다.");
         }
+        user.setPassword(passwordEncoder.encode(user.getPassword()));
         return userRepository.save(user);
     }
 
     @Override
     public User getUserById(Long id) {
         return userRepository.findById(id)
-                .orElseThrow(() -> new IllegalArgumentException("존재하지 않는 사용자입니다."));
+                .orElseThrow(() -> new IllegalArgumentException("존재하지 않는 사용자 ID: " + id));
     }
 
     @Override
     public User getUserByEmail(String email) {
         return userRepository.findByEmail(email)
-                .orElseThrow(() -> new IllegalArgumentException("존재하지 않는 사용자입니다."));
+                .orElseThrow(() -> new IllegalArgumentException("존재하지 않는 이메일: " + email));
     }
 
     @Override
     public User getUserByUsername(String username) {
         return userRepository.findByUsername(username)
-                .orElseThrow(() -> new IllegalArgumentException("존재하지 않는 사용자입니다."));
+                .orElseThrow(() -> new UsernameNotFoundException("사용자를 찾을 수 없습니다: " + username));
     }
 
     @Override
@@ -63,12 +77,17 @@ public class UserServiceImpl implements UserService {
     public User updateUser(User user) {
         User existingUser = getUserById(user.getId());
         
-        // 사용자명이 변경된 경우 중복 체크
         if (!existingUser.getUsername().equals(user.getUsername()) && existsByUsername(user.getUsername())) {
             throw new IllegalArgumentException("이미 존재하는 사용자명입니다.");
         }
         
-        return userRepository.save(user);
+        existingUser.setEmail(user.getEmail());
+        existingUser.setProfileImage(user.getProfileImage());
+        existingUser.setBio(user.getBio());
+        existingUser.setAge(user.getAge());
+        existingUser.setGender(user.getGender());
+
+        return userRepository.save(existingUser);
     }
 
     @Override
@@ -94,7 +113,21 @@ public class UserServiceImpl implements UserService {
         return MatchProfileDto.builder()
                 .id(user.getId())
                 .username(user.getUsername())
-                .interests(user.getInterests())
                 .build();
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public UserDetails loadUserByUsername(String username) throws UsernameNotFoundException {
+        User user = userRepository.findByUsername(username)
+                .orElseThrow(() -> new UsernameNotFoundException("사용자를 찾을 수 없습니다: " + username));
+
+        Set<GrantedAuthority> authorities = Collections.singleton(new SimpleGrantedAuthority("ROLE_USER"));
+
+        return new org.springframework.security.core.userdetails.User(
+                user.getUsername(),
+                user.getPassword(),
+                authorities
+        );
     }
 } 

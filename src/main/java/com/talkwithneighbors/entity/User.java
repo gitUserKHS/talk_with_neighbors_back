@@ -10,11 +10,13 @@ import java.time.LocalDateTime;
 import java.util.List;
 import java.util.ArrayList;
 import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 
 /**
  * 사용자 정보를 관리하는 엔티티 클래스
  * 사용자의 기본 정보, 매칭 관련 정보, 위치 정보 등을 저장합니다.
  */
+@JsonIgnoreProperties({"interests", "createdRooms", "joinedRooms", "sentMessages"})
 @Entity
 @Table(name = "users")
 @Getter
@@ -116,12 +118,15 @@ public class User {
     @Column(name = "last_location_update")
     private LocalDateTime lastLocationUpdate;
 
+    @JsonIgnore
     @OneToMany(mappedBy = "creator", cascade = CascadeType.ALL)
     private List<ChatRoom> createdRooms = new ArrayList<>();
 
+    @JsonIgnore
     @ManyToMany(mappedBy = "participants")
     private List<ChatRoom> joinedRooms = new ArrayList<>();
 
+    @JsonIgnore
     @OneToMany(mappedBy = "sender", cascade = CascadeType.ALL)
     private List<Message> sentMessages = new ArrayList<>();
 }

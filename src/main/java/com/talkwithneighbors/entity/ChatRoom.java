@@ -59,7 +59,7 @@ public class ChatRoom {
      * 다대다(N:N) 관계로 설정되어 있으며,
      * chat_room_participants 테이블을 통해 관리됩니다.
      */
-    @ManyToMany(fetch = FetchType.EAGER)
+    @ManyToMany(fetch = FetchType.LAZY)
     @JoinTable(
         name = "chat_room_participants",
         joinColumns = @JoinColumn(name = "chat_room_id"),

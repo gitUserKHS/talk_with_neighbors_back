@@ -104,6 +104,12 @@ public class AuthController {
         return ResponseEntity.ok(updatedUser);
     }
 
+    @GetMapping("/profile")
+    @RequireLogin
+    public ResponseEntity<UserDto> getProfile(@RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        return getCurrentUser(sessionId);
+    }
+
     /**
      * 이메일과 닉네임 중복 여부를 확인합니다.
      * @param email 확인할 이메일

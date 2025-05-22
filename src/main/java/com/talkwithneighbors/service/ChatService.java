@@ -75,4 +75,13 @@ public interface ChatService {
      * @return 검색된 채팅방 목록
      */
     List<ChatRoom> searchRooms(String keyword, ChatRoomType type);
+    
+    /**
+     * 방의 모든 미확인 메시지를 읽음 처리합니다.
+     */
+    void markAllMessagesAsRead(String roomId, User user);
+    
+    List<User> getParticipants(String roomId);
+
+    Integer getParticipantCount(String roomId);
 }

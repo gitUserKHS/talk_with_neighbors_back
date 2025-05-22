@@ -1,6 +1,7 @@
 package com.talkwithneighbors.dto;
 
 import com.talkwithneighbors.entity.User;
+import java.util.List;
 import lombok.Getter;
 import lombok.Setter;
 import lombok.NoArgsConstructor;
@@ -19,6 +20,7 @@ public class UserDto {
     private Double latitude;
     private Double longitude;
     private String address;
+    private List<String> interests;
 
     public static UserDto fromEntity(User user) {
         UserDto dto = new UserDto();
@@ -32,6 +34,7 @@ public class UserDto {
         dto.setLatitude(user.getLatitude());
         dto.setLongitude(user.getLongitude());
         dto.setAddress(user.getAddress());
+        dto.setInterests(user.getInterests());
         return dto;
     }
 } 

@@ -21,7 +21,7 @@ public interface MessageRepository extends JpaRepository<Message, String> {
      * @param chatRoomId 채팅방 ID
      * @return 메시지 목록
      */
-    @Query("SELECT m FROM Message m WHERE m.chatRoom.id = :roomId ORDER BY m.createdAt DESC")
+    @Query("SELECT DISTINCT m FROM Message m JOIN FETCH m.sender LEFT JOIN FETCH m.readByUsers WHERE m.chatRoom.id = :roomId ORDER BY m.createdAt DESC")
     List<Message> findByChatRoomIdOrderByCreatedAtDesc(@Param("roomId") String roomId, Pageable pageable);
 
     /**

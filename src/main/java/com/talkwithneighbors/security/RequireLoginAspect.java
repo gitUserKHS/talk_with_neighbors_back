@@ -23,12 +23,17 @@ public class RequireLoginAspect {
 
     @Before("@annotation(com.talkwithneighbors.security.RequireLogin) || @within(com.talkwithneighbors.security.RequireLogin)")
     public void beforeMethodExecution(JoinPoint joinPoint) {
+        // Skip non-HTTP contexts (e.g., WebSocket handlers)
+        var attrs = RequestContextHolder.getRequestAttributes();
+        if (!(attrs instanceof ServletRequestAttributes)) {
+            return;
+        }
+        HttpServletRequest request = ((ServletRequestAttributes) attrs).getRequest();
         MethodSignature signature = (MethodSignature) joinPoint.getSignature();
         Method method = signature.getMethod();
         Parameter[] parameters = method.getParameters();
         Object[] args = joinPoint.getArgs();
 
-        HttpServletRequest request = ((ServletRequestAttributes) RequestContextHolder.getRequestAttributes()).getRequest();
         String sessionId = request.getHeader("X-Session-Id");
         UserSession userSession = sessionValidationService.validateSession(sessionId);
 

@@ -141,6 +141,7 @@ public class AuthService {
         user.setLatitude(request.getLatitude());
         user.setLongitude(request.getLongitude());
         user.setAddress(request.getAddress());
+        user.setInterests(request.getInterests());
 
         User updatedUser = userRepository.save(user);
         return UserDto.fromEntity(updatedUser);
