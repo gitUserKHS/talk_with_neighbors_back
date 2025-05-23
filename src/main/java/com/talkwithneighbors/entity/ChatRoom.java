@@ -66,7 +66,7 @@ public class ChatRoom {
         inverseJoinColumns = @JoinColumn(name = "user_id")
     )
     @JsonIgnore
-    private List<User> participants = new ArrayList<>();
+    private Set<User> participants = new HashSet<>();
 
     /**
      * 채팅방의 마지막 메시지 내용

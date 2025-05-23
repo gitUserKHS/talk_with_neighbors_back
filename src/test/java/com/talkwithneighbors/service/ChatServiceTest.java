@@ -3,6 +3,7 @@ package com.talkwithneighbors.service;
 import com.talkwithneighbors.dto.ChatMessageDto;
 import com.talkwithneighbors.dto.ChatRoomDto;
 import com.talkwithneighbors.dto.CreateRoomRequest;
+import com.talkwithneighbors.dto.MessageDto;
 import com.talkwithneighbors.entity.ChatRoom;
 import com.talkwithneighbors.entity.ChatRoomType;
 import com.talkwithneighbors.entity.Message;
@@ -19,6 +20,7 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
+import org.springframework.data.domain.Page;
 
 import java.util.Arrays;
 import java.util.List;
@@ -84,37 +86,39 @@ class ChatServiceTest {
         User participant = new User();
         participant.setId(2L);
         when(userRepository.findAllById(anyList())).thenReturn(Arrays.asList(participant));
-        when(chatRoomRepository.save(any(ChatRoom.class))).thenReturn(testChatRoom);
+        when(chatRoomRepository.save(any())).thenReturn(testChatRoom);
 
         // when
-        ChatRoom createdRoom = chatService.createRoom(
+        ChatRoomDto createdRoomDto = chatService.createRoom(
             createRoomRequest.getName(),
-            testUser,
             createRoomRequest.getTypeEnum(),
+            testUser.getId().toString(),
             createRoomRequest.getParticipantIds()
         );
 
         // then
-        assertNotNull(createdRoom);
-        assertEquals(testChatRoom.getName(), createdRoom.getName());
-        assertEquals(testChatRoom.getType(), createdRoom.getType());
-        assertEquals(testUser, createdRoom.getCreator());
+        assertNotNull(createdRoomDto);
+        assertEquals(testChatRoom.getName(), createdRoomDto.getRoomName());
+        assertEquals(testChatRoom.getType(), createdRoomDto.getType());
+        assertEquals(testUser.getId().toString(), createdRoomDto.getCreatorId());
     }
 
     @Test
     @DisplayName("사용자의 채팅방 목록 조회 성공 테스트")
-    void getRoomsByUserSuccess() {
+    void getChatRoomsForUserSuccess() {
         // given
-        when(chatRoomRepository.findByParticipantsContaining(any(User.class)))
-            .thenReturn(Arrays.asList(testChatRoom));
+        Page<ChatRoom> chatRoomPage = new org.springframework.data.domain.PageImpl<>(List.of(testChatRoom));
+        when(chatRoomRepository.findByParticipantsContaining(any(User.class), any()))
+            .thenReturn(chatRoomPage);
 
         // when
-        List<ChatRoom> rooms = chatService.getRoomsByUser(testUser);
+        Page<ChatRoomDto> dtoPage = chatService.getChatRoomsForUser(
+            testUser.getId().toString(), org.springframework.data.domain.PageRequest.of(0, 10));
 
         // then
-        assertNotNull(rooms);
-        assertEquals(1, rooms.size());
-        assertEquals(testChatRoom.getName(), rooms.get(0).getName());
+        assertNotNull(dtoPage);
+        assertEquals(1, dtoPage.getTotalElements());
+        assertEquals(testChatRoom.getName(), dtoPage.getContent().get(0).getRoomName());
     }
 
     @Test
@@ -128,16 +132,18 @@ class ChatServiceTest {
         
         when(chatRoomRepository.findById(anyString())).thenReturn(Optional.of(testChatRoom));
         when(userRepository.findById(anyLong())).thenReturn(Optional.of(testUser));
-        when(messageRepository.save(any(Message.class))).thenReturn(testMessage);
-        doNothing().when(messagingTemplate).convertAndSend(anyString(), any(ChatMessageDto.class));
+        when(messageRepository.save(any())).thenReturn(testMessage);
+        
+        doNothing().when(messagingTemplate).convertAndSend(anyString(), any(com.talkwithneighbors.dto.MessageDto.class));
 
         // when
-        Message savedMessage = chatService.sendMessage(messageDto);
+        MessageDto savedDto = chatService.sendMessage(
+            testChatRoom.getId(), testUser.getId(), messageDto.getContent());
 
         // then
-        assertNotNull(savedMessage);
-        assertEquals(testMessage.getContent(), savedMessage.getContent());
-        assertEquals(testUser.getId(), savedMessage.getSender().getId());
+        assertNotNull(savedDto);
+        assertEquals(testMessage.getContent(), savedDto.getContent());
+        assertEquals(testUser.getId().toString(), savedDto.getSenderId());
     }
 
     @Test
@@ -152,22 +158,25 @@ class ChatServiceTest {
         when(chatRoomRepository.findById(anyString())).thenReturn(Optional.empty());
 
         // when & then
-        assertThrows(RuntimeException.class, () -> chatService.sendMessage(messageDto));
+        assertThrows(RuntimeException.class, () -> chatService.sendMessage(
+            messageDto.getRoomId(), messageDto.getSenderId(), messageDto.getContent()));
     }
 
     @Test
     @DisplayName("채팅방 메시지 목록 조회 성공 테스트")
     void getMessagesSuccess() {
         // given
+        Page<Message> messagePage = new org.springframework.data.domain.PageImpl<>(List.of(testMessage));
         when(messageRepository.findByChatRoomIdOrderByCreatedAtDesc(anyString(), any()))
-            .thenReturn(Arrays.asList(testMessage));
+            .thenReturn(messagePage);
 
         // when
-        List<Message> messages = chatService.getMessages(testChatRoom.getId(), 0, 10);
+        Page<MessageDto> dtoPage = chatService.getMessagesByRoomId(
+            testChatRoom.getId(), testUser.getId().toString(), org.springframework.data.domain.PageRequest.of(0, 10));
 
         // then
-        assertNotNull(messages);
-        assertEquals(1, messages.size());
-        assertEquals(testMessage.getContent(), messages.get(0).getContent());
+        assertNotNull(dtoPage);
+        assertEquals(1, dtoPage.getContent().size());
+        assertEquals(testMessage.getContent(), dtoPage.getContent().get(0).getContent());
     }
 } 

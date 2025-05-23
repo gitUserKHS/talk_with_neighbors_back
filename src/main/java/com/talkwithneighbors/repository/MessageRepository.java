@@ -1,6 +1,7 @@
 package com.talkwithneighbors.repository;
 
 import com.talkwithneighbors.entity.Message;
+import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
@@ -21,8 +22,8 @@ public interface MessageRepository extends JpaRepository<Message, String> {
      * @param chatRoomId 채팅방 ID
      * @return 메시지 목록
      */
-    @Query("SELECT DISTINCT m FROM Message m JOIN FETCH m.sender LEFT JOIN FETCH m.readByUsers WHERE m.chatRoom.id = :roomId ORDER BY m.createdAt DESC")
-    List<Message> findByChatRoomIdOrderByCreatedAtDesc(@Param("roomId") String roomId, Pageable pageable);
+    @Query("SELECT m FROM Message m WHERE m.chatRoom.id = :roomId ORDER BY m.createdAt DESC")
+    Page<Message> findByChatRoomIdOrderByCreatedAtDesc(@Param("roomId") String roomId, Pageable pageable);
 
     /**
      * 특정 채팅방의 모든 메시지를 삭제합니다.

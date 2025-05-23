@@ -1,6 +1,8 @@
 package com.talkwithneighbors.service.impl;
 
 import com.talkwithneighbors.dto.ChatMessageDto;
+import com.talkwithneighbors.dto.ChatRoomDto;
+import com.talkwithneighbors.dto.MessageDto;
 import com.talkwithneighbors.entity.ChatRoom;
 import com.talkwithneighbors.entity.ChatRoomType;
 import com.talkwithneighbors.entity.Message;
@@ -11,6 +13,9 @@ import com.talkwithneighbors.repository.UserRepository;
 import com.talkwithneighbors.service.ChatService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.Pageable;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -20,6 +25,7 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
@@ -34,7 +40,11 @@ public class ChatServiceImpl implements ChatService {
 
     @Override
     @Transactional
-    public ChatRoom createRoom(String name, User creator, ChatRoomType type, List<Long> participantIds) {
+    public ChatRoomDto createRoom(String name, ChatRoomType type, String creatorIdString, List<Long> participantIds) {
+        Long creatorId = Long.parseLong(creatorIdString);
+        User creator = userRepository.findById(creatorId)
+                .orElseThrow(() -> new RuntimeException("Creator not found with id: " + creatorId));
+
         ChatRoom chatRoom = new ChatRoom();
         chatRoom.setName(name);
         chatRoom.setType(type);
@@ -45,217 +55,220 @@ public class ChatServiceImpl implements ChatService {
             List<User> participants = userRepository.findAllById(participantIds);
             chatRoom.getParticipants().addAll(participants);
         }
-
-        return chatRoomRepository.save(chatRoom);
+        ChatRoom savedChatRoom = chatRoomRepository.save(chatRoom);
+        return ChatRoomDto.fromEntity(savedChatRoom, creator, messageRepository);
     }
 
     @Override
-    public List<ChatRoom> getRoomsByUser(User user) {
-        return chatRoomRepository.findByParticipantsContaining(user);
+    @Transactional(readOnly = true)
+    public Page<ChatRoomDto> getChatRoomsForUser(String userIdString, Pageable pageable) {
+        Long userId = Long.parseLong(userIdString);
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new RuntimeException("User not found with id: " + userId));
+        Page<ChatRoom> roomsPage = chatRoomRepository.findByParticipantsContaining(user, pageable);
+        return roomsPage.map(room -> ChatRoomDto.fromEntity(room, user, messageRepository));
     }
 
     @Override
-    public ChatRoom getRoom(String roomId, User user) {
-        return chatRoomRepository.findByIdAndParticipantsContaining(roomId, user)
+    @Transactional(readOnly = true)
+    public ChatRoomDto getRoomById(String roomId, String userIdString) {
+        Long userId = Long.parseLong(userIdString);
+        User currentUser = userRepository.findById(userId)
+            .orElseThrow(() -> new RuntimeException("User not found with id: " + userId));
+        ChatRoom chatRoom = chatRoomRepository.findByIdAndParticipantsContaining(roomId, currentUser)
                 .orElseThrow(() -> new RuntimeException("Chat room not found or user not a participant"));
+        return ChatRoomDto.fromEntity(chatRoom, currentUser, messageRepository);
     }
 
     @Override
     @Transactional
-    public void joinRoom(String roomId, User user) {
+    public void joinRoom(String roomId, String userIdString) {
+        Long userId = Long.parseLong(userIdString);
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new RuntimeException("User not found with id: " + userId));
         ChatRoom chatRoom = chatRoomRepository.findById(roomId)
                 .orElseThrow(() -> new RuntimeException("Chat room not found"));
+
+        if (chatRoom.getParticipants().contains(user)) {
+            log.info("User {} is already a participant in room {}", user.getId(), roomId);
+            return;
+        }
         chatRoom.getParticipants().add(user);
         chatRoomRepository.save(chatRoom);
+        log.info("User {} successfully joined room {}", user.getId(), roomId);
     }
 
     @Override
     @Transactional
-    public void leaveRoom(String roomId, User user) {
+    public void leaveRoom(String roomId, String userIdString) {
+        Long userId = Long.parseLong(userIdString);
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new RuntimeException("User not found with id: " + userId));
         ChatRoom chatRoom = chatRoomRepository.findById(roomId)
                 .orElseThrow(() -> new RuntimeException("Chat room not found"));
-        chatRoom.getParticipants().remove(user);
-        chatRoomRepository.save(chatRoom);
+        if (chatRoom.getParticipants().remove(user)) {
+            chatRoomRepository.save(chatRoom);
+            log.info("User {} left room {}", user.getId(), roomId);
+        } else {
+            log.warn("User {} was not a participant in room {}. No action taken.", user.getId(), roomId);
+        }
     }
 
     @Override
-    public Message sendMessage(ChatMessageDto messageDto) {
-        log.debug("Preparing to save message: {}", messageDto.getContent());
-        ChatRoom room = chatRoomRepository.findById(messageDto.getRoomId())
-                .orElseThrow(() -> new RuntimeException("Chat room not found"));
-        User sender = userRepository.findById(messageDto.getSenderId())
-                .orElseThrow(() -> new RuntimeException("User not found"));
+    @Transactional
+    public MessageDto sendMessage(String roomId, Long senderId, String content) {
+        ChatRoom room = chatRoomRepository.findById(roomId)
+                .orElseThrow(() -> new RuntimeException("Chat room not found: " + roomId));
+        User sender = userRepository.findById(senderId)
+                .orElseThrow(() -> new RuntimeException("User not found: " + senderId));
 
         Message message = new Message();
         message.setId(UUID.randomUUID().toString());
         message.setChatRoom(room);
         message.setSender(sender);
-        message.setContent(messageDto.getContent());
-        message.setType(messageDto.getType());
+        message.setContent(content);
         message.setCreatedAt(LocalDateTime.now());
         message.getReadByUsers().add(sender.getId());
 
-        Message savedMessage = messageRepository.saveAndFlush(message);
-        log.info("Saved message with id {} in room {}", savedMessage.getId(), room.getId());
+        Message savedMessage = messageRepository.save(message);
+        
+        room.setLastMessage(savedMessage.getContent());
+        room.setLastMessageTime(savedMessage.getCreatedAt());
+        chatRoomRepository.save(room);
 
-        // 메시지 브로드캐스트 (ChatController에서 처리하므로 주석 처리 또는 삭제)
-        // messagingTemplate.convertAndSend("/topic/chat/room/" + room.getId(), messageDto);
+        MessageDto messageDto = MessageDto.fromEntity(savedMessage, sender.getId());
 
-        return savedMessage;
+        messagingTemplate.convertAndSend("/topic/chat/room/" + roomId, messageDto);
+        log.info("Sent message id {} to /topic/chat/room/{}", savedMessage.getId(), roomId);
+        return messageDto;
     }
 
     @Override
     @Transactional(readOnly = true)
-    public List<Message> getMessages(String roomId, int page, int size) {
-        List<Message> messages = messageRepository.findByChatRoomIdOrderByCreatedAtDesc(roomId,
-                org.springframework.data.domain.PageRequest.of(page, size));
-        // initialize sender and readByUsers to avoid LazyInitializationException
-        messages.forEach(msg -> {
-            msg.getSender().getId();
-            msg.getReadByUsers().size();
+    public Page<MessageDto> getMessagesByRoomId(String roomId, String userIdString, Pageable pageable) {
+        Long userId = Long.parseLong(userIdString);
+        User currentUser = userRepository.findById(userId)
+            .orElseThrow(() -> new RuntimeException("User not found with id: " + userId));
+
+        Page<Message> messagesPage = messageRepository.findByChatRoomIdOrderByCreatedAtDesc(roomId, pageable);
+        
+        List<Message> messagesToUpdate = new java.util.ArrayList<>();
+        messagesPage.getContent().forEach(msg -> {
+            if (!msg.getReadByUsers().contains(currentUser.getId())) {
+                msg.getReadByUsers().add(currentUser.getId());
+                messagesToUpdate.add(msg);
+            }
         });
-        return messages;
+        if (!messagesToUpdate.isEmpty()) {
+            messageRepository.saveAll(messagesToUpdate);
+        }
+
+        return messagesPage.map(msg -> MessageDto.fromEntity(msg, currentUser.getId()));
     }
 
     @Override
     @Transactional(readOnly = true)
-    public List<ChatRoom> getRooms(User user) {
-        return chatRoomRepository.findByParticipantsContaining(user);
-    }
-
-    @Override
-    public ChatRoom findOrCreateOneToOneRoom(User user1, User user2) {
-        return chatRoomRepository.findByParticipantsContainingAndParticipantsContaining(user1, user2)
-                .stream()
-                .filter(room -> room.getParticipants().size() == 2)
-                .findFirst()
-                .orElseGet(() -> createRoom("1:1 Chat", user1, ChatRoomType.ONE_ON_ONE, List.of(user2.getId())));
-    }
-
-    @Override
-    public ChatRoom createRandomMatchingRoom(User user) {
-        // TODO: 랜덤 매칭 로직 구현 (예: 대기 중인 사용자 찾기 또는 새 방 생성)
-        // 임시로 새 그룹 채팅방 생성
-        String roomName = "Random Match Room - " + UUID.randomUUID().toString().substring(0, 8);
-        return createRoom(roomName, user, ChatRoomType.GROUP, new ArrayList<>());
-    }
-
-    @Override
-    @Transactional
-    public void markMessageAsRead(String messageId, User user) {
-        if (user == null || user.getId() == null) {
-            log.warn("[ChatService] markMessageAsRead: User or User ID is null. Cannot mark message as read.");
-            return;
-        }
-        log.info("[ChatService] markMessageAsRead: Attempting to mark messageId: {} as read for userId: {}", messageId, user.getId());
-        Message message = messageRepository.findById(messageId)
-                .orElseThrow(() -> {
-                    log.error("[ChatService] markMessageAsRead: Message not found with id: {}", messageId);
-                    return new RuntimeException("Message not found: " + messageId);
-                });
+    public Page<ChatRoomDto> searchRooms(String query, ChatRoomType type, String userIdString, Pageable pageable) {
+        Long userId = Long.parseLong(userIdString);
+        User currentUser = userRepository.findById(userId)
+            .orElseThrow(() -> new RuntimeException("User not found with id: " + userId));
         
-        log.debug("[ChatService] markMessageAsRead: Message {} found. Current readByUsers: {}", messageId, message.getReadByUsers());
-        boolean alreadyRead = message.getReadByUsers().contains(user.getId());
-        if (alreadyRead) {
-            log.info("[ChatService] markMessageAsRead: Message {} already marked as read by userId: {}", messageId, user.getId());
-        } else {
-            message.getReadByUsers().add(user.getId());
-            messageRepository.save(message);
-            log.info("[ChatService] markMessageAsRead: Successfully marked message {} as read for userId: {}. Updated readByUsers: {}", messageId, user.getId(), message.getReadByUsers());
-        }
-    }
+        Page<ChatRoom> roomsPage;
+        String trimmedQuery = (query != null) ? query.trim() : "";
 
-    @Override
-    @Transactional
-    public void markAllMessagesAsRead(String roomId, User user) {
-        if (user == null || user.getId() == null) {
-            log.warn("[ChatService] markAllMessagesAsRead: User or User ID is null. Cannot mark messages as read for room: {}", roomId);
-            return;
-        }
-        log.info("[ChatService] markAllMessagesAsRead: Attempting to mark all messages in roomId: {} as read for userId: {}", roomId, user.getId());
-        List<Message> unreadMessages = messageRepository.findUnreadMessages(roomId, user.getId());
-        
-        if (unreadMessages.isEmpty()) {
-            log.info("[ChatService] markAllMessagesAsRead: No unread messages found for userId: {} in roomId: {}", user.getId(), roomId);
-            return;
-        }
-
-        log.info("[ChatService] markAllMessagesAsRead: Found {} unread messages for userId: {} in roomId: {}. Marking them as read.", unreadMessages.size(), user.getId(), roomId);
-        for (Message msg : unreadMessages) {
-            log.debug("[ChatService] markAllMessagesAsRead: Marking messageId: {} for userId: {}. Current readByUsers: {}", msg.getId(), user.getId(), msg.getReadByUsers());
-            msg.getReadByUsers().add(user.getId());
-        }
-        messageRepository.saveAll(unreadMessages);
-        log.info("[ChatService] markAllMessagesAsRead: Successfully marked {} messages as read for userId: {} in roomId: {}", unreadMessages.size(), user.getId(), roomId);
-    }
-
-    @Override
-    public List<ChatRoom> searchGroupRooms(String keyword) {
-        if (keyword == null || keyword.trim().isEmpty()) {
-            return chatRoomRepository.findByType(ChatRoomType.GROUP);
-        }
-
-        String trimmedKeyword = keyword.trim().toLowerCase();
-        return chatRoomRepository.findByTypeAndNameContainingIgnoreCaseOrTypeAndIdContainingIgnoreCase(
-            ChatRoomType.GROUP, trimmedKeyword, ChatRoomType.GROUP, trimmedKeyword);
-    }
-
-    @Override
-    @Transactional
-    public boolean deleteRoom(String roomId, User user) {
-        ChatRoom chatRoom = chatRoomRepository.findById(roomId)
-                .orElseThrow(() -> new RuntimeException("Chat room not found"));
-
-        // 방장 권한 확인
-        if (!chatRoom.getCreator().getId().equals(user.getId())) {
-            throw new RuntimeException("Only the creator can delete the room");
-        }
-
-        // 방에 있는 모든 메시지 삭제
-        messageRepository.deleteByChatRoomId(roomId);
-
-        // 채팅방 삭제
-        chatRoomRepository.delete(chatRoom);
-
-        return true;
-    }
-
-    @Override
-    public List<ChatRoom> searchRooms(String keyword, ChatRoomType type) {
-        // 키워드가 없으면 타입에 맞는 모든 채팅방 반환
-        if (keyword == null || keyword.trim().isEmpty()) {
+        if (trimmedQuery.isEmpty()) {
             if (type == null) {
-                return chatRoomRepository.findAll();
+                roomsPage = chatRoomRepository.findAll(pageable);
             } else {
-                return chatRoomRepository.findByType(type);
+                roomsPage = chatRoomRepository.findByType(type, pageable);
+            }
+        } else {
+            if (type == null) {
+                roomsPage = chatRoomRepository.findByNameContainingIgnoreCaseOrIdContainingIgnoreCase(trimmedQuery, trimmedQuery, pageable);
+            } else {
+                roomsPage = chatRoomRepository.findByTypeAndNameContainingIgnoreCaseOrTypeAndIdContainingIgnoreCase(type, trimmedQuery, type, trimmedQuery, pageable);
             }
         }
-
-        String trimmedKeyword = keyword.trim().toLowerCase();
-
-        // 타입이 지정된 경우 타입에 맞는 채팅방만 검색
-        if (type != null) {
-            return chatRoomRepository.findByTypeAndNameContainingIgnoreCaseOrTypeAndIdContainingIgnoreCase(
-                type, trimmedKeyword, type, trimmedKeyword);
-        }
-
-        // 타입이 지정되지 않은 경우 모든 채팅방 검색
-        return chatRoomRepository.findByNameContainingIgnoreCaseOrIdContainingIgnoreCase(
-            trimmedKeyword, trimmedKeyword);
-    }
-
-    @Override
-    public List<User> getParticipants(String roomId) {
-        ChatRoom room = chatRoomRepository.findById(roomId)
-                .orElseThrow(() -> new RuntimeException("Chat room not found with id: " + roomId));
-        return new ArrayList<>(room.getParticipants());
+        return roomsPage.map(room -> ChatRoomDto.fromEntity(room, currentUser, messageRepository));
     }
 
     @Override
     @Transactional(readOnly = true)
-    public Integer getParticipantCount(String roomId) {
-        // chatRoomRepository에 추가한 count 쿼리를 직접 사용합니다.
-        Integer count = chatRoomRepository.getParticipantCount(roomId);
-        return count != null ? count : 0;
+    public Page<ChatRoomDto> getAllRooms(Pageable pageable) {
+        Page<ChatRoom> roomsPage = chatRoomRepository.findAll(pageable);
+        return roomsPage.map(room -> ChatRoomDto.fromEntity(room, null, messageRepository)); 
     }
-}
+
+    @Override
+    @Transactional
+    public void deleteRoom(String roomId) {
+        ChatRoom chatRoom = chatRoomRepository.findById(roomId)
+                .orElseThrow(() -> new RuntimeException("Chat room not found: " + roomId));
+        messageRepository.deleteByChatRoomId(roomId);
+        chatRoomRepository.delete(chatRoom);
+        log.info("Deleted chat room with id: {}", roomId);
+    }
+
+    @Override
+    @Transactional
+    public void markMessageAsRead(String messageId, String userIdString) {
+        Long userId = Long.parseLong(userIdString);
+        User user = userRepository.findById(userId)
+            .orElseThrow(() -> new RuntimeException("User not found with id: " + userId));
+        Message message = messageRepository.findById(messageId)
+                .orElseThrow(() -> new RuntimeException("Message not found: " + messageId));
+
+        if (!message.getReadByUsers().contains(user.getId())) {
+        message.getReadByUsers().add(user.getId());
+        messageRepository.save(message);
+            log.info("Marked message {} as read for user {}", messageId, user.getId());
+        }
+    }
+    
+    @Override
+    @Transactional
+    public void addUserToRoom(String roomId, String userIdString) {
+        Long userId = Long.parseLong(userIdString);
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new RuntimeException("User not found with id: " + userId));
+        ChatRoom chatRoom = chatRoomRepository.findById(roomId)
+                .orElseThrow(() -> new RuntimeException("Chat room not found: " + roomId));
+        
+        if (!chatRoom.getParticipants().contains(user)) {
+            chatRoom.getParticipants().add(user);
+            chatRoomRepository.save(chatRoom);
+            log.info("Added user {} to room {}", user.getId(), roomId);
+        } else {
+            log.info("User {} is already in room {}", user.getId(), roomId);
+        }
+    }
+
+    @Override
+    @Transactional
+    public void removeUserFromRoom(String roomId, String userIdString) {
+        Long userIdToRemove = Long.parseLong(userIdString);
+        User userToRemove = userRepository.findById(userIdToRemove)
+                .orElseThrow(() -> new RuntimeException("User to remove not found with id: " + userIdToRemove));
+        ChatRoom chatRoom = chatRoomRepository.findById(roomId)
+                .orElseThrow(() -> new RuntimeException("Chat room not found: " + roomId));
+
+        if (chatRoom.getParticipants().remove(userToRemove)) {
+            chatRoomRepository.save(chatRoom);
+            log.info("Removed user {} from room {}", userToRemove.getId(), roomId);
+        } else {
+            log.warn("User {} was not a participant in room {}. No action taken.", userToRemove.getId(), roomId);
+        }
+    }
+    
+    @Override
+    @Transactional
+    public ChatRoomDto updateRoom(String roomId, String name, ChatRoomType type) {
+        ChatRoom chatRoom = chatRoomRepository.findById(roomId)
+                .orElseThrow(() -> new RuntimeException("Chat room not found: " + roomId));
+        
+        chatRoom.setName(name);
+        chatRoom.setType(type);
+        ChatRoom updatedRoom = chatRoomRepository.save(chatRoom);
+        return ChatRoomDto.fromEntity(updatedRoom, updatedRoom.getCreator(), messageRepository);
+    }
+} 

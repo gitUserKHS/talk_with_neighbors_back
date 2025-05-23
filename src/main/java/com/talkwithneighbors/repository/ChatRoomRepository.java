@@ -3,6 +3,8 @@ package com.talkwithneighbors.repository;
 import com.talkwithneighbors.entity.ChatRoom;
 import com.talkwithneighbors.entity.ChatRoomType;
 import com.talkwithneighbors.entity.User;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -18,15 +20,16 @@ import java.util.Optional;
 @Repository
 public interface ChatRoomRepository extends JpaRepository<ChatRoom, String> {
     /**
-     * 특정 사용자가 참여한 모든 채팅방 목록을 조회합니다.
+     * 특정 사용자가 참여한 모든 채팅방 목록을 조회합니다. (페이징 처리)
      * 
      * @param userId 사용자 ID
-     * @return 채팅방 목록
+     * @param pageable 페이징 정보
+     * @return 채팅방 페이지
      */
-    List<ChatRoom> findByParticipantsId(Long userId);
+    // List<ChatRoom> findByParticipantsId(Long userId); // 이 메서드는 Page<ChatRoom> findByParticipants_Id(Long userId, Pageable pageable); 와 같이 변경 가능
 
-    @Query("SELECT cr FROM ChatRoom cr JOIN FETCH cr.participants p WHERE p = :user")
-    List<ChatRoom> findByParticipantsContaining(@Param("user") User user);
+    @Query("SELECT DISTINCT cr FROM ChatRoom cr JOIN FETCH cr.participants WHERE :user MEMBER OF cr.participants")
+    Page<ChatRoom> findByParticipantsContaining(@Param("user") User user, Pageable pageable);
     
     @Query("SELECT cr FROM ChatRoom cr JOIN cr.participants p1 JOIN cr.participants p2 " +
            "WHERE p1 = :user1 AND p2 = :user2 AND SIZE(cr.participants) = 2")
@@ -34,31 +37,37 @@ public interface ChatRoomRepository extends JpaRepository<ChatRoom, String> {
             @Param("user1") User user1, @Param("user2") User user2);
 
     /**
-     * 채팅방 타입으로 채팅방을 조회합니다.
+     * 채팅방 타입으로 채팅방을 조회합니다. (페이징 처리)
      * @param type 채팅방 타입
-     * @return 채팅방 목록
+     * @param pageable 페이징 정보
+     * @return 채팅방 페이지
      */
-    List<ChatRoom> findByType(ChatRoomType type);
+    Page<ChatRoom> findByType(ChatRoomType type, Pageable pageable);
     
     /**
-     * 채팅방 타입과 이름 또는 ID로 채팅방을 조회합니다.
+     * 채팅방 타입과 이름 또는 ID로 채팅방을 조회합니다. (페이징 처리)
      * @param type1 채팅방 타입
      * @param name 채팅방 이름 (부분 일치)
      * @param type2 채팅방 타입
      * @param id 채팅방 ID (부분 일치)
-     * @return 채팅방 목록
+     * @param pageable 페이징 정보
+     * @return 채팅방 페이지
      */
-    List<ChatRoom> findByTypeAndNameContainingIgnoreCaseOrTypeAndIdContainingIgnoreCase(
-        ChatRoomType type1, String name, ChatRoomType type2, String id);
+    @Query("SELECT cr FROM ChatRoom cr WHERE (cr.type = :type1 AND LOWER(cr.name) LIKE LOWER(CONCAT('%', :name, '%'))) OR (cr.type = :type2 AND LOWER(cr.id) LIKE LOWER(CONCAT('%', :id, '%')))")
+    Page<ChatRoom> findByTypeAndNameContainingIgnoreCaseOrTypeAndIdContainingIgnoreCase(
+        @Param("type1") ChatRoomType type1, @Param("name") String name, 
+        @Param("type2") ChatRoomType type2, @Param("id") String id, Pageable pageable);
 
     /**
-     * 채팅방 이름 또는 ID로 모든 유형의 채팅방을 조회합니다.
+     * 채팅방 이름 또는 ID로 모든 유형의 채팅방을 조회합니다. (페이징 처리)
      * @param name 채팅방 이름 (부분 일치)
      * @param id 채팅방 ID (부분 일치)
-     * @return 채팅방 목록
+     * @param pageable 페이징 정보
+     * @return 채팅방 페이지
      */
-    List<ChatRoom> findByNameContainingIgnoreCaseOrIdContainingIgnoreCase(
-        String name, String id);
+    @Query("SELECT cr FROM ChatRoom cr WHERE LOWER(cr.name) LIKE LOWER(CONCAT('%', :name, '%')) OR LOWER(cr.id) LIKE LOWER(CONCAT('%', :id, '%'))")
+    Page<ChatRoom> findByNameContainingIgnoreCaseOrIdContainingIgnoreCase(
+        @Param("name") String name, @Param("id") String id, Pageable pageable);
 
     @Query("SELECT cr FROM ChatRoom cr JOIN FETCH cr.participants p WHERE cr.id = :id AND :user MEMBER OF cr.participants")
     Optional<ChatRoom> findByIdAndParticipantsContaining(@Param("id") String id, @Param("user") User user);

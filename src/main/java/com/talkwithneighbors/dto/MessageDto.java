@@ -23,24 +23,40 @@ public class MessageDto {
     private String updatedAt;
     private MessageType type;
     private boolean isDeleted;
-    private Set<String> readByUsers;
+    private Set<Long> readByUsers;
+    private boolean readByCurrentUser;
 
     private static final DateTimeFormatter formatter = DateTimeFormatter.ISO_DATE_TIME;
 
-    public static MessageDto fromEntity(Message message) {
+    public static MessageDto fromEntity(Message message, Long currentUserId) {
         MessageDto dto = new MessageDto();
         dto.setId(message.getId());
         dto.setRoomId(message.getChatRoom().getId());
         dto.setSenderId(message.getSender().getId().toString());
         dto.setSenderName(message.getSender().getUsername());
         dto.setContent(message.getContent());
-        dto.setCreatedAt(message.getCreatedAt().format(formatter));
-        dto.setUpdatedAt(message.getUpdatedAt().format(formatter));
+        if (message.getCreatedAt() != null) {
+            dto.setCreatedAt(message.getCreatedAt().format(formatter));
+        }
+        if (message.getUpdatedAt() != null) {
+            dto.setUpdatedAt(message.getUpdatedAt().format(formatter));
+        }
         dto.setType(message.getType());
         dto.setDeleted(message.isDeleted());
-        dto.setReadByUsers(message.getReadByUsers().stream()
-                .map(Object::toString)
-                .collect(Collectors.toSet()));
+        
+        Set<Long> readByUserIds = message.getReadByUsers();
+        dto.setReadByUsers(readByUserIds);
+        
+        if (currentUserId != null && readByUserIds != null) {
+            dto.setReadByCurrentUser(readByUserIds.contains(currentUserId));
+        } else {
+            dto.setReadByCurrentUser(false);
+        }
+        
         return dto;
+    }
+
+    public static MessageDto fromEntity(Message message) {
+        return fromEntity(message, null);
     }
 }
