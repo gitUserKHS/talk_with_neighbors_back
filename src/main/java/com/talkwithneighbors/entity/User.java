@@ -85,6 +85,7 @@ public class User {
     @CollectionTable(name = "user_interests", joinColumns = @JoinColumn(name = "user_id"))
     @Column(name = "interest")
     @JsonIgnore
+    @Builder.Default
     private List<String> interests = new ArrayList<>();
     
     /**
@@ -120,14 +121,17 @@ public class User {
 
     @JsonIgnore
     @OneToMany(mappedBy = "creator", cascade = CascadeType.ALL)
+    @Builder.Default
     private List<ChatRoom> createdRooms = new ArrayList<>();
 
     @JsonIgnore
     @ManyToMany(mappedBy = "participants")
+    @Builder.Default
     private List<ChatRoom> joinedRooms = new ArrayList<>();
 
     @JsonIgnore
     @OneToMany(mappedBy = "sender", cascade = CascadeType.ALL)
+    @Builder.Default
     private List<Message> sentMessages = new ArrayList<>();
 
     @Transient

@@ -4,6 +4,7 @@ import com.talkwithneighbors.dto.MessageDto;
 import com.talkwithneighbors.entity.ChatRoom;
 import com.talkwithneighbors.entity.Message;
 import com.talkwithneighbors.entity.User;
+import com.talkwithneighbors.entity.ChatRoomType;
 import com.talkwithneighbors.exception.ChatException;
 import com.talkwithneighbors.repository.ChatRoomRepository;
 import com.talkwithneighbors.repository.MessageRepository;
@@ -18,6 +19,7 @@ import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
 import org.springframework.messaging.simp.SimpMessagingTemplate; // Though not directly used by getMessagesByRoomId
+import org.mockito.ArgumentCaptor;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -25,10 +27,12 @@ import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.*;
 
@@ -53,18 +57,35 @@ class ChatServiceImplTest {
     private final String testUserIdString = "1";
     private final Long testUserIdLong = 1L;
     private Pageable pageable;
+    private ChatRoom room;
+    private Message message;
+    private User creator;
+    private User participant;
+    private Set<User> participants;
 
     @BeforeEach
     void setUp() {
         MockitoAnnotations.openMocks(this);
         pageable = Pageable.unpaged();
+
+        creator = createUser(1L, "creator");
+        participant = createUser(2L, "participant");
+        participants = new HashSet<>(List.of(creator, participant));
+
+        room = new ChatRoom();
+        room.setId("test-room-id");
+        room.setName("Test Room");
+        room.setType(ChatRoomType.GROUP);
+        room.setCreator(creator);
+        room.setParticipants(participants);
+
+        message = createMessage("test-message-id", room, creator);
     }
 
-    private User createUser(Long id) {
+    private User createUser(Long id, String username) {
         User user = new User();
         user.setId(id);
-        user.setUsername("testuser" + id);
-        // Initialize collections to avoid NullPointerExceptions if accessed
+        user.setUsername(username);
         user.setCreatedRooms(new ArrayList<>());
         user.setJoinedRooms(new ArrayList<>());
         user.setSentMessages(new ArrayList<>());
@@ -72,13 +93,13 @@ class ChatServiceImplTest {
         return user;
     }
 
-    private ChatRoom createChatRoom(String id, User... participants) {
+    private ChatRoom createChatRoom(String id, User creator, Set<User> participants) {
         ChatRoom room = new ChatRoom();
         room.setId(id);
-        room.setName("Test Room");
-        room.setParticipants(new ArrayList<>(List.of(participants)));
-         // Initialize other collections
-        room.setMessages(new ArrayList<>());
+        room.setName("Test Room " + id);
+        room.setType(ChatRoomType.GROUP);
+        room.setCreator(creator);
+        room.setParticipants(participants);
         return room;
     }
     
@@ -89,17 +110,17 @@ class ChatServiceImplTest {
         message.setSender(sender);
         message.setContent("Hello!");
         message.setCreatedAt(LocalDateTime.now());
-        message.setReadByUsers(new HashSet<>()); // Initialize to empty set
-        message.getReadByUsers().add(sender.getId()); // Sender has read the message
+        message.setReadByUsers(new HashSet<>());
+        message.getReadByUsers().add(sender.getId());
         return message;
     }
 
 
     @Test
     void testGetMessagesByRoomId_whenUserNotParticipant_shouldThrowChatException() {
-        User requestingUser = createUser(testUserIdLong);
-        User otherUser = createUser(2L);
-        ChatRoom testRoom = createChatRoom(testRoomId, otherUser); // requestingUser is not a participant
+        User requestingUser = createUser(testUserIdLong, "requestingUser");
+        User otherUser = createUser(3L, "otherUser");
+        ChatRoom testRoom = createChatRoom(testRoomId, otherUser, new HashSet<>(List.of(otherUser)));
 
         when(userRepository.findById(testUserIdLong)).thenReturn(Optional.of(requestingUser));
         when(chatRoomRepository.findById(testRoomId)).thenReturn(Optional.of(testRoom));
@@ -117,8 +138,8 @@ class ChatServiceImplTest {
 
     @Test
     void testGetMessagesByRoomId_whenUserIsParticipant_shouldReturnMessages() {
-        User participantUser = createUser(testUserIdLong);
-        ChatRoom testRoom = createChatRoom(testRoomId, participantUser); // User is a participant
+        User participantUser = createUser(testUserIdLong, "participantUser");
+        ChatRoom testRoom = createChatRoom(testRoomId, participantUser, new HashSet<>(List.of(participantUser)));
 
         Message message1 = createMessage(UUID.randomUUID().toString(), testRoom, participantUser);
         List<Message> messages = List.of(message1);
@@ -127,7 +148,6 @@ class ChatServiceImplTest {
         when(userRepository.findById(testUserIdLong)).thenReturn(Optional.of(participantUser));
         when(chatRoomRepository.findById(testRoomId)).thenReturn(Optional.of(testRoom));
         when(messageRepository.findByChatRoomIdOrderByCreatedAtDesc(testRoomId, pageable)).thenReturn(messagePage);
-        // Mock saveAll for the read-by-users update
         when(messageRepository.saveAll(anyList())).thenAnswer(invocation -> invocation.getArgument(0));
 
 
@@ -141,28 +161,15 @@ class ChatServiceImplTest {
         verify(userRepository).findById(testUserIdLong);
         verify(chatRoomRepository).findById(testRoomId);
         verify(messageRepository).findByChatRoomIdOrderByCreatedAtDesc(testRoomId, pageable);
-        // Verify that saveAll was called if there were messages to mark as read.
-        // In this setup, message1 is sent by participantUser, so it's already "read" by them.
-        // Let's refine this: if the message was from another user, it would be marked read.
-        // For simplicity, we'll just check if saveAll is potentially called.
-        // If message1 was not read by participantUser, it would be added to messagesToUpdate.
-        // Since participantUser is the sender, readByUsers already contains their ID.
-        // Thus, messagesToUpdate would be empty unless other unread messages existed.
-        // Let's assume the "mark as read" logic is tested more deeply elsewhere or accept this level of detail.
-        // For now, we just verify the main path. If message1 was not read, saveAll would be called.
-        // If we want to explicitly test saveAll, we need a message not read by the user.
-        // For now, let's assume it works, or add a specific test for "mark as read" part.
-        // verify(messageRepository, atMostOnce()).saveAll(anyList()); // atMostOnce because it might be an empty list
     }
     
     @Test
     void testGetMessagesByRoomId_whenUserIsParticipant_MessageFromAnotherUser_MarkedAsRead() {
-        User currentUser = createUser(testUserIdLong);
-        User otherUser = createUser(2L); // Sender of the message
-        ChatRoom testRoom = createChatRoom(testRoomId, currentUser, otherUser); // Both are participants
+        User currentUser = createUser(testUserIdLong, "currentUser");
+        User otherUser = createUser(2L, "otherUser");
+        ChatRoom testRoom = createChatRoom(testRoomId, otherUser, new HashSet<>(List.of(currentUser, otherUser)));
 
         Message messageFromOtherUser = createMessage(UUID.randomUUID().toString(), testRoom, otherUser);
-        // Ensure currentUser has NOT read this message yet for the test
         messageFromOtherUser.getReadByUsers().remove(currentUser.getId()); 
 
         List<Message> messages = List.of(messageFromOtherUser);
@@ -177,16 +184,21 @@ class ChatServiceImplTest {
 
         assertNotNull(result);
         assertEquals(1, result.getContent().size());
-        assertTrue(result.getContent().get(0).isReadByCurrentUser()); // Should now be true
-        verify(messageRepository).saveAll(argThat(list -> !list.isEmpty() && ((Message)list.get(0)).getReadByUsers().contains(currentUser.getId())));
+        assertTrue(result.getContent().get(0).isReadByCurrentUser());
+
+        ArgumentCaptor<List<Message>> captor = ArgumentCaptor.forClass(List.class);
+        verify(messageRepository).saveAll(captor.capture());
+        List<Message> capturedMessages = captor.getValue();
+        assertFalse(capturedMessages.isEmpty());
+        assertTrue(capturedMessages.get(0).getReadByUsers().contains(currentUser.getId()));
     }
 
 
     @Test
     void testGetMessagesByRoomId_whenRoomNotFound_shouldThrowChatException() {
-        User requestingUser = createUser(testUserIdLong);
+        User requestingUser = createUser(testUserIdLong, "requestingUser");
         when(userRepository.findById(testUserIdLong)).thenReturn(Optional.of(requestingUser));
-        when(chatRoomRepository.findById(testRoomId)).thenReturn(Optional.empty()); // Room does not exist
+        when(chatRoomRepository.findById(testRoomId)).thenReturn(Optional.empty());
 
         ChatException exception = assertThrows(ChatException.class, () -> {
             chatService.getMessagesByRoomId(testRoomId, testUserIdString, pageable);
@@ -201,7 +213,7 @@ class ChatServiceImplTest {
 
     @Test
     void testGetMessagesByRoomId_whenUserNotFound_shouldThrowChatException() {
-        when(userRepository.findById(testUserIdLong)).thenReturn(Optional.empty()); // User does not exist
+        when(userRepository.findById(testUserIdLong)).thenReturn(Optional.empty());
 
         ChatException exception = assertThrows(ChatException.class, () -> {
             chatService.getMessagesByRoomId(testRoomId, testUserIdString, pageable);
@@ -210,7 +222,25 @@ class ChatServiceImplTest {
         assertEquals(HttpStatus.NOT_FOUND, exception.getStatus());
         assertTrue(exception.getMessage().startsWith("User not found with id:"));
         verify(userRepository).findById(testUserIdLong);
-        verifyNoInteractions(chatRoomRepository); // Should not be called if user check fails first
+        verifyNoInteractions(chatRoomRepository);
         verifyNoInteractions(messageRepository);
+    }
+
+    @Test
+    void markMessageAsRead_ShouldUpdateReadByUsers() {
+        User testUser = createUser(1L, "testUser");
+        Message messageToMark = createMessage("msg-id", room, testUser);
+        messageToMark.getReadByUsers().remove(testUser.getId());
+
+        when(messageRepository.findById("msg-id")).thenReturn(Optional.of(messageToMark));
+        when(userRepository.findById(1L)).thenReturn(Optional.of(testUser));
+        when(messageRepository.save(any(Message.class))).thenReturn(messageToMark);
+
+        chatService.markMessageAsRead("msg-id", "1");
+
+        ArgumentCaptor<Message> messageCaptor = ArgumentCaptor.forClass(Message.class);
+        verify(messageRepository).save(messageCaptor.capture());
+        Message savedMessage = messageCaptor.getValue();
+        assertTrue(savedMessage.getReadByUsers().contains(testUser.getId()));
     }
 }

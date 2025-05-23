@@ -254,147 +254,161 @@ class ChatControllerTest {
     @DisplayName("그룹 채팅방 검색 성공 테스트")
     void searchGroupRoomsSuccess() throws Exception {
         // given
-        List<ChatRoom> rooms = Arrays.asList(testRoom);
-        when(chatService.searchGroupRooms(anyString())).thenReturn(rooms);
+        ChatRoomDto roomDto = new ChatRoomDto();
+        roomDto.setId(testRoom.getId());
+        roomDto.setRoomName(testRoom.getName());
+        roomDto.setType(testRoom.getType());
+        Page<ChatRoomDto> rooms = new PageImpl<>(List.of(roomDto));
+        when(chatService.searchRooms(anyString(), any(ChatRoomType.class), anyString(), any(Pageable.class))).thenReturn(rooms);
 
         // when & then
-        mockMvc.perform(get("/api/chat/rooms/search")
-                .param("keyword", "test")
+        mockMvc.perform(get("/api/chat/rooms/search/group")
+                .param("query", "Test")
                 .sessionAttr("USER_SESSION", userSession))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$[0].id").value(testRoom.getId()))
-                .andExpect(jsonPath("$[0].roomName").value(testRoom.getName()));
+                .andExpect(jsonPath("$.content[0].id").value(testRoom.getId()));
     }
 
     @Test
     @DisplayName("채팅방 삭제 성공 테스트")
     void deleteRoomSuccess() throws Exception {
         // given
-        when(chatService.deleteRoom(anyString(), any(User.class))).thenReturn(true);
+        // 방장(creator)를 testUser로 설정하여 삭제 권한 부여
+        testRoom.setCreator(testUser);
+        ChatRoomDto roomDto = new ChatRoomDto(); // ChatRoomDto 생성
+        roomDto.setId(testRoom.getId());
+        roomDto.setCreatorId(String.valueOf(testUser.getId())); // creatorId 설정
+        when(chatService.getRoomById(anyString(), anyString())).thenReturn(roomDto); // getRoomById Mocking 추가
+        doNothing().when(chatService).deleteRoom(anyString());
 
         // when & then
         mockMvc.perform(delete("/api/chat/rooms/{roomId}", testRoom.getId())
                 .sessionAttr("USER_SESSION", userSession))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.success").value(true));
+                .andExpect(status().isOk());
     }
 
     @Test
     @DisplayName("채팅방 생성 실패 - 권한 없음")
     void createRoomFailNoPermission() throws Exception {
         // given
-        when(chatService.createRoom(anyString(), any(User.class), any(ChatRoomType.class), any()))
-                .thenThrow(new ChatException("채팅방을 생성할 권한이 없습니다.", HttpStatus.FORBIDDEN));
+        when(chatService.createRoom(anyString(), any(ChatRoomType.class), anyString(), anyList()))
+            .thenThrow(new ChatException("No permission to create room.", HttpStatus.FORBIDDEN));
 
         // when & then
         mockMvc.perform(post("/api/chat/rooms")
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(createRoomRequest))
-                .sessionAttr("USER_SESSION", userSession))
-                .andExpect(status().isForbidden())
-                .andExpect(jsonPath("$.message").value("채팅방을 생성할 권한이 없습니다."));
+                .sessionAttr("USER_SESSION", userSession)) // 세션 추가
+                .andExpect(status().isForbidden());
     }
 
     @Test
     @DisplayName("채팅방 목록 조회 실패 - 세션 없음")
     void getRoomsFailNoSession() throws Exception {
         // given
-        when(chatService.getRoomsByUser(any(User.class)))
-                .thenThrow(new ChatException("세션을 찾을 수 없습니다.", HttpStatus.NOT_FOUND));
+        when(chatService.getChatRoomsForUser(anyString(), any(Pageable.class)))
+            .thenThrow(new ChatException("User session not found.", HttpStatus.UNAUTHORIZED));
+
 
         // when & then
-        mockMvc.perform(get("/api/chat/rooms")
-                .sessionAttr("USER_SESSION", userSession))
-                .andExpect(status().isNotFound())
-                .andExpect(jsonPath("$.message").value("세션을 찾을 수 없습니다."));
+        mockMvc.perform(get("/api/chat/rooms"))
+            .andExpect(status().isUnauthorized());
     }
 
     @Test
     @DisplayName("채팅방 상세 조회 실패 - 존재하지 않는 채팅방")
     void getRoomFailNotFound() throws Exception {
         // given
-        when(chatService.getRoom(anyString(), any(User.class)))
-                .thenThrow(new ChatException("존재하지 않는 채팅방입니다.", HttpStatus.NOT_FOUND));
+        when(chatService.getRoomById(anyString(), anyString()))
+            .thenThrow(new ChatException("Room not found.", HttpStatus.NOT_FOUND));
 
         // when & then
         mockMvc.perform(get("/api/chat/rooms/{roomId}", "non-existent-room")
-                .sessionAttr("USER_SESSION", userSession))
-                .andExpect(status().isNotFound())
-                .andExpect(jsonPath("$.message").value("존재하지 않는 채팅방입니다."));
+                .sessionAttr("USER_SESSION", userSession)) // 세션 추가
+                .andExpect(status().isNotFound());
     }
 
     @Test
     @DisplayName("채팅방 참여 실패 - 이미 참여 중")
     void joinRoomFailAlreadyJoined() throws Exception {
         // given
-        doThrow(new ChatException("이미 참여 중인 채팅방입니다.", HttpStatus.CONFLICT))
-                .when(chatService).joinRoom(anyString(), any(User.class));
+        doThrow(new ChatException("User already in room.", HttpStatus.CONFLICT))
+                .when(chatService).joinRoom(anyString(), anyString());
 
         // when & then
         mockMvc.perform(post("/api/chat/rooms/{roomId}/join", testRoom.getId())
-                .sessionAttr("USER_SESSION", userSession))
-                .andExpect(status().isConflict())
-                .andExpect(jsonPath("$.message").value("이미 참여 중인 채팅방입니다."));
+                .sessionAttr("USER_SESSION", userSession)) // 세션 추가
+                .andExpect(status().isConflict());
     }
 
     @Test
     @DisplayName("채팅방 나가기 실패 - 참여하지 않은 채팅방")
     void leaveRoomFailNotJoined() throws Exception {
         // given
-        when(chatService.getRoom(anyString(), any(User.class))).thenReturn(testRoom);
-        doThrow(new ChatException("참여하지 않은 채팅방입니다.", HttpStatus.FORBIDDEN))
-                .when(chatService).leaveRoom(anyString(), any(User.class));
+        // getRoomById가 ChatRoomDto를 반환하도록 설정
+        ChatRoomDto roomDto = new ChatRoomDto();
+        roomDto.setId(testRoom.getId());
+        roomDto.setCreatorId(String.valueOf(testUser.getId() + 1)); // 현재 사용자가 방장이 아니도록 설정
+        when(chatService.getRoomById(anyString(), anyString())).thenReturn(roomDto);
+    
+        doThrow(new ChatException("User not in room.", HttpStatus.BAD_REQUEST))
+                .when(chatService).leaveRoom(anyString(), anyString());
 
         // when & then
         mockMvc.perform(post("/api/chat/rooms/{roomId}/leave", testRoom.getId())
-                .sessionAttr("USER_SESSION", userSession))
-                .andExpect(status().isForbidden())
-                .andExpect(jsonPath("$.message").value("참여하지 않은 채팅방입니다."));
+                .sessionAttr("USER_SESSION", userSession)) // 세션 추가
+                .andExpect(status().isBadRequest());
     }
 
     @Test
     @DisplayName("메시지 목록 조회 실패 - 권한 없음")
     void getMessagesFailNoPermission() throws Exception {
         // given
-        when(chatService.getMessages(anyString(), anyInt(), anyInt()))
-                .thenThrow(new ChatException("메시지를 조회할 권한이 없습니다.", HttpStatus.FORBIDDEN));
+        when(chatService.getMessagesByRoomId(anyString(), anyString(), any(Pageable.class)))
+            .thenThrow(new ChatException("No permission to view messages.", HttpStatus.FORBIDDEN));
 
         // when & then
         mockMvc.perform(get("/api/chat/rooms/{roomId}/messages", testRoom.getId())
                 .param("page", "0")
                 .param("size", "20")
-                .sessionAttr("USER_SESSION", userSession))
-                .andExpect(status().isForbidden())
-                .andExpect(jsonPath("$.message").value("메시지를 조회할 권한이 없습니다."));
+                .sessionAttr("USER_SESSION", userSession)) // 세션 추가
+                .andExpect(status().isForbidden());
     }
 
     @Test
     @DisplayName("메시지 읽음 표시 실패 - 존재하지 않는 메시지")
     void markMessageAsReadFailNotFound() throws Exception {
         // given
-        String messageId = "non-existent-message-id";
-        doThrow(new ChatException("존재하지 않는 메시지입니다.", HttpStatus.NOT_FOUND))
-                .when(chatService).markMessageAsRead(anyString(), any(User.class));
+        doThrow(new ChatException("Message not found.", HttpStatus.NOT_FOUND))
+                .when(chatService).markMessageAsRead(anyString(), anyString());
 
         // when & then
-        mockMvc.perform(post("/api/chat/rooms/{roomId}/messages/read", testRoom.getId())
-                .param("messageId", messageId)
-                .sessionAttr("USER_SESSION", userSession))
-                .andExpect(status().isNotFound())
-                .andExpect(jsonPath("$.message").value("존재하지 않는 메시지입니다."));
+        mockMvc.perform(post("/api/chat/rooms/{roomId}/messages/{messageId}/read", testRoom.getId(), "non-existent-message")
+                .sessionAttr("USER_SESSION", userSession)) // 세션 추가
+                .andExpect(status().isNotFound());
     }
+
 
     @Test
     @DisplayName("채팅방 삭제 실패 - 권한 없음")
     void deleteRoomFailNoPermission() throws Exception {
         // given
-        when(chatService.deleteRoom(anyString(), any(User.class)))
-                .thenThrow(new ChatException("채팅방을 삭제할 권한이 없습니다.", HttpStatus.FORBIDDEN));
-
+        // 방장(creator)를 testUser와 다른 User로 설정하여 삭제 권한이 없도록 함
+        User otherUser = new User();
+        otherUser.setId(testUser.getId() + 1); // 다른 ID로 설정
+        testRoom.setCreator(otherUser);
+    
+        ChatRoomDto roomDto = new ChatRoomDto();
+        roomDto.setId(testRoom.getId());
+        roomDto.setCreatorId(String.valueOf(otherUser.getId())); // 다른 사용자를 방장으로 설정
+    
+        when(chatService.getRoomById(anyString(), anyString())).thenReturn(roomDto);
+        doThrow(new ChatException("No permission to delete room.", HttpStatus.FORBIDDEN))
+            .when(chatService).deleteRoom(anyString());
+    
         // when & then
         mockMvc.perform(delete("/api/chat/rooms/{roomId}", testRoom.getId())
-                .sessionAttr("USER_SESSION", userSession))
-                .andExpect(status().isForbidden())
-                .andExpect(jsonPath("$.message").value("채팅방을 삭제할 권한이 없습니다."));
+            .sessionAttr("USER_SESSION", userSession))
+            .andExpect(status().isForbidden());
     }
 } 

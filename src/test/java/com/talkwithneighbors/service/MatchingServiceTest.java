@@ -1,6 +1,7 @@
 package com.talkwithneighbors.service;
 
 import com.talkwithneighbors.dto.matching.MatchingPreferencesDto;
+import com.talkwithneighbors.dto.LocationDto;
 import com.talkwithneighbors.entity.User;
 import com.talkwithneighbors.entity.MatchingPreferences;
 import com.talkwithneighbors.entity.MatchStatus;
@@ -76,9 +77,9 @@ class MatchingServiceTest {
 
     private MatchingPreferencesDto createDummyMatchingPreferencesDto() {
         MatchingPreferencesDto dto = new MatchingPreferencesDto();
-        dto.setLocation(new MatchingPreferencesDto.LocationDto(34.0522, -118.2437, "123 Main St"));
+        dto.setLocation(new LocationDto(34.0522, -118.2437, "123 Main St"));
         dto.setMaxDistance(10.0);
-        dto.setAgeRange(new int[]{25, 35});
+        dto.setAgeRange(new Integer[]{25, 35});
         dto.setGender("Any");
         dto.setInterests(List.of("Hiking", "Reading"));
         return dto;
@@ -182,15 +183,14 @@ class MatchingServiceTest {
         when(userRepository.findById(testUserId)).thenReturn(Optional.of(completeUser));
 
         MatchingPreferences existingPreferences = new MatchingPreferences();
-        existingPreferences.setUser(completeUser); // Link to user
-        existingPreferences.setId("existingPrefId"); // Simulate it's an existing one
-        existingPreferences.setMaxDistance(5.0); // Old value, different from DTO's 10.0
-        existingPreferences.setMinAge(20); // Old value
-        existingPreferences.setAddress("Old Address"); // Old value
+        existingPreferences.setUser(completeUser);
+        existingPreferences.setId(1L);
+        existingPreferences.setMaxDistance(5.0);
+        existingPreferences.setMinAge(20);
+        existingPreferences.setAddress("Old Address");
 
 
         when(matchingPreferencesRepository.findByUserId(testUserId)).thenReturn(Optional.of(existingPreferences));
-        // Important: mock save to return the argument passed to it to simulate saving the updated entity
         when(matchingPreferencesRepository.save(any(MatchingPreferences.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
         assertDoesNotThrow(() -> {
@@ -199,10 +199,8 @@ class MatchingServiceTest {
 
         verify(userRepository).findById(testUserId);
         verify(matchingPreferencesRepository).findByUserId(testUserId);
-        // Verify that the *existingPreferences* object (which should be modified) is saved
         verify(matchingPreferencesRepository).save(existingPreferences); 
         
-        // Assert that the fields on the existingPreference object were updated from the DTO
         assertEquals(preferencesDto.getMaxDistance(), existingPreferences.getMaxDistance());
         assertEquals(preferencesDto.getAgeRange()[0], existingPreferences.getMinAge());
         assertEquals(preferencesDto.getAgeRange()[1], existingPreferences.getMaxAge());
