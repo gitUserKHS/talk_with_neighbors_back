@@ -7,6 +7,7 @@ import com.talkwithneighbors.entity.ChatRoom;
 import com.talkwithneighbors.entity.ChatRoomType;
 import com.talkwithneighbors.entity.Message;
 import com.talkwithneighbors.entity.User;
+import com.talkwithneighbors.exception.ChatException;
 import com.talkwithneighbors.repository.ChatRoomRepository;
 import com.talkwithneighbors.repository.MessageRepository;
 import com.talkwithneighbors.repository.UserRepository;
@@ -16,6 +17,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.Pageable;
+import org.springframework.http.HttpStatus;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -147,15 +149,25 @@ public class ChatServiceImpl implements ChatService {
     @Transactional(readOnly = true)
     public Page<MessageDto> getMessagesByRoomId(String roomId, String userIdString, Pageable pageable) {
         Long userId = Long.parseLong(userIdString);
-        User currentUser = userRepository.findById(userId)
-            .orElseThrow(() -> new RuntimeException("User not found with id: " + userId));
+        User user = userRepository.findById(userId)
+            .orElseThrow(() -> new ChatException("User not found with id: " + userId, HttpStatus.NOT_FOUND));
+
+        ChatRoom chatRoom = chatRoomRepository.findById(roomId)
+                .orElseThrow(() -> new ChatException("Chat room not found with id: " + roomId, HttpStatus.NOT_FOUND));
+
+        boolean isParticipant = chatRoom.getParticipants().stream()
+                .anyMatch(participant -> participant.getId().equals(user.getId()));
+
+        if (!isParticipant) {
+            throw new ChatException("Access denied to chat room " + roomId, HttpStatus.FORBIDDEN);
+        }
 
         Page<Message> messagesPage = messageRepository.findByChatRoomIdOrderByCreatedAtDesc(roomId, pageable);
         
         List<Message> messagesToUpdate = new java.util.ArrayList<>();
         messagesPage.getContent().forEach(msg -> {
-            if (!msg.getReadByUsers().contains(currentUser.getId())) {
-                msg.getReadByUsers().add(currentUser.getId());
+            if (!msg.getReadByUsers().contains(user.getId())) {
+                msg.getReadByUsers().add(user.getId());
                 messagesToUpdate.add(msg);
             }
         });
@@ -163,7 +175,7 @@ public class ChatServiceImpl implements ChatService {
             messageRepository.saveAll(messagesToUpdate);
         }
 
-        return messagesPage.map(msg -> MessageDto.fromEntity(msg, currentUser.getId()));
+        return messagesPage.map(msg -> MessageDto.fromEntity(msg, user.getId()));
     }
 
     @Override

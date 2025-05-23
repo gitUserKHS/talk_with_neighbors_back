@@ -129,6 +129,16 @@ public class User {
     @JsonIgnore
     @OneToMany(mappedBy = "sender", cascade = CascadeType.ALL)
     private List<Message> sentMessages = new ArrayList<>();
+
+    @Transient
+    public boolean isProfileComplete() {
+        return age != null &&
+               gender != null && !gender.isEmpty() &&
+               interests != null && !interests.isEmpty() &&
+               latitude != null &&
+               longitude != null &&
+               address != null && !address.isEmpty();
+    }
 }
 
 /**

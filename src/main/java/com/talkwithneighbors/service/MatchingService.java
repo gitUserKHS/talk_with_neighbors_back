@@ -64,6 +64,11 @@ public class MatchingService {
     @Transactional
     public void saveMatchingPreferences(MatchingPreferencesDto preferences, Long userId) {
         User user = getUserById(userId);
+
+        // 프로필 완성도 검사
+        if (!user.isProfileComplete()) {
+            throw new MatchingException("프로필을 먼저 설정해야 매칭 환경설정을 저장할 수 있습니다.", HttpStatus.BAD_REQUEST);
+        }
         
         // 기존 설정이 있으면 업데이트, 없으면 새로 생성
         MatchingPreferences matchingPreferences = matchingPreferencesRepository
@@ -96,6 +101,11 @@ public class MatchingService {
     public void startMatching(MatchingPreferencesDto preferences, Long userId) {
         log.info("[startMatching] userId: {}", userId);
         User user = getUserById(userId);
+
+        // 프로필 완성도 검사
+        if (!user.isProfileComplete()) {
+            throw new MatchingException("프로필을 먼저 설정해야 매칭 기능을 이용할 수 있습니다.", HttpStatus.BAD_REQUEST);
+        }
         
         // 기존 매칭 중지
         stopMatching(userId);
