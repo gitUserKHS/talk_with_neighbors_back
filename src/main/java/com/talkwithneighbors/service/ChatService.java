@@ -9,7 +9,7 @@ import java.util.List; // createRoom 메서드의 participantIds 때문에 유�
 
 public interface ChatService {
     // 채팅방 생성
-    ChatRoomDto createRoom(String name, ChatRoomType type, String creatorId, List<Long> participantIds);
+    ChatRoomDto createRoom(String name, ChatRoomType type, String creatorId, List<String> participantNicknames);
 
     // 채팅방 ID로 채팅방 정보 조회
     ChatRoomDto getRoomById(String roomId, String userId);
@@ -46,7 +46,17 @@ public interface ChatService {
 
     // 채팅방에서 사용자 제거
     void removeUserFromRoom(String roomId, String userId);
+
+    // 채팅방의 모든 메시지 읽음 처리
+    void markAllMessagesInRoomAsRead(String roomId, String userIdString);
     
     // 채팅방 정보 업데이트
     ChatRoomDto updateRoom(String roomId, String name, ChatRoomType type);
+
+    // === 매칭 관련 메서드 추가 ===
+    // 두 사용자 간의 기존 1:1 채팅방 조회 (매칭 시스템용)
+    ChatRoomDto findOneOnOneChatRoom(Long userId1, Long userId2);
+    
+    // 사용자가 1:1 채팅방을 가지고 있는 상대방 사용자 ID 목록 조회
+    List<Long> getUsersWithOneOnOneChatRooms(Long userId);
 }

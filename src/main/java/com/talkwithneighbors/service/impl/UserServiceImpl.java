@@ -130,4 +130,17 @@ public class UserServiceImpl implements UserService, UserDetailsService {
                 authorities
         );
     }
+
+    @Transactional(readOnly = true)
+    public UserDetails loadUserById(Long id) throws UsernameNotFoundException {
+        User user = userRepository.findById(id)
+                .orElseThrow(() -> new UsernameNotFoundException("User not found with id: " + id));
+
+        Set<GrantedAuthority> authorities = Collections.singleton(new SimpleGrantedAuthority("ROLE_USER"));
+        return new org.springframework.security.core.userdetails.User(
+                user.getUsername(), 
+                user.getPassword(),
+                authorities
+        );
+    }
 } 

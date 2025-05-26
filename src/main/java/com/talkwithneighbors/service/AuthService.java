@@ -19,6 +19,7 @@ import lombok.Getter;
 import lombok.Setter;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
+import com.talkwithneighbors.service.OfflineNotificationService;
 
 @Service
 @Slf4j
@@ -28,6 +29,7 @@ public class AuthService {
     private final UserRepository userRepository;
     private final PasswordEncoder passwordEncoder;
     private final RedisSessionService redisSessionService;
+    private final OfflineNotificationService offlineNotificationService;
 
     @Transactional(rollbackFor = Exception.class)
     public AuthResponse register(RegisterRequestDto request) {
@@ -75,6 +77,9 @@ public class AuthService {
             );
             redisSessionService.saveSession(sessionId, userSession);
             
+            // 회원가입 후 바로 오프라인 알림 전송 (선택적, 필요하다면 추가)
+            // offlineNotificationService.sendPendingNotifications(savedUser.getId());
+            
             return new AuthResponse(UserDto.fromEntity(savedUser), sessionId);
         } catch (Exception e) {
             log.error("Error during user registration", e);
@@ -87,6 +92,23 @@ public class AuthService {
         try {
             User user = userRepository.findByEmail(request.getEmail())
                     .orElseThrow(() -> new AuthException("이메일 또는 비밀번호가 올바르지 않습니다.", HttpStatus.UNAUTHORIZED));
+
+            // === User 엔티티의 username 로깅 추가 ===
+            if (user != null && user.getUsername() != null) {
+                log.info("Username from DB in AuthService.login for email {}: '{}'", request.getEmail(), user.getUsername());
+                byte[] usernameBytes = user.getUsername().getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                log.info("Username from DB (UTF-8 bytes) in AuthService.login: {}", java.util.Arrays.toString(usernameBytes));
+                try {
+                    log.info("Username from DB (re-decoded from UTF-8 bytes) in AuthService.login: '{}'", new String(usernameBytes, java.nio.charset.StandardCharsets.UTF_8));
+                    log.info("Username from DB (decoded as ISO-8859-1) in AuthService.login: '{}'", new String(user.getUsername().getBytes(java.nio.charset.StandardCharsets.ISO_8859_1), java.nio.charset.StandardCharsets.ISO_8859_1));
+                    log.info("Username from DB (decoded as MS949) in AuthService.login: '{}'", new String(user.getUsername().getBytes(java.nio.charset.Charset.forName("MS949")), java.nio.charset.Charset.forName("MS949")));
+                } catch (Exception e) {
+                    log.error("Error logging username encodings in AuthService.login", e);
+                }
+            } else {
+                log.warn("User or username is null in AuthService.login for email: {}", request.getEmail());
+            }
+            // === 로깅 추가 끝 ===
 
             if (!passwordEncoder.matches(request.getPassword(), user.getPassword())) {
                 throw new AuthException("이메일 또는 비밀번호가 올바르지 않습니다.", HttpStatus.UNAUTHORIZED);
@@ -103,6 +125,15 @@ public class AuthService {
                 user.getUsername()  // nickname은 username과 동일하게 설정
             );
             redisSessionService.saveSession(sessionId, userSession);
+            
+            // 로그인 성공 후 오프라인 알림 전송 -> SessionConnectedEvent 리스너에서 처리하도록 변경
+            // try {
+            //     log.info("[AuthService.login] Attempting to send pending notifications for user: {}", user.getId());
+            //     offlineNotificationService.sendPendingNotifications(user.getId());
+            // } catch (Exception e) {
+            //     log.error("[AuthService.login] Error sending pending notifications for user {}: {}", user.getId(), e.getMessage(), e);
+            //     // 알림 전송 실패가 로그인 전체를 실패시키지는 않도록 예외 처리
+            // }
             
             return new AuthResponse(UserDto.fromEntity(user), sessionId);
         } catch (Exception e) {

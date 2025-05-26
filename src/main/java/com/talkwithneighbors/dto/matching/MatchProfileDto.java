@@ -12,6 +12,7 @@ import java.util.List;
 @NoArgsConstructor
 public class MatchProfileDto {
     private String id;
+    private String matchId;
     private String username;
     private String age;
     private String gender;
@@ -21,9 +22,10 @@ public class MatchProfileDto {
     private LocationDto location;
     private Double distance;
 
-    public static MatchProfileDto fromUser(User user, Double distance) {
+    public static MatchProfileDto fromUser(User user, Double distance, String matchId) {
         MatchProfileDto dto = new MatchProfileDto();
         dto.setId(user.getId().toString());
+        dto.setMatchId(matchId);
         dto.setUsername(user.getUsername());
         dto.setAge(user.getAge() != null ? user.getAge().toString() : null);
         dto.setGender(user.getGender());
@@ -40,5 +42,9 @@ public class MatchProfileDto {
         dto.setDistance(distance);
         
         return dto;
+    }
+
+    public static MatchProfileDto fromUser(User user, Double distance) {
+        return fromUser(user, distance, null);
     }
 } 

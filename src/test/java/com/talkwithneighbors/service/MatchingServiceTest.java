@@ -77,7 +77,6 @@ class MatchingServiceTest {
 
     private MatchingPreferencesDto createDummyMatchingPreferencesDto() {
         MatchingPreferencesDto dto = new MatchingPreferencesDto();
-        dto.setLocation(new LocationDto(34.0522, -118.2437, "123 Main St"));
         dto.setMaxDistance(10.0);
         dto.setAgeRange(new Integer[]{25, 35});
         dto.setGender("Any");
@@ -187,7 +186,6 @@ class MatchingServiceTest {
         existingPreferences.setId(1L);
         existingPreferences.setMaxDistance(5.0);
         existingPreferences.setMinAge(20);
-        existingPreferences.setAddress("Old Address");
 
 
         when(matchingPreferencesRepository.findByUserId(testUserId)).thenReturn(Optional.of(existingPreferences));
@@ -204,9 +202,6 @@ class MatchingServiceTest {
         assertEquals(preferencesDto.getMaxDistance(), existingPreferences.getMaxDistance());
         assertEquals(preferencesDto.getAgeRange()[0], existingPreferences.getMinAge());
         assertEquals(preferencesDto.getAgeRange()[1], existingPreferences.getMaxAge());
-        assertEquals(preferencesDto.getLocation().getAddress(), existingPreferences.getAddress());
-        assertEquals(preferencesDto.getLocation().getLatitude(), existingPreferences.getLatitude());
-        assertEquals(preferencesDto.getLocation().getLongitude(), existingPreferences.getLongitude());
         assertEquals(preferencesDto.getGender(), existingPreferences.getPreferredGender());
         assertEquals(preferencesDto.getInterests(), existingPreferences.getPreferredInterests());
     }

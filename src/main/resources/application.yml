@@ -1,10 +1,9 @@
 spring:
   application:
     name: talkWithNeighbors
+  mandatory-file-encoding: UTF-8
   datasource:
-    url: jdbc:mysql://localhost:3306/talk_with_neighbors?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true&autocommit=false&rewriteBatchedStatements=true
-    username: root
-    password: root1234
+    url: jdbc:mysql://localhost:3306/talk_with_neighbors?useUnicode=true&characterEncoding=UTF-8&useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true&rewriteBatchedStatements=true&readOnlyPropagatesToServer=false&autoReconnect=true&defaultTransactionIsolation=READ_COMMITTED
     driver-class-name: com.mysql.cj.jdbc.Driver
     hikari:
       auto-commit: false
@@ -29,7 +28,8 @@ spring:
         format_sql: true
         dialect: org.hibernate.dialect.MySQLDialect
         connection:
-          provider_disables_autocommit: true
+          provider_disables_autocommit: false
+          autocommit: false
         jdbc:
           time_zone: UTC
           batch_size: 30
@@ -68,10 +68,12 @@ spring:
       repositories:
         enabled: true
   config:
-    import: application-secret.yml
+    import: optional:application-secret.yml
 
 server:
   port: 8080
+  tomcat:
+    uri-encoding: UTF-8
   servlet:
     session:
       cookie:
@@ -94,8 +96,23 @@ cors:
 
 logging:
   level:
-    org.springframework.security: DEBUG
     com.talkwithneighbors: DEBUG
+    org.springframework.messaging: TRACE
+    org.springframework.web.socket: TRACE
+    org.springframework.messaging.simp: TRACE
+    org.springframework.messaging.simp.broker: TRACE
+    org.springframework.messaging.simp.user: TRACE
+    org.springframework.messaging.simp.stomp: TRACE
+    org.springframework.messaging.converter: TRACE
+    org.springframework.messaging.core: TRACE
+    org.springframework.messaging.support: TRACE
+    org.springframework.web.socket.sockjs: TRACE
+    org.springframework.web.socket.adapter: TRACE
+    org.springframework.web.socket.handler: TRACE
+    # === SimpleBroker 구독 레지스트리 상세 로깅 ===
+    org.springframework.messaging.simp.broker.DefaultSubscriptionRegistry: TRACE
+    org.springframework.messaging.simp.broker.SimpleBrokerMessageHandler: TRACE
+    ROOT: WARN  # 다른 로그 노이즈 줄이기
 
 jwt:
   secret: your-jwt-secret-key

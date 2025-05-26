@@ -95,13 +95,7 @@ public class MatchingControllerTest {
             })
             .build();
 
-        LocationDto locationDto = new LocationDto();
-        locationDto.setLatitude(37.5665);
-        locationDto.setLongitude(126.9780);
-        locationDto.setAddress("서울시 중구");
-
         preferencesDto = new MatchingPreferencesDto();
-        preferencesDto.setLocation(locationDto);
         preferencesDto.setMaxDistance(5.0);
         preferencesDto.setAgeRange(new Integer[]{20, 30});
         preferencesDto.setGender("F");

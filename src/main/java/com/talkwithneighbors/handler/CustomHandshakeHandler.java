@@ -12,7 +12,9 @@ import org.springframework.web.socket.WebSocketHandler;
 import org.springframework.web.socket.server.support.DefaultHandshakeHandler;
 import org.springframework.web.util.UriComponentsBuilder;
 
+import java.nio.charset.StandardCharsets;
 import java.security.Principal;
+import java.util.Base64;
 import java.util.List;
 import java.util.Map;
 
@@ -44,11 +46,13 @@ public class CustomHandshakeHandler extends DefaultHandshakeHandler {
         if (sessionId != null) {
             try {
                 UserSession userSession = redisSessionService.getSession(sessionId);
-                if (userSession != null && userSession.getUsername() != null) {
-                    log.info("User determined from session ID {}: Principal name = {}", sessionId, userSession.getUsername());
-                    return new UserPrincipal(userSession.getUsername());
+                if (userSession != null && userSession.getUserIdStr() != null) {
+                    String userIdString = userSession.getUserIdStr();
+                    log.info("User determined from session ID {}. Using User ID for Principal: '{}'", 
+                             sessionId, userIdString);
+                    return new UserPrincipal(userIdString);
                 } else {
-                    log.warn("No valid UserSession found for session ID {} or username is null.", sessionId);
+                    log.warn("No valid UserSession found for session ID {} or userId is null.", sessionId);
                 }
             } catch (Exception e) {
                 log.error("Error determining user from session ID {}: {}", sessionId, e.getMessage(), e);

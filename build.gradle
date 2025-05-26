@@ -49,12 +49,10 @@ tasks.named('test') {
 }
 
 compileJava {
-    options.compilerArgs << '-parameters'
     options.encoding = 'UTF-8'
 }
 
 compileTestJava {
-    options.compilerArgs << '-parameters'
     options.encoding = 'UTF-8'
 }
 

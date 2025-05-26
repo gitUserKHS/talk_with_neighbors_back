@@ -1,7 +1,10 @@
 package com.talkwithneighbors.service;
 
+import com.talkwithneighbors.dto.ChatRoomDto;
 import com.talkwithneighbors.dto.matching.MatchProfileDto;
 import com.talkwithneighbors.dto.matching.MatchingPreferencesDto;
+import com.talkwithneighbors.dto.notification.WebSocketNotification;
+import com.talkwithneighbors.entity.ChatRoomType;
 import com.talkwithneighbors.entity.Match;
 import com.talkwithneighbors.entity.MatchStatus;
 import com.talkwithneighbors.entity.User;
@@ -10,19 +13,36 @@ import com.talkwithneighbors.exception.MatchingException;
 import com.talkwithneighbors.repository.MatchRepository;
 import com.talkwithneighbors.repository.UserRepository;
 import com.talkwithneighbors.repository.MatchingPreferencesRepository;
+import com.talkwithneighbors.service.OfflineNotificationService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import jakarta.annotation.PostConstruct;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 import java.util.stream.Collectors;
+import java.nio.charset.StandardCharsets;
+import java.util.Base64;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
+// === 추가 import for debugging ===
+import org.springframework.messaging.simp.broker.SimpleBrokerMessageHandler;
+import org.springframework.context.ApplicationContext;
+import org.springframework.beans.factory.annotation.Autowired;
+
+// === 추가 import for subscription debugging ===
+import org.springframework.messaging.simp.broker.DefaultSubscriptionRegistry;
+import java.lang.reflect.Field;
 
 /**
  * 이웃 매칭을 관리하는 서비스 클래스
@@ -32,6 +52,13 @@ import java.util.stream.Collectors;
 @Slf4j
 @RequiredArgsConstructor
 public class MatchingService {
+
+    // 알림 유형 상수 정의
+    private static final String NOTIFICATION_TYPE_MATCH_OFFERED = "MATCH_OFFERED";
+    private static final String NOTIFICATION_TYPE_MATCH_ACCEPTED_BY_OTHER = "MATCH_ACCEPTED_BY_OTHER";
+    private static final String NOTIFICATION_TYPE_MATCH_REJECTED_BY_OTHER = "MATCH_REJECTED_BY_OTHER";
+    private static final String NOTIFICATION_TYPE_MATCH_COMPLETED_AND_CHAT_CREATED = "MATCH_COMPLETED_AND_CHAT_CREATED";
+    private static final String NOTIFICATION_TYPE_ERROR = "ERROR"; // 예시 에러 타입
 
     /**
      * 사용자 정보를 관리하는 리포지토리
@@ -54,6 +81,22 @@ public class MatchingService {
     private final SimpMessagingTemplate messagingTemplate;
 
     private final RedisSessionService redisSessionService;
+    private final ChatService chatService;
+    private final ObjectMapper objectMapper;
+    private final OfflineNotificationService offlineNotificationService;
+    
+    // === 디버깅을 위한 ApplicationContext 추가 ===
+    @Autowired
+    private ApplicationContext applicationContext;
+
+    @PostConstruct
+    @Transactional
+    public void deleteExpiredMatchesOnStartup() {
+        log.info("Deleting expired matches on startup...");
+        LocalDateTime now = LocalDateTime.now();
+        matchRepository.deleteByExpiresAtBefore(now);
+        log.info("Finished deleting expired matches.");
+    }
 
     /**
      * 사용자의 매칭 선호도를 저장합니다.
@@ -80,9 +123,6 @@ public class MatchingService {
             });
         
         // 엔티티 필드 업데이트
-        matchingPreferences.setLatitude(preferences.getLocation().getLatitude());
-        matchingPreferences.setLongitude(preferences.getLocation().getLongitude());
-        matchingPreferences.setAddress(preferences.getLocation().getAddress());
         matchingPreferences.setMaxDistance(preferences.getMaxDistance());
         matchingPreferences.setMinAge(preferences.getAgeRange()[0]);
         matchingPreferences.setMaxAge(preferences.getAgeRange()[1]);
@@ -93,14 +133,25 @@ public class MatchingService {
 
     /**
      * 매칭을 시작하고 주변 사용자들에게 매칭 요청을 보냅니다.
+     * 생성된 각 매칭에 대한 정보(상대방 프로필, matchId)를 요청자에게 반환합니다.
      * 
      * @param preferences 매칭 선호도 정보
      * @param userId 사용자 ID
+     * @return 생성된 매칭들의 프로필 정보 목록 (상대방 정보와 matchId 포함)
      */
     @Transactional
-    public void startMatching(MatchingPreferencesDto preferences, Long userId) {
-        log.info("[startMatching] userId: {}", userId);
+    public List<MatchProfileDto> startMatching(MatchingPreferencesDto preferences, Long userId) {
+        log.info("[startMatching] Request received for userId: {}", userId);
         User user = getUserById(userId);
+
+        // 사용자의 위치 정보 로깅 추가
+        log.info("[startMatching] User details - ID: {}, Username: {}, Latitude: {}, Longitude: {}, Address: {}", 
+                 user.getId(), user.getUsername(), user.getLatitude(), user.getLongitude(), user.getAddress());
+
+        if (user.getLatitude() == null || user.getLongitude() == null) {
+            log.warn("[startMatching] User ID: {} has null latitude or longitude. Cannot proceed with location-based matching.", userId);
+            return Collections.emptyList(); // 위치 정보 없으면 빈 목록 반환
+        }
 
         // 프로필 완성도 검사
         if (!user.isProfileComplete()) {
@@ -114,15 +165,40 @@ public class MatchingService {
         saveMatchingPreferences(preferences, userId);
         
         // 주변 사용자 검색 및 매칭 요청
-        List<User> nearbyUsers = userRepository.findNearbyUsers(
+        List<User> allNearbyUsers = userRepository.findNearbyUsers(
             user.getLatitude(), 
             user.getLongitude(), 
-            5.0 // 기본 반경 5km
+            preferences.getMaxDistance() // 사용자가 설정한 maxDistance 사용
         );
+
+        // 자기 자신을 제외한 주변 사용자 목록 필터링
+        final Long currentUserId = user.getId();
+        
+        // 이미 1:1 채팅방이 있는 사용자들 조회
+        List<Long> existingChatPartnerIds = chatService.getUsersWithOneOnOneChatRooms(currentUserId);
+        log.info("[startMatching] User {} already has 1:1 chat rooms with {} users: {}", currentUserId, existingChatPartnerIds.size(), existingChatPartnerIds);
+        
+        List<User> nearbyUsersToMatch = allNearbyUsers.stream()
+                .filter(nearbyUser -> !nearbyUser.getId().equals(currentUserId)) // 자기 자신 제외
+                .filter(nearbyUser -> !existingChatPartnerIds.contains(nearbyUser.getId())) // 이미 채팅방이 있는 사용자 제외
+                .collect(Collectors.toList());
+
+        if (nearbyUsersToMatch.isEmpty()) {
+            if (existingChatPartnerIds.isEmpty()) {
+                log.info("[startMatching] No other users found nearby for userId: {}. Returning empty list.", userId);
+            } else {
+                log.info("[startMatching] No new users to match for userId: {}. All nearby users ({}) already have existing chat rooms. Returning empty list.", 
+                         userId, allNearbyUsers.size() - 1); // -1 for excluding self
+            }
+            return Collections.emptyList(); // 주변에 새로운 매칭 가능한 사용자가 없으면 빈 목록 반환
+        }
+        
+        log.info("[startMatching] Found {} nearby users to match (after excluding {} existing chat partners) for userId: {}", 
+                 nearbyUsersToMatch.size(), existingChatPartnerIds.size(), userId);
         
         // 배치용 매칭 엔티티 생성
         List<Match> matches = new ArrayList<>();
-        for (User nearbyUser : nearbyUsers) {
+        for (User nearbyUser : nearbyUsersToMatch) { // 필터링된 목록 사용
             Match match = new Match();
             match.setUser1(user);
             match.setUser2(nearbyUser);
@@ -135,24 +211,107 @@ public class MatchingService {
         // 일괄 저장
         List<Match> savedMatches = matchRepository.saveAll(matches);
         
-        // 저장된 매칭에 대해 알림 또는 대기 처리
-        for (int i = 0; i < savedMatches.size(); i++) {
-            Match match = savedMatches.get(i);
-            User nearbyUser = nearbyUsers.get(i);
-            if (redisSessionService.isUserOnline(nearbyUser.getId().toString())) {
-                messagingTemplate.convertAndSendToUser(
-                    nearbyUser.getId().toString(),
-                    "/queue/matches",
-                    MatchProfileDto.fromUser(user, calculateDistance(
-                        user.getLatitude(), user.getLongitude(),
-                        nearbyUser.getLatitude(), nearbyUser.getLongitude()
-                    ))
-                );
+        // 요청자에게 반환할 DTO 리스트
+        List<MatchProfileDto> createdMatchProfilesForRequestor = new ArrayList<>(); 
+
+        for (Match match : savedMatches) { // savedMatches를 직접 순회
+            User matchedUser = match.getUser2();
+            if (matchedUser == null) {
+                log.warn("[startMatching] Matched user (user2) is null for matchId: {}. Skipping.", match.getId());
+                continue;
+            }
+            // user 변수는 매칭 요청자(user1)입니다.
+            double distance = calculateDistance(user.getLatitude(), user.getLongitude(), matchedUser.getLatitude(), matchedUser.getLongitude());
+            
+            MatchProfileDto profileForUser1 = MatchProfileDto.fromUser(matchedUser, distance, match.getId());
+            createdMatchProfilesForRequestor.add(profileForUser1);
+
+            // user2에게 보낼 매칭 제안 알림
+            MatchProfileDto profileForUser2 = MatchProfileDto.fromUser(user, distance, match.getId());
+            WebSocketNotification<MatchProfileDto> notification = new WebSocketNotification<>(
+                NOTIFICATION_TYPE_MATCH_OFFERED, 
+                profileForUser2,
+                String.format("'%s'님에게서 새로운 매칭 요청이 도착했습니다.", user.getUsername())
+            );
+            
+            if (redisSessionService.isUserOnline(matchedUser.getId().toString())) { 
+                String destination = "/queue/match-notifications";
+                String targetUserIdStr = matchedUser.getId().toString();
+                log.info("[startMatching] Attempting to send MATCH_OFFERED to online user: {} (userIdStr: {}), destination: {}, payload: {}", 
+                         matchedUser.getId(), targetUserIdStr, destination, notification);
+                
+                // === 상세한 메시지 전송 로깅 추가 ===
+                try {
+                    log.info("[startMatching] About to call messagingTemplate.convertAndSendToUser with target: '{}', destination: '{}'", 
+                             targetUserIdStr, destination);
+                    log.info("[startMatching] Full notification object to send: {}", notification);
+                    log.info("[startMatching] Notification serialized to JSON: {}", objectMapper.writeValueAsString(notification));
+                    
+                    // === 메시지 전송 전 WebSocket 세션 상태 확인 ===
+                    log.info("[startMatching] Checking WebSocket sessions before sending message...");
+                    
+                    // === SimpleBroker 구독 상태 디버깅 추가 ===
+                    try {
+                        String sessionSpecificDestination = "/queue/match-notifications-user" + 
+                            java.util.Optional.ofNullable(messagingTemplate)
+                                .map(template -> template.toString())
+                                .orElse("unknown");
+                        log.info("[startMatching] Expected session-specific destination would be: /queue/match-notifications-user[sessionId]");
+                        log.info("[startMatching] About to call convertAndSendToUser - if no STOMP encoding logs follow, the message is not being sent to any active session");
+                        
+                        // === SimpleBroker 빈 조회 및 구독 상태 확인 ===
+                        try {
+                            SimpleBrokerMessageHandler brokerHandler = applicationContext.getBean(SimpleBrokerMessageHandler.class);
+                            log.info("[startMatching] SimpleBrokerMessageHandler found: {}", brokerHandler);
+                            log.info("[startMatching] Target user ID: {}, Expected destination: /queue/match-notifications-user[sessionId]", targetUserIdStr);
+                        } catch (Exception brokerEx) {
+                            log.warn("[startMatching] Could not access SimpleBroker for debugging: {}", brokerEx.getMessage());
+                        }
+                    } catch (Exception e) {
+                        log.warn("[startMatching] Error while checking subscription info: {}", e.getMessage());
+                    }
+                    
+                    messagingTemplate.convertAndSendToUser(targetUserIdStr, destination, notification);
+                    
+                    log.info("[startMatching] messagingTemplate.convertAndSendToUser completed successfully for user: {}", targetUserIdStr);
+                    log.info("[startMatching] MATCH_OFFERED sent to online user: {} (userIdStr: {})", matchedUser.getId(), targetUserIdStr);
+                    
+                    // === 메시지 전송 후 확인 ===
+                    log.info("[startMatching] Message sending operation completed. If no further TRACE logs appear from Spring messaging, the message may not have been delivered.");
+                    
+                    // === 대안적인 메시지 전송 시도 ===
+                    log.info("[startMatching] Attempting alternative message delivery method...");
+                    sendNotificationViaAlternativeMethod(targetUserIdStr, notification);
+                    
+                } catch (Exception e) {
+                    log.error("[startMatching] CRITICAL ERROR: Failed to send MATCH_OFFERED to user: {}. Error: {}", targetUserIdStr, e.getMessage(), e);
+                }
+                // === 상세한 메시지 전송 로깅 끝 ===
             } else {
-                redisSessionService.savePendingMatch(nearbyUser.getId().toString(), match.getId().toString());
-                log.info("Saved pending match for offline user: {}", nearbyUser.getId());
+                log.info("[startMatching] Matched userId: {} (username: {}) is OFFLINE. Saving offline notification.", matchedUser.getId(), matchedUser.getUsername());
+                
+                try {
+                    // 오프라인 알림 저장
+                    String notificationData = objectMapper.writeValueAsString(profileForUser2);
+                    offlineNotificationService.saveOfflineNotification(
+                        matchedUser.getId(),
+                        com.talkwithneighbors.entity.OfflineNotification.NotificationType.MATCH_REQUEST,
+                        notificationData,
+                        String.format("'%s'님에게서 새로운 매칭 요청이 도착했습니다.", user.getUsername()),
+                        null,
+                        10 // 매칭 요청은 높은 우선순위
+                    );
+                    log.info("[startMatching] Saved offline match notification for userId: {}", matchedUser.getId());
+                } catch (Exception e) {
+                    log.error("[startMatching] Failed to save offline match notification for userId {}: {}", matchedUser.getId(), e.getMessage(), e);
+                }
+                
+                // 기존 Redis 저장 방식도 유지 (호환성)
+                redisSessionService.savePendingMatch(matchedUser.getId().toString(), match.getId().toString());
             }
         }
+        log.info("[startMatching] Created {} matches for userId: {}. Returning profiles to requestor.", createdMatchProfilesForRequestor.size(), userId);
+        return createdMatchProfilesForRequestor;
     }
 
     /**
@@ -163,42 +322,63 @@ public class MatchingService {
         List<String> pendingMatchIds = redisSessionService.getPendingMatches(userId.toString());
         
         if (pendingMatchIds != null && !pendingMatchIds.isEmpty()) {
-            log.info("Processing {} pending matches for user: {}", pendingMatchIds.size(), userId);
+            log.info("[processPendingMatches] Found {} pending matches for userId: {}", pendingMatchIds.size(), userId);
             
-            for (String matchId : pendingMatchIds) {
-                Match match = matchRepository.findById(matchId)
-                        .orElseThrow(() -> new MatchingException("매칭을 찾을 수 없습니다.", HttpStatus.NOT_FOUND));
+            for (String matchIdFromRedis : pendingMatchIds) {
+                Match match = matchRepository.findById(matchIdFromRedis)
+                        .orElseGet(() -> {
+                            log.warn("[processPendingMatches] Match not found with ID: {}. Skipping.", matchIdFromRedis);
+                            return null; 
+                        });
+
+                if (match == null) {
+                    log.warn("[processPendingMatches] Match not found for matchIdFromRedis: {}. Skipping.", matchIdFromRedis);
+                    continue; 
+                }
                 
-                // 만료되지 않은 매칭만 처리
                 if (match.getStatus() == MatchStatus.PENDING && 
                     !LocalDateTime.now().isAfter(match.getExpiresAt())) {
                     
-                    // WebSocket을 통해 매칭 요청 알림 전송
-                    messagingTemplate.convertAndSendToUser(
-                        userId.toString(),
-                        "/queue/matches",
-                        MatchProfileDto.fromUser(
-                            match.getUser1().getId().equals(userId) ? match.getUser2() : match.getUser1(),
-                            calculateDistance(
-                                match.getUser1().getLatitude(), match.getUser1().getLongitude(),
-                                match.getUser2().getLatitude(), match.getUser2().getLongitude()
-                            )
-                        )
+                    User offeringUser = match.getUser1().getId().equals(userId) ? match.getUser2() : match.getUser1();
+                    User receivingUser = match.getUser1().getId().equals(userId) ? match.getUser1() : match.getUser2();
+
+                    if (offeringUser == null || receivingUser == null) {
+                         log.warn("[processPendingMatches] Offering user or receiving user is null for matchId: {}. Skipping.", match.getId());
+                         continue;
+                    }
+
+                    double distance = calculateDistance(
+                        offeringUser.getLatitude(), offeringUser.getLongitude(),
+                        receivingUser.getLatitude(), receivingUser.getLongitude()
                     );
+                    MatchProfileDto profileForReceiver = MatchProfileDto.fromUser(offeringUser, distance, match.getId());
+                    
+                    WebSocketNotification<MatchProfileDto> notification = new WebSocketNotification<>(
+                        NOTIFICATION_TYPE_MATCH_OFFERED,
+                        profileForReceiver,
+                        String.format("이전에 '%s'님에게서 매칭 요청이 도착했었습니다. 지금 확인해보세요!", offeringUser.getUsername())
+                    );
+                    
+                    String destination = "/queue/match-notifications";
+                    String targetUserIdStr = receivingUser.getId().toString();
+
+                    log.info("[processPendingMatches] Attempting to send PENDING MATCH_OFFERED to user: {} (userIdStr: {}), destination: {}, payload: {}",
+                             receivingUser.getId(), targetUserIdStr, destination, notification);
+                    messagingTemplate.convertAndSendToUser(
+                        targetUserIdStr,
+                        destination,
+                        notification
+                    );
+                    log.info("[processPendingMatches] Sent PENDING MATCH_OFFERED to user: {} (userIdStr: {})", receivingUser.getId(), targetUserIdStr);
                 } else {
-                    // 만료된 매칭은 상태 업데이트
-                    match.setStatus(MatchStatus.EXPIRED);
-                    match.setRespondedAt(LocalDateTime.now());
-                    matchRepository.save(match);
-                    log.info("[processPendingMatches] match saved: user1={}, user2={}, matchId={}",
-                        match.getUser1() != null ? match.getUser1().getId() : null,
-                        match.getUser2() != null ? match.getUser2().getId() : null,
-                        match.getId());
-                    if (match.getId() == null) {
-                        log.error("[processPendingMatches] ERROR: match.getId() is null after save! match object: {}", match);
+                    if (match.getStatus() != MatchStatus.EXPIRED) { 
+                        log.info("[processPendingMatches] Match ID: {} for user: {} is no longer PENDING or has expired. Status: {}. Skipping.",
+                                 match.getId(), userId, match.getStatus());
                     }
                 }
             }
+        } else {
+            log.info("[processPendingMatches] No pending matches found for userId: {}", userId);
         }
     }
 
@@ -210,15 +390,22 @@ public class MatchingService {
     @Transactional
     public void stopMatching(Long userId) {
         User user = getUserById(userId);
-        
-        // 대기 중인 매칭을 일괄 만료 처리 (bulk update)
-        int expiredCount = matchRepository.bulkExpireMatches(
-            MatchStatus.EXPIRED,
-            LocalDateTime.now(),
-            userId,
-            MatchStatus.PENDING
+        // 사용자가 매칭을 중단하는 경우, 해당 사용자와 관련된 PENDING 상태의 매칭들을 REJECTED 상태로 변경합니다.
+        int updatedCount = matchRepository.bulkExpireMatches(
+            MatchStatus.REJECTED, // newStatus (메서드의 expiredStatus 파라미터에 해당)
+            LocalDateTime.now(),  // respondedAt
+            userId,               // userId
+            MatchStatus.PENDING   // oldStatus (메서드의 pendingStatus 파라미터에 해당)
         );
-        log.info("[stopMatching] expired {} pending matches for user {}", expiredCount, userId);
+        log.info("[stopMatching] Rejected {} pending matches for user {}", updatedCount, userId);
+
+        // Remove any pending match notifications for this user from Redis by calling getPendingMatches
+        List<String> clearedMatches = redisSessionService.getPendingMatches(userId.toString()); // 호출하여 조회 및 삭제
+        if (clearedMatches != null && !clearedMatches.isEmpty()) {
+            log.info("[stopMatching] Cleared {} pending match notifications from Redis for user {}", clearedMatches.size(), userId);
+        } else {
+            log.info("[stopMatching] No pending match notifications found in Redis to clear for user {}", userId);
+        }
     }
 
     /**
@@ -230,37 +417,184 @@ public class MatchingService {
      */
     @Transactional
     public void acceptMatch(String matchId, Long userId) {
-        Match match = matchRepository.findByIdAndUserId(matchId, userId)
-                .orElseThrow(() -> new MatchingException("매칭을 찾을 수 없습니다.", HttpStatus.NOT_FOUND));
-
-        if (match.getStatus() != MatchStatus.PENDING) {
-            throw new MatchingException("이미 처리된 매칭입니다.", HttpStatus.BAD_REQUEST);
-        }
-
-        if (LocalDateTime.now().isAfter(match.getExpiresAt())) {
-            match.setStatus(MatchStatus.EXPIRED);
-            matchRepository.save(match);
-            throw new MatchingException("만료된 매칭입니다.", HttpStatus.BAD_REQUEST);
-        }
-
-        match.setStatus(MatchStatus.ACCEPTED);
-        match.setRespondedAt(LocalDateTime.now());
-        matchRepository.save(match);
-
-        // 매칭 수락 알림 전송
-        User otherUser = match.getUser1().getId().equals(userId) 
-                ? match.getUser2() : match.getUser1();
+        log.info("[acceptMatch] Starting acceptMatch for matchId: {} by userId: {}", matchId, userId);
         
-        // 상대방이 온라인인 경우에만 알림 전송
-        if (redisSessionService.isUserOnline(otherUser.getId().toString())) {
-            messagingTemplate.convertAndSendToUser(
-                otherUser.getId().toString(),
-                "/queue/match-accepted",
-                match.getId()
-            );
-        } else {
-            // 오프라인 사용자에게는 대기 중인 알림으로 저장
-            redisSessionService.savePendingMatch(otherUser.getId().toString(), match.getId().toString());
+        try {
+            Match match = matchRepository.findById(matchId)
+                    .orElseThrow(() -> new MatchingException("매칭을 찾을 수 없습니다.", HttpStatus.NOT_FOUND));
+            log.info("[acceptMatch] Found match: {} with status: {}", matchId, match.getStatus());
+
+            // 해당 매칭에 사용자가 포함되어 있는지 확인
+            if (!match.getUser1().getId().equals(userId) && !match.getUser2().getId().equals(userId)) {
+                log.warn("[acceptMatch] User {} does not have permission for match {}", userId, matchId);
+                throw new MatchingException("해당 매칭에 대한 권한이 없습니다.", HttpStatus.FORBIDDEN);
+            }
+            log.info("[acceptMatch] User {} has permission for match {}", userId, matchId);
+
+            if (match.getStatus() == MatchStatus.BOTH_ACCEPTED || 
+                match.getStatus() == MatchStatus.REJECTED || 
+                match.getStatus() == MatchStatus.EXPIRED) {
+                log.warn("[acceptMatch] Match {} is already processed. Status: {}", matchId, match.getStatus());
+                throw new MatchingException("이미 처리되었거나 만료된 매칭입니다.", HttpStatus.BAD_REQUEST);
+            }
+
+            if (LocalDateTime.now().isAfter(match.getExpiresAt())) {
+                log.warn("[acceptMatch] Match {} is expired. ExpiresAt: {}", matchId, match.getExpiresAt());
+                match.setStatus(MatchStatus.EXPIRED);
+                matchRepository.save(match);
+                throw new MatchingException("만료된 매칭입니다.", HttpStatus.BAD_REQUEST);
+            }
+            log.info("[acceptMatch] Match {} is valid and can be processed", matchId);
+
+            User currentUser = getUserById(userId);
+            User otherUser = match.getUser1().getId().equals(userId) ? match.getUser2() : match.getUser1();
+            log.info("[acceptMatch] CurrentUser: {} ({}), OtherUser: {} ({})", 
+                     currentUser.getId(), currentUser.getUsername(), 
+                     otherUser.getId(), otherUser.getUsername());
+
+            if (otherUser == null) {
+                log.error("[acceptMatch] Other user is null for matchId: {}. This should not happen.", matchId);
+                throw new MatchingException("매칭 상대방 정보를 찾을 수 없습니다.", HttpStatus.INTERNAL_SERVER_ERROR);
+            }
+
+            MatchStatus previousStatus = match.getStatus();
+            MatchStatus newStatus = null; 
+            log.info("[acceptMatch] Previous status: {}, determining new status...", previousStatus);
+
+            if (match.getUser1().getId().equals(userId)) { // 현재 사용자가 user1
+                if (previousStatus == MatchStatus.PENDING) {
+                    newStatus = MatchStatus.USER1_ACCEPTED;
+                } else if (previousStatus == MatchStatus.USER2_ACCEPTED) {
+                    newStatus = MatchStatus.BOTH_ACCEPTED;
+                }
+            } else { // 현재 사용자가 user2
+                if (previousStatus == MatchStatus.PENDING) {
+                    newStatus = MatchStatus.USER2_ACCEPTED;
+                } else if (previousStatus == MatchStatus.USER1_ACCEPTED) {
+                    newStatus = MatchStatus.BOTH_ACCEPTED;
+                }
+            }
+            log.info("[acceptMatch] Determined new status: {}", newStatus);
+     
+            if (newStatus == null) {
+                log.error("[acceptMatch] Invalid status transition from {} for matchId: {}", previousStatus, matchId);
+                throw new MatchingException("유효하지 않은 매칭 상태 변경 요청입니다. 현재 상태: " + previousStatus, HttpStatus.BAD_REQUEST);
+            }
+            
+            match.setStatus(newStatus);
+            match.setRespondedAt(LocalDateTime.now());
+            Match savedMatch = matchRepository.save(match);
+            log.info("Match status updated to {} for matchId: {} by userId: {}", newStatus, matchId, userId);
+
+            // 알림 로직
+            if (savedMatch.getStatus() == MatchStatus.USER1_ACCEPTED || savedMatch.getStatus() == MatchStatus.USER2_ACCEPTED) {
+                // 한쪽만 수락한 경우, 상대방에게 알림
+                String targetOtherUserIdStr = otherUser.getId().toString();
+
+                Map<String, Object> notificationData = Map.of(
+                    "matchId", savedMatch.getId(),
+                    "accepterUserId", currentUser.getId(),
+                    "accepterUsername", currentUser.getUsername(),
+                    "accepterProfileImage", currentUser.getProfileImage() != null ? currentUser.getProfileImage() : ""
+                );
+
+                WebSocketNotification<Map<String, Object>> notificationToOtherUser = new WebSocketNotification<>(
+                    NOTIFICATION_TYPE_MATCH_ACCEPTED_BY_OTHER,
+                    notificationData,
+                    String.format("'%s'님이 매칭을 수락했습니다!", currentUser.getUsername())
+                );
+                
+                log.info("Sending MATCH_ACCEPTED_BY_OTHER to user: {} (userIdStr: {}), payload: {}", 
+                         otherUser.getId(), targetOtherUserIdStr, notificationToOtherUser);
+                
+                if (redisSessionService.isUserOnline(otherUser.getId().toString())) {
+                    // === 상세한 메시지 전송 로깅 추가 ===
+                    try {
+                        log.info("[acceptMatch] About to call messagingTemplate.convertAndSendToUser with target: '{}', destination: '{}'", 
+                                 targetOtherUserIdStr, "/queue/match-notifications");
+                        log.info("[acceptMatch] Full notification object to send: {}", notificationToOtherUser);
+                        log.info("[acceptMatch] Notification serialized to JSON: {}", objectMapper.writeValueAsString(notificationToOtherUser));
+                        
+                        messagingTemplate.convertAndSendToUser(targetOtherUserIdStr, "/queue/match-notifications", notificationToOtherUser);
+                        
+                        log.info("[acceptMatch] messagingTemplate.convertAndSendToUser completed successfully for user: {}", targetOtherUserIdStr);
+                        log.info("Sent MATCH_ACCEPTED_BY_OTHER notification to user: {} for matchId: {}", otherUser.getUsername(), matchId);
+                        
+                        // === 대안적인 메시지 전송 시도 ===
+                        log.info("[acceptMatch] Attempting alternative message delivery method...");
+                        sendNotificationViaAlternativeMethod(targetOtherUserIdStr, notificationToOtherUser);
+                        
+                    } catch (Exception e) {
+                        log.error("[acceptMatch] CRITICAL ERROR: Failed to send MATCH_ACCEPTED_BY_OTHER to user: {}. Error: {}", targetOtherUserIdStr, e.getMessage(), e);
+                    }
+                    // === 상세한 메시지 전송 로깅 끝 ===
+                } else {
+                    log.info("User {} (userIdStr: {}) is offline. Saving MATCH_ACCEPTED_BY_OTHER notification for when they come back online.", 
+                             otherUser.getUsername(), targetOtherUserIdStr);
+                    
+                    try {
+                        // 오프라인 알림 저장
+                        String notificationDataJson = objectMapper.writeValueAsString(notificationData);
+                        offlineNotificationService.saveOfflineNotification(
+                            otherUser.getId(),
+                            com.talkwithneighbors.entity.OfflineNotification.NotificationType.MATCH_ACCEPTED,
+                            notificationDataJson,
+                            String.format("'%s'님이 매칭을 수락했습니다!", currentUser.getUsername()),
+                            null,
+                            10 // 매칭 수락은 높은 우선순위
+                        );
+                        log.info("Saved offline match accepted notification for userId: {}", otherUser.getId());
+                    } catch (Exception e) {
+                        log.error("Failed to save offline match accepted notification for userId {}: {}", otherUser.getId(), e.getMessage(), e);
+                    }
+                }
+            } else if (savedMatch.getStatus() == MatchStatus.BOTH_ACCEPTED) {
+                // 양쪽 모두 수락한 경우, 두 사용자에게 알림
+                String targetCurrentUserIdStr = currentUser.getId().toString();
+                String targetOtherUserIdStr = otherUser.getId().toString();
+                
+                try {
+                    // 기존 1:1 채팅방이 있는지 확인
+                    ChatRoomDto existingChatRoom = chatService.findOneOnOneChatRoom(currentUser.getId(), otherUser.getId());
+                    
+                    ChatRoomDto chatRoomDto;
+                    String navigateToChatPath;
+                    
+                    if (existingChatRoom != null) {
+                        // 기존 채팅방 재활용
+                        chatRoomDto = existingChatRoom;
+                        log.info("Reusing existing chat room for match {}: roomId={}, roomName='{}'", matchId, chatRoomDto.getId(), chatRoomDto.getRoomName());
+                    } else {
+                        // 새 채팅방 생성
+                        String roomName = String.format("%s님과 %s님의 대화", currentUser.getUsername(), otherUser.getUsername());
+                        chatRoomDto = chatService.createRoom(
+                            roomName,
+                            ChatRoomType.ONE_ON_ONE,
+                            currentUser.getId().toString(),
+                            List.of(otherUser.getUsername())
+                        );
+                        log.info("New chat room created for match {}: roomId={}, roomName='{}'", matchId, chatRoomDto.getId(), chatRoomDto.getRoomName());
+                    }
+                    
+                    navigateToChatPath = "/chat/" + chatRoomDto.getId();
+
+                    WebSocketNotification<ChatRoomDto> chatNotification = new WebSocketNotification<>(
+                        NOTIFICATION_TYPE_MATCH_COMPLETED_AND_CHAT_CREATED,
+                        chatRoomDto,
+                        "매칭이 성사되어 채팅방이 생성되었습니다!",
+                        navigateToChatPath
+                    );
+                    messagingTemplate.convertAndSendToUser(targetCurrentUserIdStr, "/queue/match-notifications", chatNotification);
+                    
+                    messagingTemplate.convertAndSendToUser(targetOtherUserIdStr, "/queue/match-notifications", chatNotification);
+                } catch (Exception e) {
+                    log.error("Failed to create chat room for match {}: {}", matchId, e.getMessage(), e);
+                    throw new MatchingException("매칭은 성사되었으나 채팅방 생성에 실패했습니다. 관리자에게 문의하세요.", HttpStatus.INTERNAL_SERVER_ERROR);
+                }
+            }
+        } catch (Exception e) {
+            log.error("[acceptMatch] CRITICAL ERROR: Failed to process acceptMatch: {}", e.getMessage(), e);
+            throw new MatchingException("매칭 처리 중 오류가 발생했습니다. 관리자에게 문의하세요.", HttpStatus.INTERNAL_SERVER_ERROR);
         }
     }
 
@@ -273,16 +607,103 @@ public class MatchingService {
      */
     @Transactional
     public void rejectMatch(String matchId, Long userId) {
-        Match match = matchRepository.findByIdAndUserId(matchId, userId)
-                .orElseThrow(() -> new MatchingException("매칭을 찾을 수 없습니다.", HttpStatus.NOT_FOUND));
+        log.info("[rejectMatch] Starting rejectMatch for matchId: {} by userId: {}", matchId, userId);
+        
+        try {
+            Match match = matchRepository.findById(matchId)
+                    .orElseThrow(() -> new MatchingException("매칭을 찾을 수 없습니다.", HttpStatus.NOT_FOUND));
+            log.info("[rejectMatch] Found match: {} with status: {}", matchId, match.getStatus());
 
-        if (match.getStatus() != MatchStatus.PENDING) {
-            throw new MatchingException("이미 처리된 매칭입니다.", HttpStatus.BAD_REQUEST);
+            // 해당 매칭에 사용자가 포함되어 있는지 확인
+            if (!match.getUser1().getId().equals(userId) && !match.getUser2().getId().equals(userId)) {
+                log.warn("[rejectMatch] User {} does not have permission for match {}", userId, matchId);
+                throw new MatchingException("해당 매칭에 대한 권한이 없습니다.", HttpStatus.FORBIDDEN);
+            }
+            log.info("[rejectMatch] User {} has permission for match {}", userId, matchId);
+
+            if (match.getStatus() == MatchStatus.BOTH_ACCEPTED || 
+                match.getStatus() == MatchStatus.REJECTED || 
+                match.getStatus() == MatchStatus.EXPIRED) {
+                log.warn("[rejectMatch] Match {} is already processed. Status: {}", matchId, match.getStatus());
+                throw new MatchingException("이미 처리되었거나 만료된 매칭입니다.", HttpStatus.BAD_REQUEST);
+            }
+            
+            if (LocalDateTime.now().isAfter(match.getExpiresAt())) {
+                log.warn("[rejectMatch] Match {} is expired. ExpiresAt: {}", matchId, match.getExpiresAt());
+                match.setStatus(MatchStatus.EXPIRED);
+                matchRepository.save(match);
+                throw new MatchingException("만료된 매칭입니다.", HttpStatus.BAD_REQUEST);
+            }
+            log.info("[rejectMatch] Match {} is valid and can be processed", matchId);
+
+            match.setStatus(MatchStatus.REJECTED);
+            match.setRespondedAt(LocalDateTime.now());
+            Match savedMatch = matchRepository.save(match);
+            log.info("Match rejected by userId: {}. MatchId: {}", userId, matchId);
+
+            User currentUser = getUserById(userId);
+            User otherUser = match.getUser1().getId().equals(userId) 
+                    ? match.getUser2() : match.getUser1();
+            log.info("[rejectMatch] CurrentUser: {} ({}), OtherUser: {} ({})", 
+                     currentUser.getId(), currentUser.getUsername(), 
+                     otherUser != null ? otherUser.getId() : "null", 
+                     otherUser != null ? otherUser.getUsername() : "null");
+            
+            if (otherUser == null) {
+                log.warn("[rejectMatch] Other user is null for matchId: {}. Cannot send rejection notification.", matchId);
+                return; // 상대방이 없으면 알림을 보낼 수 없음
+            }
+
+            // 알림 페이로드에는 원래 사용자 이름 사용
+            String targetOtherUserIdStr = otherUser.getId().toString();
+
+            Map<String, Object> notificationData = Map.of(
+                "matchId", savedMatch.getId(),
+                "rejectorUserId", currentUser.getId(),
+                "rejectorUsername", currentUser.getUsername(),
+                "rejectorProfileImage", currentUser.getProfileImage() != null ? currentUser.getProfileImage() : ""
+            );
+            
+            WebSocketNotification<Map<String, Object>> notificationToOtherUser = new WebSocketNotification<>(
+                NOTIFICATION_TYPE_MATCH_REJECTED_BY_OTHER,
+                notificationData,
+                String.format("'%s'님이 매칭을 거절했습니다.", currentUser.getUsername())
+            );
+
+            log.info("Sending MATCH_REJECTED_BY_OTHER to user: {} (userIdStr: {}), payload: {}", 
+                     otherUser.getId(), targetOtherUserIdStr, notificationToOtherUser);
+
+            if (redisSessionService.isUserOnline(otherUser.getId().toString())) {
+                messagingTemplate.convertAndSendToUser(
+                    targetOtherUserIdStr,
+                    "/queue/match-notifications",
+                    notificationToOtherUser
+                );
+                log.info("Sent MATCH_REJECTED_BY_OTHER notification to user: {} for matchId: {}", otherUser.getUsername(), savedMatch.getId());
+            } else {
+                log.info("User {} (userIdStr: {}) is offline. Saving MATCH_REJECTED_BY_OTHER notification for when they come back online.", 
+                         otherUser.getUsername(), targetOtherUserIdStr);
+                
+                try {
+                    // 오프라인 알림 저장
+                    String notificationDataJson = objectMapper.writeValueAsString(notificationData);
+                    offlineNotificationService.saveOfflineNotification(
+                        otherUser.getId(),
+                        com.talkwithneighbors.entity.OfflineNotification.NotificationType.MATCH_REJECTED,
+                        notificationDataJson,
+                        String.format("'%s'님이 매칭을 거절했습니다.", currentUser.getUsername()),
+                        null,
+                        8 // 매칭 거절은 중간 우선순위
+                    );
+                    log.info("Saved offline match rejected notification for userId: {}", otherUser.getId());
+                } catch (Exception e) {
+                    log.error("Failed to save offline match rejected notification for userId {}: {}", otherUser.getId(), e.getMessage(), e);
+                }
+            }
+        } catch (Exception e) {
+            log.error("[rejectMatch] CRITICAL ERROR: Failed to process rejectMatch: {}", e.getMessage(), e);
+            throw new MatchingException("매칭 처리 중 오류가 발생했습니다. 관리자에게 문의하세요.", HttpStatus.INTERNAL_SERVER_ERROR);
         }
-
-        match.setStatus(MatchStatus.REJECTED);
-        match.setRespondedAt(LocalDateTime.now());
-        matchRepository.save(match);
     }
 
     /**
@@ -296,23 +717,17 @@ public class MatchingService {
      */
     @Transactional(readOnly = true)
     public List<MatchProfileDto> searchNearbyUsers(Double latitude, Double longitude, Double radius, Long userId) {
-        User user = getUserById(userId);
-        
-        // 사용자의 위치 정보 업데이트
-        user.setLatitude(latitude);
-        user.setLongitude(longitude);
-        userRepository.save(user);
-        
-        // 주변 사용자 검색
+        if (latitude == null || longitude == null || radius == null) {
+            throw new IllegalArgumentException("Latitude, longitude, and radius must not be null.");
+        }
+        User currentUser = userRepository.findById(userId)
+            .orElseThrow(() -> new MatchingException("현재 사용자를 찾을 수 없습니다.", HttpStatus.NOT_FOUND));
+
         List<User> nearbyUsers = userRepository.findNearbyUsers(latitude, longitude, radius);
-        
         return nearbyUsers.stream()
-                .filter(nearbyUser -> !nearbyUser.getId().equals(userId))
-                .map(nearbyUser -> MatchProfileDto.fromUser(
-                    nearbyUser,
-                    calculateDistance(latitude, longitude, nearbyUser.getLatitude(), nearbyUser.getLongitude())
-                ))
-                .collect(Collectors.toList());
+            .filter(user -> !user.getId().equals(userId))
+            .map(user -> MatchProfileDto.fromUser(user, calculateDistance(latitude, longitude, user.getLatitude(), user.getLongitude()), null))
+            .collect(Collectors.toList());
     }
 
     /**
@@ -449,5 +864,21 @@ public class MatchingService {
             })
             .filter(dto -> dto != null)
             .collect(Collectors.toList());
+    }
+
+    // === 대안적인 메시지 전송 메서드 ===
+    private void sendNotificationViaAlternativeMethod(String targetUserIdStr, WebSocketNotification<?> notification) {
+        try {
+            // 직접 토픽으로 메시지 전송 (사용자 특정 토픽)
+            String alternativeDestination = "/topic/match-event-" + targetUserIdStr;
+            log.info("[sendNotificationViaAlternativeMethod] Sending to alternative destination: {}", alternativeDestination);
+            log.info("[sendNotificationViaAlternativeMethod] Payload: {}", notification);
+            
+            messagingTemplate.convertAndSend(alternativeDestination, notification);
+            log.info("[sendNotificationViaAlternativeMethod] Message sent successfully to {}", alternativeDestination);
+            
+        } catch (Exception e) {
+            log.error("[sendNotificationViaAlternativeMethod] Failed to send via alternative method: {}", e.getMessage(), e);
+        }
     }
 } 

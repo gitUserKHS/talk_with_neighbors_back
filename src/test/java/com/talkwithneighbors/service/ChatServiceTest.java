@@ -61,11 +61,20 @@ class ChatServiceTest {
         testUser.setUsername("testuser");
         testUser.setEmail("test@example.com");
 
+        // 참여자 User 객체 생성 (테스트 상황에 맞게 설정)
+        User participantUser = new User();
+        participantUser.setId(2L);
+        participantUser.setUsername("participantUser"); 
+        participantUser.setEmail("participant@example.com");
+
         testChatRoom = new ChatRoom();
         testChatRoom.setId(UUID.randomUUID().toString());
-        testChatRoom.setName("Test Room");
+        testChatRoom.setName("Test Room"); // 1:1 채팅 시 이 이름은 덮어쓰여짐
         testChatRoom.setType(ChatRoomType.ONE_ON_ONE);
         testChatRoom.setCreator(testUser);
+        // 필요하다면 testChatRoom의 participants에도 participantUser 추가
+        // testChatRoom.getParticipants().add(testUser);
+        // testChatRoom.getParticipants().add(participantUser);
 
         testMessage = new Message();
         testMessage.setId(UUID.randomUUID().toString());
@@ -74,9 +83,9 @@ class ChatServiceTest {
         testMessage.setChatRoom(testChatRoom);
 
         createRoomRequest = new CreateRoomRequest();
-        createRoomRequest.setName("Test Room");
+        createRoomRequest.setName("Test Room"); // 1:1 채팅 시 이 값은 무시될 수 있음
         createRoomRequest.setType("ONE_ON_ONE");
-        createRoomRequest.setParticipantIds(Arrays.asList(2L));
+        createRoomRequest.setParticipantNicknames(Arrays.asList("participantUser")); // 닉네임(사용자명)으로 변경
     }
 
     @Test
@@ -85,20 +94,37 @@ class ChatServiceTest {
         // given
         User participant = new User();
         participant.setId(2L);
-        when(userRepository.findAllById(anyList())).thenReturn(Arrays.asList(participant));
-        when(chatRoomRepository.save(any())).thenReturn(testChatRoom);
+        participant.setUsername("participantUser"); // 사용자명 설정
+        // findAllByUsernameIn을 모킹하도록 변경
+        when(userRepository.findAllByUsernameIn(Arrays.asList("participantUser"))).thenReturn(Arrays.asList(participant));
+        when(userRepository.findById(1L)).thenReturn(Optional.of(testUser)); // creator 조회 모킹 추가
+        when(chatRoomRepository.save(any(ChatRoom.class))).thenAnswer(invocation -> {
+            ChatRoom roomToSave = invocation.getArgument(0);
+            // 1:1 채팅방 이름 자동 생성 로직에 따라 이름이 "testuser, participantUser" (알파벳순)가 될 것을 예상
+            // 실제 저장되는 ChatRoom 객체를 반환하거나, 테스트의 단위를 위해 ID만 설정된 객체 반환 가능
+            if (roomToSave.getType() == ChatRoomType.ONE_ON_ONE) {
+                 List<String> names = Arrays.asList(testUser.getUsername(), participant.getUsername());
+                 names.sort(String::compareToIgnoreCase);
+                 roomToSave.setName(String.join(", ", names));
+            }
+            roomToSave.setId(testChatRoom.getId()); // ID는 유지
+            return roomToSave; 
+        });
 
         // when
         ChatRoomDto createdRoomDto = chatService.createRoom(
-            createRoomRequest.getName(),
+            createRoomRequest.getName(), // 1:1의 경우 이 값은 서비스 내부에서 덮어쓰여질 수 있음
             createRoomRequest.getTypeEnum(),
             testUser.getId().toString(),
-            createRoomRequest.getParticipantIds()
+            createRoomRequest.getParticipantNicknames() // 닉네임(사용자명) 사용
         );
 
         // then
         assertNotNull(createdRoomDto);
-        assertEquals(testChatRoom.getName(), createdRoomDto.getRoomName());
+        // 1:1 채팅방 이름 자동 생성 로직 검증
+        List<String> expectedNames = Arrays.asList(testUser.getUsername(), "participantUser");
+        expectedNames.sort(String::compareToIgnoreCase);
+        assertEquals(String.join(", ", expectedNames), createdRoomDto.getRoomName());
         assertEquals(testChatRoom.getType(), createdRoomDto.getType());
         assertEquals(testUser.getId().toString(), createdRoomDto.getCreatorId());
     }

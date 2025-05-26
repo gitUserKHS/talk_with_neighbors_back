@@ -5,6 +5,7 @@ import com.talkwithneighbors.interceptor.CustomAuthenticationChannelInterceptor;
 import com.talkwithneighbors.service.RedisSessionService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.messaging.Message;
 import org.springframework.messaging.simp.config.ChannelRegistration;
@@ -36,11 +37,23 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
     @Override
     public void configureMessageBroker(MessageBrokerRegistry config) {
         // 메시지 브로커 설정
-        config.enableSimpleBroker("/topic", "/queue", "/user");
+        config.enableSimpleBroker("/topic", "/queue", "/user")
+              .setHeartbeatValue(new long[]{10000, 10000}) // 10초 하트비트
+              .setTaskScheduler(taskScheduler()); // 명시적 태스크 스케줄러 설정
         // 클라이언트에서 서버로 메시지를 보낼 때의 prefix
         config.setApplicationDestinationPrefixes("/app");
         // 특정 사용자에게 메시지를 보낼 때의 prefix
         config.setUserDestinationPrefix("/user");
+    }
+
+    @Bean
+    public org.springframework.scheduling.TaskScheduler taskScheduler() {
+        org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler scheduler = 
+            new org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler();
+        scheduler.setPoolSize(10);
+        scheduler.setThreadNamePrefix("websocket-");
+        scheduler.initialize();
+        return scheduler;
     }
 
     @Override

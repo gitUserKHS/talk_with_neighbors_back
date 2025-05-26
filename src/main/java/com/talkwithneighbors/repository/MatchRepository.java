@@ -94,4 +94,8 @@ public interface MatchRepository extends JpaRepository<Match, String> {
                           @Param("now") LocalDateTime now,
                           @Param("userId") Long userId,
                           @Param("pendingStatus") MatchStatus pendingStatus);
+
+    @Modifying
+    @Transactional
+    void deleteByExpiresAtBefore(LocalDateTime now);
 }

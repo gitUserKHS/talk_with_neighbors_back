@@ -94,4 +94,12 @@ public interface UserRepository extends JpaRepository<User, Long> {
      */
     @Query("SELECT u FROM User u WHERE u.id IN :userIds")
     List<User> findAllById(@Param("userIds") List<Long> userIds);
+
+    /**
+     * 여러 사용자명으로 사용자 목록을 조회합니다.
+     *
+     * @param usernames 사용자명 목록
+     * @return 사용자 목록
+     */
+    List<User> findAllByUsernameIn(List<String> usernames);
 } 

@@ -49,7 +49,7 @@ public class MatchStatisticsService {
         
         // 평균 응답 시간 계산 (수락/거절된 매칭만)
         double avgResponseTime = userMatches.stream()
-                .filter(match -> match.getStatus() == MatchStatus.ACCEPTED || 
+                .filter(match -> match.getStatus() == MatchStatus.BOTH_ACCEPTED ||
                                match.getStatus() == MatchStatus.REJECTED)
                 .mapToLong(match -> 
                     java.time.Duration.between(

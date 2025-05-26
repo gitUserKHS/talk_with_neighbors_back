@@ -3,6 +3,7 @@ package com.talkwithneighbors.security;
 import com.talkwithneighbors.service.SessionValidationService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import jakarta.servlet.http.HttpSession;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
@@ -19,13 +20,17 @@ public class AuthInterceptor implements HandlerInterceptor {
 
     @Override
     public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) {
+        log.debug("[AuthInterceptor] preHandle started for URI: {} , Method: {}", request.getRequestURI(), request.getMethod());
+
         // OPTIONS 요청은 통과
         if (request.getMethod().equals("OPTIONS")) {
+            log.debug("[AuthInterceptor] OPTIONS request, allowing.");
             return true;
         }
 
         // 핸들러 메소드가 아닌 경우 통과 (정적 리소스 등)
         if (!(handler instanceof HandlerMethod)) {
+            log.debug("[AuthInterceptor] Handler is not HandlerMethod, allowing. Handler: {}", handler.getClass().getName());
             return true;
         }
 
@@ -37,33 +42,70 @@ public class AuthInterceptor implements HandlerInterceptor {
 
         // @RequireLogin 어노테이션이 없으면 통과
         if (requireLogin == null) {
+            log.debug("[AuthInterceptor] No @RequireLogin annotation, allowing.");
             return true;
         }
+        log.debug("[AuthInterceptor] @RequireLogin annotation found, proceeding with authentication.");
 
-        try {
-            // 세션 검증 및 사용자 정보 설정
-            String sessionId = request.getHeader("X-Session-Id");
-            
-            // 세션 ID가 없는 경우
-            if (sessionId == null || sessionId.isEmpty()) {
-                log.warn("No session ID provided in request to {}", request.getRequestURI());
+        UserSession userSession = null;
+        String sessionId = null;
+
+        // 1. 테스트 환경 등에서 HttpSession에 직접 설정된 UserSession 확인
+        HttpSession httpSession = request.getSession(false);
+        if (httpSession != null) {
+            log.debug("[AuthInterceptor] HttpSession is not null. Session ID from httpSession.getId(): {}", httpSession.getId());
+            Object sessionAttr = httpSession.getAttribute("USER_SESSION");
+            if (sessionAttr != null) {
+                log.debug("[AuthInterceptor] USER_SESSION attribute type: {}", sessionAttr.getClass().getName());
+                if (sessionAttr instanceof UserSession) {
+                    userSession = (UserSession) sessionAttr;
+                    log.debug("[AuthInterceptor] UserSession found in HttpSession. UserId: {}", (userSession.getUserId() != null ? userSession.getUserId().toString() : "null"));
+                } else {
+                    log.warn("[AuthInterceptor] USER_SESSION attribute is not an instance of UserSession. Actual type: {}", sessionAttr.getClass().getName());
+                }
+            } else {
+                log.debug("[AuthInterceptor] USER_SESSION attribute is null in HttpSession.");
+            }
+        } else {
+            log.debug("[AuthInterceptor] HttpSession is null.");
+        }
+
+        // 2. HttpSession에 UserSession이 없으면, X-Session-Id 헤더 확인
+        if (userSession == null) {
+            log.debug("[AuthInterceptor] UserSession not found in HttpSession, checking X-Session-Id header.");
+            sessionId = request.getHeader("X-Session-Id");
+            if (sessionId != null && !sessionId.isEmpty()) {
+                if (sessionId.contains(",")) {
+                    String originalSessionId = sessionId;
+                    sessionId = sessionId.split(",")[0].trim();
+                    log.info("[AuthInterceptor] Multiple session IDs detected from header. Using first: {} (from {})", sessionId, originalSessionId);
+                }
+                log.debug("[AuthInterceptor] Session ID from header: {}", sessionId);
+            } else {
+                log.warn("[AuthInterceptor] No UserSession in HttpSession and no X-Session-Id header provided for request to {}. Responding 401.", request.getRequestURI());
                 response.setStatus(HttpStatus.UNAUTHORIZED.value());
                 return false;
             }
-            
-            // 쉼표로 구분된 세션 ID가 있을 경우 첫 번째 세션 ID만 사용
-            if (sessionId.contains(",")) {
-                String originalSessionId = sessionId;
-                sessionId = sessionId.split(",")[0].trim();
-                log.info("Multiple session IDs detected. Using first: {} (from {})", sessionId, originalSessionId);
+        }
+
+        try {
+            if (userSession == null && sessionId != null) { // 헤더에서 가져온 sessionId로 검증
+                log.debug("[AuthInterceptor] Validating session from header ID: {}", sessionId);
+                 userSession = sessionValidationService.validateSession(sessionId);
+                 log.debug("[AuthInterceptor] UserSession from header validation. UserId: {}", (userSession != null && userSession.getUserId() != null ? userSession.getUserId().toString() : "null or UserSession is null"));
             }
-            
-            log.debug("Validating session ID: {}", sessionId);
-            UserSession userSession = sessionValidationService.validateSession(sessionId);
+
+            if (userSession == null || userSession.getUserId() == null) {
+                log.warn("[AuthInterceptor] UserSession is null or UserId is null after all checks. URI: {}. Responding 401.", request.getRequestURI());
+                response.setStatus(HttpStatus.UNAUTHORIZED.value());
+                return false;
+            }
+
             request.setAttribute("USER_SESSION", userSession);
+            log.debug("[AuthInterceptor] Successfully validated. User ID: {}. Setting USER_SESSION attribute.", userSession.getUserId());
             return true;
-        } catch (RuntimeException e) {
-            log.error("Session validation failed: {}", e.getMessage());
+        } catch (RuntimeException e) { 
+            log.error("[AuthInterceptor] Session validation failed for URI {}: {}. Responding 401.", request.getRequestURI(), e.getMessage(), e);
             response.setStatus(HttpStatus.UNAUTHORIZED.value());
             return false;
         }

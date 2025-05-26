@@ -12,10 +12,19 @@ public enum MatchStatus {
     PENDING,    // 매칭 대기 중
 
     /**
-     * 매칭 수락됨 상태
-     * 양쪽 모두 매칭을 수락한 상태입니다.
+     * 첫 번째 사용자만 매칭을 수락한 상태
      */
-    ACCEPTED,   // 매칭 수락됨
+    USER1_ACCEPTED,
+
+    /**
+     * 두 번째 사용자만 매칭을 수락한 상태
+     */
+    USER2_ACCEPTED,
+
+    /**
+     * 양쪽 모두 매칭을 수락한 상태
+     */
+    BOTH_ACCEPTED,   // 기존 ACCEPTED에서 변경
 
     /**
      * 매칭 거절됨 상태

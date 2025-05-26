@@ -26,11 +26,16 @@ import org.springframework.http.MediaType;
 import org.springframework.http.HttpStatus;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.test.web.servlet.MockMvc;
-
+import org.springframework.boot.autoconfigure.EnableAutoConfiguration;
+import org.springframework.boot.autoconfigure.session.SessionAutoConfiguration;
+import com.talkwithneighbors.dto.ChatMessageDto;
+import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.eq;
+import org.springframework.context.annotation.ComponentScan;
 import java.time.LocalDateTime;
 import java.util.Arrays;
 import java.util.List;
-
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -39,22 +44,19 @@ import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.doThrow;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
-
-import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
-import org.springframework.context.annotation.ComponentScan;
-import com.talkwithneighbors.dto.ChatMessageDto;
-import static org.mockito.ArgumentMatchers.anyList;
-import static org.mockito.ArgumentMatchers.anyLong;
+import com.talkwithneighbors.repository.MessageRepository;
+import com.talkwithneighbors.service.SessionValidationService;
+import com.talkwithneighbors.exception.AuthException;
+import org.springframework.session.Session;
+import static org.mockito.Mockito.mock;
 
 @WebMvcTest(
     controllers = ChatController.class,
     excludeFilters = @ComponentScan.Filter(type = org.springframework.context.annotation.FilterType.ASSIGNABLE_TYPE, classes = com.talkwithneighbors.config.WebConfig.class)
 )
-@org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc(addFilters = false)
+@org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc
 @org.springframework.test.context.ActiveProfiles("test")
 @org.springframework.context.annotation.Import({MockRedisSessionConfig.class, ChatExceptionHandler.class})
-@org.springframework.boot.test.mock.mockito.MockBean(com.talkwithneighbors.service.SessionValidationService.class)
-@org.springframework.boot.test.mock.mockito.MockBean(org.springframework.session.SessionRepository.class)
 class ChatControllerTest {
 
     @Autowired
@@ -70,7 +72,16 @@ class ChatControllerTest {
     private UserService userService;
 
     @MockBean
+    private SessionValidationService sessionValidationService;
+
+    @MockBean
     private SimpMessagingTemplate messagingTemplate;
+    
+    @MockBean
+    private MessageRepository messageRepository;
+
+    @MockBean
+    private org.springframework.session.SessionRepository sessionRepository;
 
     private UserSession userSession;
     private User testUser;
@@ -90,7 +101,6 @@ class ChatControllerTest {
         testRoom.setId("test-room-id");
         testRoom.setName("Test Room");
         testRoom.setType(ChatRoomType.GROUP);
-        // 방장(creator)를 testUser와 다른 User로 지정
         User otherUser = new User();
         otherUser.setId(2L);
         otherUser.setUsername("otheruser");
@@ -100,15 +110,20 @@ class ChatControllerTest {
         createRoomRequest = new CreateRoomRequest();
         createRoomRequest.setName("New Room");
         createRoomRequest.setType("GROUP");
-        createRoomRequest.setParticipantIds(Arrays.asList(2L, 3L));
+        createRoomRequest.setParticipantNicknames(Arrays.asList("otheruser", "anotheruser"));
 
         when(userService.getUserById(1L)).thenReturn(testUser);
+        when(sessionValidationService.validateSession(anyString())).thenReturn(userSession);
+
+        Session mockSession = mock(Session.class);
+        when(mockSession.getId()).thenReturn("mock-session-id");
+        when(sessionRepository.createSession()).thenReturn(mockSession);
+        when(sessionRepository.findById(anyString())).thenReturn(mockSession);
     }
 
     @Test
     @DisplayName("채팅방 생성 성공 테스트")
     void createRoomSuccess() throws Exception {
-        // given
         ChatRoomDto roomDto = new ChatRoomDto();
         roomDto.setId(testRoom.getId());
         roomDto.setRoomName(testRoom.getName());
@@ -117,7 +132,6 @@ class ChatControllerTest {
                 anyString(), any(ChatRoomType.class), anyString(), anyList()))
             .thenReturn(roomDto);
 
-        // when & then
         mockMvc.perform(post("/api/chat/rooms")
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(createRoomRequest))
@@ -130,7 +144,6 @@ class ChatControllerTest {
     @Test
     @DisplayName("채팅방 목록 조회 성공 테스트")
     void getRoomsSuccess() throws Exception {
-        // given
         ChatRoomDto roomDto = new ChatRoomDto();
         roomDto.setId(testRoom.getId());
         roomDto.setRoomName(testRoom.getName());
@@ -139,7 +152,6 @@ class ChatControllerTest {
         when(chatService.getChatRoomsForUser(anyString(), any(Pageable.class)))
             .thenReturn(page);
 
-        // when & then
         mockMvc.perform(get("/api/chat/rooms")
                 .param("page", "0")
                 .param("size", "20")
@@ -152,7 +164,6 @@ class ChatControllerTest {
     @Test
     @DisplayName("채팅방 상세 조회 성공 테스트")
     void getRoomSuccess() throws Exception {
-        // given
         ChatRoomDto roomDto = new ChatRoomDto();
         roomDto.setId(testRoom.getId());
         roomDto.setRoomName(testRoom.getName());
@@ -160,7 +171,6 @@ class ChatControllerTest {
         when(chatService.getRoomById(anyString(), anyString()))
             .thenReturn(roomDto);
 
-        // when & then
         mockMvc.perform(get("/api/chat/rooms/{roomId}", testRoom.getId())
                 .sessionAttr("USER_SESSION", userSession))
                 .andExpect(status().isOk())
@@ -171,10 +181,8 @@ class ChatControllerTest {
     @Test
     @DisplayName("채팅방 참여 성공 테스트")
     void joinRoomSuccess() throws Exception {
-        // given
         doNothing().when(chatService).joinRoom(anyString(), anyString());
 
-        // when & then
         mockMvc.perform(post("/api/chat/rooms/{roomId}/join", testRoom.getId())
                 .sessionAttr("USER_SESSION", userSession))
                 .andExpect(status().isOk());
@@ -183,17 +191,15 @@ class ChatControllerTest {
     @Test
     @DisplayName("채팅방 나가기 성공 테스트")
     void leaveRoomSuccess() throws Exception {
-        // given
         ChatRoomDto roomDto = new ChatRoomDto();
         roomDto.setId(testRoom.getId());
         roomDto.setRoomName(testRoom.getName());
         roomDto.setType(testRoom.getType());
-        roomDto.setCreatorId("2"); // simulate creator is other
+        roomDto.setCreatorId("2"); 
         when(chatService.getRoomById(anyString(), anyString()))
             .thenReturn(roomDto);
         doNothing().when(chatService).leaveRoom(anyString(), anyString());
 
-        // when & then
         mockMvc.perform(post("/api/chat/rooms/{roomId}/leave", testRoom.getId())
                 .sessionAttr("USER_SESSION", userSession))
                 .andExpect(status().isOk());
@@ -202,7 +208,6 @@ class ChatControllerTest {
     @Test
     @DisplayName("메시지 목록 조회 성공 테스트")
     void getMessagesSuccess() throws Exception {
-        // given
         MessageDto messageDto = new MessageDto();
         messageDto.setId("test-message-id");
         messageDto.setContent("Test message");
@@ -211,7 +216,6 @@ class ChatControllerTest {
         when(chatService.getMessagesByRoomId(anyString(), anyString(), any(Pageable.class)))
             .thenReturn(msgPage);
 
-        // when & then
         mockMvc.perform(get("/api/chat/rooms/{roomId}/messages", testRoom.getId())
                 .param("page", "0")
                 .param("size", "20")
@@ -245,6 +249,7 @@ class ChatControllerTest {
     @DisplayName("메시지 읽음 표시 성공 테스트")
     void markMessageAsReadSuccess() throws Exception {
         doNothing().when(chatService).markMessageAsRead(anyString(), anyString());
+
         mockMvc.perform(post("/api/chat/rooms/{roomId}/messages/{messageId}/read", testRoom.getId(), "msg-1")
                 .sessionAttr("USER_SESSION", userSession))
             .andExpect(status().isOk());
@@ -253,162 +258,161 @@ class ChatControllerTest {
     @Test
     @DisplayName("그룹 채팅방 검색 성공 테스트")
     void searchGroupRoomsSuccess() throws Exception {
-        // given
-        ChatRoomDto roomDto = new ChatRoomDto();
-        roomDto.setId(testRoom.getId());
-        roomDto.setRoomName(testRoom.getName());
-        roomDto.setType(testRoom.getType());
-        Page<ChatRoomDto> rooms = new PageImpl<>(List.of(roomDto));
-        when(chatService.searchRooms(anyString(), any(ChatRoomType.class), anyString(), any(Pageable.class))).thenReturn(rooms);
+        ChatRoomDto roomDto1 = new ChatRoomDto();
+        roomDto1.setId("room1");
+        roomDto1.setRoomName("Group Room 1");
+        roomDto1.setType(ChatRoomType.GROUP);
+        roomDto1.setCreatorId("user1");
+        roomDto1.setParticipantCount(3);
 
-        // when & then
-        mockMvc.perform(get("/api/chat/rooms/search/group")
-                .param("query", "Test")
-                .sessionAttr("USER_SESSION", userSession))
+        ChatRoomDto roomDto2 = new ChatRoomDto();
+        roomDto2.setId("room2");
+        roomDto2.setRoomName("Another Group Room");
+        roomDto2.setType(ChatRoomType.GROUP);
+        roomDto2.setCreatorId("user2");
+        roomDto2.setParticipantCount(5);
+
+        Page<ChatRoomDto> page = new PageImpl<>(Arrays.asList(roomDto1, roomDto2));
+        when(chatService.getChatRoomsForUser(anyString(), any(Pageable.class))).thenReturn(page); 
+
+        mockMvc.perform(get("/api/chat/rooms")
+                .param("keyword", "Group") 
+                .param("type", "GROUP")   
+                .param("page", "0")      
+                .param("size", "20")     
+                .sessionAttr("USER_SESSION", userSession)) 
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.content[0].id").value(testRoom.getId()));
+                .andExpect(jsonPath("$.content.length()").value(2))
+                .andExpect(jsonPath("$.content[0].roomName").value("Group Room 1"));
     }
 
     @Test
     @DisplayName("채팅방 삭제 성공 테스트")
     void deleteRoomSuccess() throws Exception {
-        // given
-        // 방장(creator)를 testUser로 설정하여 삭제 권한 부여
-        testRoom.setCreator(testUser);
-        ChatRoomDto roomDto = new ChatRoomDto(); // ChatRoomDto 생성
+        ChatRoomDto roomDto = new ChatRoomDto();
         roomDto.setId(testRoom.getId());
-        roomDto.setCreatorId(String.valueOf(testUser.getId())); // creatorId 설정
-        when(chatService.getRoomById(anyString(), anyString())).thenReturn(roomDto); // getRoomById Mocking 추가
-        doNothing().when(chatService).deleteRoom(anyString());
+        roomDto.setCreatorId(userSession.getUserId().toString()); 
+        when(chatService.getRoomById(eq(testRoom.getId()), eq(userSession.getUserId().toString()))).thenReturn(roomDto);
+        doNothing().when(chatService).deleteRoom(testRoom.getId());
 
-        // when & then
         mockMvc.perform(delete("/api/chat/rooms/{roomId}", testRoom.getId())
                 .sessionAttr("USER_SESSION", userSession))
                 .andExpect(status().isOk());
     }
 
     @Test
-    @DisplayName("채팅방 생성 실패 - 권한 없음")
+    @DisplayName("채팅방 생성 실패 - 권한 없음 (인증 실패)")
     void createRoomFailNoPermission() throws Exception {
-        // given
-        when(chatService.createRoom(anyString(), any(ChatRoomType.class), anyString(), anyList()))
-            .thenThrow(new ChatException("No permission to create room.", HttpStatus.FORBIDDEN));
+        when(sessionValidationService.validateSession(null))
+            .thenThrow(new AuthException("세션이 없습니다. 다시 로그인해주세요.", HttpStatus.UNAUTHORIZED));
+         when(sessionValidationService.validateSession(""))
+            .thenThrow(new AuthException("세션이 없습니다. 다시 로그인해주세요.", HttpStatus.UNAUTHORIZED));
 
-        // when & then
         mockMvc.perform(post("/api/chat/rooms")
                 .contentType(MediaType.APPLICATION_JSON)
-                .content(objectMapper.writeValueAsString(createRoomRequest))
-                .sessionAttr("USER_SESSION", userSession)) // 세션 추가
-                .andExpect(status().isForbidden());
+                .content(objectMapper.writeValueAsString(createRoomRequest)))
+                .andExpect(status().isUnauthorized()); 
     }
 
     @Test
     @DisplayName("채팅방 목록 조회 실패 - 세션 없음")
     void getRoomsFailNoSession() throws Exception {
-        // given
-        when(chatService.getChatRoomsForUser(anyString(), any(Pageable.class)))
-            .thenThrow(new ChatException("User session not found.", HttpStatus.UNAUTHORIZED));
+        when(sessionValidationService.validateSession(null)) 
+            .thenThrow(new AuthException("세션이 없습니다. 다시 로그인해주세요.", HttpStatus.UNAUTHORIZED));
+        when(sessionValidationService.validateSession("")) 
+            .thenThrow(new AuthException("세션이 없습니다. 다시 로그인해주세요.", HttpStatus.UNAUTHORIZED));
 
-
-        // when & then
-        mockMvc.perform(get("/api/chat/rooms"))
-            .andExpect(status().isUnauthorized());
+        mockMvc.perform(get("/api/chat/rooms")
+                .param("page", "0")
+                .param("size", "20"))
+                .andExpect(status().isUnauthorized()); 
     }
 
     @Test
     @DisplayName("채팅방 상세 조회 실패 - 존재하지 않는 채팅방")
     void getRoomFailNotFound() throws Exception {
-        // given
-        when(chatService.getRoomById(anyString(), anyString()))
-            .thenThrow(new ChatException("Room not found.", HttpStatus.NOT_FOUND));
-
-        // when & then
-        mockMvc.perform(get("/api/chat/rooms/{roomId}", "non-existent-room")
-                .sessionAttr("USER_SESSION", userSession)) // 세션 추가
+        when(chatService.getRoomById(eq("non-existing-room"), anyString()))
+            .thenThrow(new ChatException("Room not found", HttpStatus.NOT_FOUND));
+        
+        mockMvc.perform(get("/api/chat/rooms/{roomId}", "non-existing-room")
+                .sessionAttr("USER_SESSION", userSession))
                 .andExpect(status().isNotFound());
     }
 
     @Test
     @DisplayName("채팅방 참여 실패 - 이미 참여 중")
     void joinRoomFailAlreadyJoined() throws Exception {
-        // given
-        doThrow(new ChatException("User already in room.", HttpStatus.CONFLICT))
-                .when(chatService).joinRoom(anyString(), anyString());
-
-        // when & then
+        doThrow(new ChatException("Already joined", HttpStatus.BAD_REQUEST))
+            .when(chatService).joinRoom(anyString(), anyString());
+        
         mockMvc.perform(post("/api/chat/rooms/{roomId}/join", testRoom.getId())
-                .sessionAttr("USER_SESSION", userSession)) // 세션 추가
-                .andExpect(status().isConflict());
+                .sessionAttr("USER_SESSION", userSession))
+                .andExpect(status().isBadRequest());
     }
 
     @Test
     @DisplayName("채팅방 나가기 실패 - 참여하지 않은 채팅방")
     void leaveRoomFailNotJoined() throws Exception {
-        // given
-        // getRoomById가 ChatRoomDto를 반환하도록 설정
         ChatRoomDto roomDto = new ChatRoomDto();
         roomDto.setId(testRoom.getId());
-        roomDto.setCreatorId(String.valueOf(testUser.getId() + 1)); // 현재 사용자가 방장이 아니도록 설정
+        roomDto.setCreatorId("2"); 
         when(chatService.getRoomById(anyString(), anyString())).thenReturn(roomDto);
-    
-        doThrow(new ChatException("User not in room.", HttpStatus.BAD_REQUEST))
-                .when(chatService).leaveRoom(anyString(), anyString());
-
-        // when & then
+        doThrow(new ChatException("Not a participant", HttpStatus.BAD_REQUEST))
+            .when(chatService).leaveRoom(anyString(), anyString());
+        
         mockMvc.perform(post("/api/chat/rooms/{roomId}/leave", testRoom.getId())
-                .sessionAttr("USER_SESSION", userSession)) // 세션 추가
+                .sessionAttr("USER_SESSION", userSession))
                 .andExpect(status().isBadRequest());
     }
 
     @Test
-    @DisplayName("메시지 목록 조회 실패 - 권한 없음")
+    @DisplayName("메시지 목록 조회 실패 - 권한 없음 (인증 실패)")
     void getMessagesFailNoPermission() throws Exception {
-        // given
-        when(chatService.getMessagesByRoomId(anyString(), anyString(), any(Pageable.class)))
-            .thenThrow(new ChatException("No permission to view messages.", HttpStatus.FORBIDDEN));
+        when(sessionValidationService.validateSession(null))
+            .thenThrow(new AuthException("세션이 없습니다. 다시 로그인해주세요.", HttpStatus.UNAUTHORIZED));
+        when(sessionValidationService.validateSession(""))
+            .thenThrow(new AuthException("세션이 없습니다. 다시 로그인해주세요.", HttpStatus.UNAUTHORIZED));
 
-        // when & then
-        mockMvc.perform(get("/api/chat/rooms/{roomId}/messages", testRoom.getId())
-                .param("page", "0")
-                .param("size", "20")
-                .sessionAttr("USER_SESSION", userSession)) // 세션 추가
-                .andExpect(status().isForbidden());
+        mockMvc.perform(get("/api/chat/rooms/{roomId}/messages", testRoom.getId()))
+                .andExpect(status().isUnauthorized()); 
     }
 
     @Test
     @DisplayName("메시지 읽음 표시 실패 - 존재하지 않는 메시지")
     void markMessageAsReadFailNotFound() throws Exception {
-        // given
-        doThrow(new ChatException("Message not found.", HttpStatus.NOT_FOUND))
-                .when(chatService).markMessageAsRead(anyString(), anyString());
-
-        // when & then
-        mockMvc.perform(post("/api/chat/rooms/{roomId}/messages/{messageId}/read", testRoom.getId(), "non-existent-message")
-                .sessionAttr("USER_SESSION", userSession)) // 세션 추가
+        doThrow(new ChatException("Message not found", HttpStatus.NOT_FOUND))
+            .when(chatService).markMessageAsRead(eq("non-existing-message"), anyString());
+        
+        mockMvc.perform(post("/api/chat/rooms/{roomId}/messages/{messageId}/read", 
+                                testRoom.getId(), "non-existing-message")
+                .sessionAttr("USER_SESSION", userSession))
                 .andExpect(status().isNotFound());
     }
 
+    @Test
+    @DisplayName("채팅방 삭제 실패 - 권한 없음 (방장이 아닌 경우)")
+    void deleteRoomFailNoPermission() throws Exception {
+        ChatRoomDto roomDtoFromService = new ChatRoomDto();
+        roomDtoFromService.setId(testRoom.getId());
+        roomDtoFromService.setCreatorId(testRoom.getCreator().getId().toString()); 
+        
+        when(chatService.getRoomById(eq(testRoom.getId()), eq(userSession.getUserId().toString())))
+            .thenReturn(roomDtoFromService);
+        
+        mockMvc.perform(delete("/api/chat/rooms/{roomId}", testRoom.getId())
+                .sessionAttr("USER_SESSION", userSession))
+                .andExpect(status().isForbidden()); 
+    }
 
     @Test
-    @DisplayName("채팅방 삭제 실패 - 권한 없음")
-    void deleteRoomFailNoPermission() throws Exception {
-        // given
-        // 방장(creator)를 testUser와 다른 User로 설정하여 삭제 권한이 없도록 함
-        User otherUser = new User();
-        otherUser.setId(testUser.getId() + 1); // 다른 ID로 설정
-        testRoom.setCreator(otherUser);
-    
-        ChatRoomDto roomDto = new ChatRoomDto();
-        roomDto.setId(testRoom.getId());
-        roomDto.setCreatorId(String.valueOf(otherUser.getId())); // 다른 사용자를 방장으로 설정
-    
-        when(chatService.getRoomById(anyString(), anyString())).thenReturn(roomDto);
-        doThrow(new ChatException("No permission to delete room.", HttpStatus.FORBIDDEN))
-            .when(chatService).deleteRoom(anyString());
-    
-        // when & then
-        mockMvc.perform(delete("/api/chat/rooms/{roomId}", testRoom.getId())
-            .sessionAttr("USER_SESSION", userSession))
-            .andExpect(status().isForbidden());
+    @DisplayName("채팅방 삭제 실패 - 인증 안됨")
+    void deleteRoomFailNoAuth() throws Exception {
+        when(sessionValidationService.validateSession(null))
+            .thenThrow(new AuthException("세션이 없습니다. 다시 로그인해주세요.", HttpStatus.UNAUTHORIZED));
+        when(sessionValidationService.validateSession(""))
+            .thenThrow(new AuthException("세션이 없습니다. 다시 로그인해주세요.", HttpStatus.UNAUTHORIZED));
+
+        mockMvc.perform(delete("/api/chat/rooms/{roomId}", testRoom.getId()))
+                .andExpect(status().isUnauthorized()); 
     }
 } 

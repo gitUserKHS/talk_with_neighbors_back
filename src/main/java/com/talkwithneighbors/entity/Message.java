@@ -76,9 +76,14 @@ public class Message {
     
     /**
      * 메시지 읽음 상태
+     * 메시지가 삭제되면 관련 읽음 상태도 자동으로 삭제됩니다.
      */
-    @ElementCollection
-    @CollectionTable(name = "message_read_by")
+    @ElementCollection(fetch = FetchType.LAZY)
+    @CollectionTable(
+        name = "message_read_by",
+        joinColumns = @JoinColumn(name = "message_id", referencedColumnName = "id"),
+        foreignKey = @ForeignKey(name = "fk_message_read_by_message_id")
+    )
     @Column(name = "user_id")
     private Set<Long> readByUsers = new HashSet<>();
 

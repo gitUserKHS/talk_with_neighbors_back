@@ -31,6 +31,17 @@ public interface ChatRoomRepository extends JpaRepository<ChatRoom, String> {
     @Query("SELECT DISTINCT cr FROM ChatRoom cr JOIN FETCH cr.participants WHERE :user MEMBER OF cr.participants")
     Page<ChatRoom> findByParticipantsContaining(@Param("user") User user, Pageable pageable);
     
+    /**
+     * 특정 사용자가 참여한 모든 채팅방 목록을 최근 활동 순으로 조회합니다.
+     * 카카오톡처럼 가장 최근에 메시지가 있었던 채팅방부터 표시됩니다.
+     * 
+     * @param user 사용자
+     * @param pageable 페이징 정보
+     * @return 최근 활동 순으로 정렬된 채팅방 페이지
+     */
+    @Query("SELECT DISTINCT cr FROM ChatRoom cr JOIN FETCH cr.participants WHERE :user MEMBER OF cr.participants ORDER BY cr.lastMessageTime DESC")
+    Page<ChatRoom> findByParticipantsContainingOrderByLastMessageTimeDesc(@Param("user") User user, Pageable pageable);
+    
     @Query("SELECT cr FROM ChatRoom cr JOIN cr.participants p1 JOIN cr.participants p2 " +
            "WHERE p1 = :user1 AND p2 = :user2 AND SIZE(cr.participants) = 2")
     List<ChatRoom> findByParticipantsContainingAndParticipantsContaining(
@@ -74,4 +85,14 @@ public interface ChatRoomRepository extends JpaRepository<ChatRoom, String> {
 
     @Query("SELECT size(cr.participants) FROM ChatRoom cr WHERE cr.id = :roomId")
     Integer getParticipantCount(@Param("roomId") String roomId);
+    
+    // === 매칭 관련 메서드 추가 ===
+    /**
+     * 특정 사용자가 참여하고 특정 타입인 채팅방 목록을 조회합니다.
+     * @param user 사용자
+     * @param type 채팅방 타입
+     * @return 채팅방 목록
+     */
+    @Query("SELECT DISTINCT cr FROM ChatRoom cr JOIN FETCH cr.participants WHERE :user MEMBER OF cr.participants AND cr.type = :type")
+    List<ChatRoom> findByParticipantsContainingAndType(@Param("user") User user, @Param("type") ChatRoomType type);
 } 

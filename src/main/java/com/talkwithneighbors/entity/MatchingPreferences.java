@@ -30,10 +30,6 @@ public class MatchingPreferences {
     @JoinColumn(name = "user_id")
     private User user;
     
-    private Double latitude;
-    private Double longitude;
-    private String address;
-    
     /**
      * 최대 매칭 거리 (킬로미터)
      */

@@ -35,4 +35,6 @@ public interface UserSessionRepository extends JpaRepository<Session, String> {
     Optional<Session> findBySessionId(String sessionId);
     
     void deleteBySessionId(String sessionId);
+
+    List<Session> findAllByUserIdAndExpiresAtAfterAndSessionIdNot(Long userId, LocalDateTime expiresAt, String sessionId);
 } 

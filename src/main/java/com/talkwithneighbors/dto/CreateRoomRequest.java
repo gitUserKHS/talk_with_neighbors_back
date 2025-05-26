@@ -8,7 +8,7 @@ import java.util.List;
 public class CreateRoomRequest {
     private String name;
     private String type; // String 타입 유지
-    private List<Long> participantIds;
+    private List<String> participantNicknames;
     
     // 간단한 변환 로직만 유지
     public ChatRoomType getTypeEnum() {
