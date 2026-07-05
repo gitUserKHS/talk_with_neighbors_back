@@ -38,3 +38,6 @@ out/
 
 ### Application Secrets ###
 **/application-secret.yml
+
+### Local dev logs ###
+backend-dev*.log

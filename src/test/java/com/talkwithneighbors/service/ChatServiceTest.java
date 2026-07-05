@@ -46,6 +46,9 @@ class ChatServiceTest {
     @Mock
     private SimpMessagingTemplate messagingTemplate;
 
+    @Mock
+    private NotificationService notificationService;
+
     @InjectMocks
     private ChatServiceImpl chatService;
 
@@ -72,6 +75,8 @@ class ChatServiceTest {
         testChatRoom.setName("Test Room"); // 1:1 채팅 시 이 이름은 덮어쓰여짐
         testChatRoom.setType(ChatRoomType.ONE_ON_ONE);
         testChatRoom.setCreator(testUser);
+        testChatRoom.getParticipants().add(testUser);
+        testChatRoom.getParticipants().add(participantUser);
         // 필요하다면 testChatRoom의 participants에도 participantUser 추가
         // testChatRoom.getParticipants().add(testUser);
         // testChatRoom.getParticipants().add(participantUser);
@@ -134,7 +139,8 @@ class ChatServiceTest {
     void getChatRoomsForUserSuccess() {
         // given
         Page<ChatRoom> chatRoomPage = new org.springframework.data.domain.PageImpl<>(List.of(testChatRoom));
-        when(chatRoomRepository.findByParticipantsContaining(any(User.class), any()))
+        when(userRepository.findById(testUser.getId())).thenReturn(Optional.of(testUser));
+        when(chatRoomRepository.findByParticipantsContainingOrderByLastMessageTimeDesc(any(User.class), any()))
             .thenReturn(chatRoomPage);
 
         // when
@@ -159,8 +165,6 @@ class ChatServiceTest {
         when(chatRoomRepository.findById(anyString())).thenReturn(Optional.of(testChatRoom));
         when(userRepository.findById(anyLong())).thenReturn(Optional.of(testUser));
         when(messageRepository.save(any())).thenReturn(testMessage);
-        
-        doNothing().when(messagingTemplate).convertAndSend(anyString(), any(com.talkwithneighbors.dto.MessageDto.class));
 
         // when
         MessageDto savedDto = chatService.sendMessage(
@@ -193,6 +197,8 @@ class ChatServiceTest {
     void getMessagesSuccess() {
         // given
         Page<Message> messagePage = new org.springframework.data.domain.PageImpl<>(List.of(testMessage));
+        when(userRepository.findById(testUser.getId())).thenReturn(Optional.of(testUser));
+        when(chatRoomRepository.findById(testChatRoom.getId())).thenReturn(Optional.of(testChatRoom));
         when(messageRepository.findByChatRoomIdOrderByCreatedAtDesc(anyString(), any()))
             .thenReturn(messagePage);
 

@@ -31,6 +31,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.HashMap;
 import java.util.stream.Collectors;
+import com.talkwithneighbors.exception.AuthException;
 import com.talkwithneighbors.exception.ChatException;
 
 @RestController
@@ -74,11 +75,20 @@ public class ChatController extends BaseController {
 
     @GetMapping("/rooms")
     public ResponseEntity<Page<ChatRoomDto>> getRooms(
+            @RequestParam(name = "keyword", required = false, defaultValue = "") String keyword,
+            @RequestParam(name = "type", required = false) String typeString,
             @RequestParam(name = "page", defaultValue = "0") int page,
             @RequestParam(name = "size", defaultValue = "20") int size,
             HttpServletRequest request) {
         User user = getCurrentUser(request);
         Pageable pageable = PageRequest.of(page, size);
+        if ((keyword != null && !keyword.isBlank()) || (typeString != null && !typeString.isBlank())) {
+            ChatRoomType type = null;
+            if (typeString != null && !typeString.isBlank()) {
+                type = ChatRoomType.valueOf(typeString.toUpperCase());
+            }
+            return ResponseEntity.ok(chatService.searchRooms(keyword, type, user.getId().toString(), pageable));
+        }
         Page<ChatRoomDto> roomPage = chatService.getChatRoomsForUser(
             user.getId().toString(), pageable);
         return ResponseEntity.ok(roomPage);
@@ -176,6 +186,16 @@ public class ChatController extends BaseController {
         return ResponseEntity.ok().build();
     }
 
+    @PostMapping("/rooms/{roomId}/messages/{messageId}/read")
+    public ResponseEntity<Void> markMessageAsRead(
+            @PathVariable(name = "roomId") String roomId,
+            @PathVariable(name = "messageId") String messageId,
+            HttpServletRequest request) {
+        User user = getCurrentUser(request);
+        chatService.markMessageAsRead(messageId, user.getId().toString());
+        return ResponseEntity.ok().build();
+    }
+
     @DeleteMapping("/rooms/{roomId}")
     public ResponseEntity<Void> deleteRoom(@PathVariable(name = "roomId") String roomId, HttpServletRequest request) {
         log.info("[ChatController] deleteRoom request received for roomId: {}", roomId);
@@ -197,6 +217,9 @@ public class ChatController extends BaseController {
             
         } catch (ChatException e) {
             log.error("[ChatController] ChatException while deleting roomId {}: {}", roomId, e.getMessage());
+            return ResponseEntity.status(e.getStatus()).build();
+        } catch (AuthException e) {
+            log.error("[ChatController] AuthException while deleting roomId {}: {}", roomId, e.getMessage());
             return ResponseEntity.status(e.getStatus()).build();
         } catch (Exception e) {
             log.error("[ChatController] Unexpected error while deleting roomId {}: {}", roomId, e.getMessage(), e);

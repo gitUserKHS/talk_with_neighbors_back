@@ -1,18 +1,16 @@
 package com.talkwithneighbors.controller;
 
 import com.talkwithneighbors.entity.User;
-import com.talkwithneighbors.service.UserService;
-import jakarta.servlet.http.HttpSession;
+import com.talkwithneighbors.exception.AuthException;
 import com.talkwithneighbors.security.UserSession;
 import com.talkwithneighbors.service.SessionValidationService;
+import com.talkwithneighbors.service.UserService;
 import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpSession;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.HttpStatus;
 
-/**
- * 모든 컨트롤러의 기본 클래스
- * 세션 ID 추출 및 사용자 정보 가져오기 기능 제공
- */
 @Slf4j
 public abstract class BaseController {
 
@@ -22,58 +20,69 @@ public abstract class BaseController {
     @Autowired
     protected UserService userService;
 
-    /**
-     * HTTP 요청에서 세션 ID를 추출합니다.
-     * @param request HTTP 요청
-     * @return 추출된 세션 ID
-     */
     protected String extractSessionId(HttpServletRequest request) {
         String sessionId = request.getHeader("X-Session-Id");
-        if (sessionId == null || sessionId.isEmpty()) {
+        if (sessionId == null || sessionId.isBlank()) {
             log.warn("No session ID provided in request to {}", request.getRequestURI());
-            throw new RuntimeException("세션이 없습니다. 다시 로그인해주세요.");
+            throw new AuthException("세션이 없어요. 다시 로그인해 주세요.", HttpStatus.UNAUTHORIZED);
         }
-        
-        // 쉼표로 구분된 세션 ID가 있을 경우 첫 번째 세션 ID만 사용
+
         if (sessionId.contains(",")) {
-            String originalSessionId = sessionId;
             sessionId = sessionId.split(",")[0].trim();
-            log.info("Multiple session IDs detected. Using first: {} (from {})", sessionId, originalSessionId);
         }
-        
+
         return sessionId;
     }
 
-    /**
-     * HTTP 요청에서 현재 로그인한 사용자 정보를 가져옵니다.
-     * @param request HTTP 요청
-     * @return 사용자 엔티티
-     */
     protected User getCurrentUser(HttpServletRequest request) {
-        // 1. 테스트 환경(HttpSession)에 USER_SESSION이 있으면 우선 사용
+        String headerSessionId = request.getHeader("X-Session-Id");
+        if (headerSessionId != null && !headerSessionId.isBlank()) {
+            UserSession userSession = sessionValidationService.validateSession(extractSessionId(request));
+            if (userSession == null) {
+                throw new AuthException("세션이 만료되었어요. 다시 로그인해 주세요.", HttpStatus.UNAUTHORIZED);
+            }
+            if (userSession.getUserId() == null) {
+                throw new AuthException("세션 사용자 정보가 올바르지 않아요.", HttpStatus.UNAUTHORIZED);
+            }
+            return userService.getUserById(userSession.getUserId());
+        }
+
         HttpSession httpSession = request.getSession(false);
         if (httpSession != null) {
             Object sessionAttr = httpSession.getAttribute("USER_SESSION");
-            if (sessionAttr instanceof UserSession) {
-                UserSession userSession = (UserSession) sessionAttr;
+            if (sessionAttr instanceof UserSession userSession) {
                 if (userSession.getUserId() == null) {
-                    log.error("UserSession userId is null for session attribute: {}", userSession);
-                    throw new RuntimeException("User ID is null in session - user is not properly authenticated");
+                    throw new AuthException("세션 사용자 정보가 올바르지 않아요.", HttpStatus.UNAUTHORIZED);
                 }
                 return userService.getUserById(userSession.getUserId());
             }
+            Long reflectedUserId = extractUserIdFromSessionObject(sessionAttr);
+            if (reflectedUserId != null) {
+                return userService.getUserById(reflectedUserId);
+            }
         }
-        // 2. 실제 환경: 헤더 기반 세션 처리
-        String sessionId = extractSessionId(request);
-        UserSession userSession = sessionValidationService.validateSession(sessionId);
-        if (userSession == null) {
-            log.error("UserSession is null");
-            throw new RuntimeException("User session is null - user is not authenticated");
-        }
-        if (userSession.getUserId() == null) {
-            log.error("UserSession userId is null for session: {}", userSession);
-            throw new RuntimeException("User ID is null in session - user is not properly authenticated");
-        }
-        return userService.getUserById(userSession.getUserId());
+
+        throw new AuthException("세션이 없어요. 다시 로그인해 주세요.", HttpStatus.UNAUTHORIZED);
     }
-} 
+
+    private Long extractUserIdFromSessionObject(Object sessionAttr) {
+        if (sessionAttr == null) {
+            return null;
+        }
+        try {
+            Object value = sessionAttr.getClass().getMethod("getUserId").invoke(sessionAttr);
+            if (value instanceof Long userId) {
+                return userId;
+            }
+            if (value instanceof Number number) {
+                return number.longValue();
+            }
+            if (value instanceof String text && !text.isBlank()) {
+                return Long.parseLong(text);
+            }
+        } catch (Exception ignored) {
+            return null;
+        }
+        return null;
+    }
+}
