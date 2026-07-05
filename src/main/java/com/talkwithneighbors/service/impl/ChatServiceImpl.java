@@ -6,6 +6,7 @@ import com.talkwithneighbors.dto.MessageDto;
 import com.talkwithneighbors.entity.ChatRoom;
 import com.talkwithneighbors.entity.ChatRoomType;
 import com.talkwithneighbors.entity.Message;
+import com.talkwithneighbors.entity.Message.MessageType;
 import com.talkwithneighbors.entity.User;
 import com.talkwithneighbors.exception.ChatException;
 import com.talkwithneighbors.repository.ChatRoomRepository;
@@ -210,6 +211,7 @@ public class ChatServiceImpl implements ChatService {
         message.setChatRoom(room);
         message.setSender(sender);
         message.setContent(content);
+        message.setType(MessageType.TEXT);
         message.setCreatedAt(LocalDateTime.now());
         message.getReadByUsers().add(sender.getId()); // 발신자는 항상 읽음 처리
         log.info("[SendMessage] Prepared message object: ID={}, ChatRoomID={}, SenderID={}, Content='{}', CreatedAt={}", 
