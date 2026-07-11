@@ -1,6 +1,9 @@
 package com.talkwithneighbors.service;
 
+import com.talkwithneighbors.dto.ChatRoomDto;
+import com.talkwithneighbors.dto.matching.MatchProfileDto;
 import com.talkwithneighbors.dto.matching.MatchingPreferencesDto;
+import com.talkwithneighbors.entity.Match;
 import com.talkwithneighbors.entity.MatchStatus;
 import com.talkwithneighbors.entity.MatchingPreferences;
 import com.talkwithneighbors.entity.User;
@@ -11,6 +14,7 @@ import com.talkwithneighbors.repository.UserRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.InjectMocks;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
 import org.mockito.Spy;
@@ -159,6 +163,77 @@ class MatchingServiceTest {
         assertEquals(preferencesDto.getAgeRange()[1], existingPreferences.getMaxAge());
         assertEquals(preferencesDto.getGender(), existingPreferences.getPreferredGender());
         assertEquals(preferencesDto.getInterests(), existingPreferences.getPreferredInterests());
+    }
+
+    @Test
+    void requestMatchMarksRequesterAsAccepted() {
+        User requester = user(1L, true);
+        User target = user(2L, true);
+        target.setUsername("user2");
+        when(userRepository.findById(requester.getId())).thenReturn(Optional.of(requester));
+        when(userRepository.findById(target.getId())).thenReturn(Optional.of(target));
+        when(chatService.findOneOnOneChatRoom(requester.getId(), target.getId())).thenReturn(null);
+        when(matchRepository.existsActiveMatchBetween(any(), any(), any())).thenReturn(false);
+        when(matchingPreferencesRepository.findByUserId(requester.getId())).thenReturn(Optional.empty());
+        when(matchRepository.save(any(Match.class))).thenAnswer(invocation -> {
+            Match match = invocation.getArgument(0);
+            match.setId("match-request");
+            return match;
+        });
+
+        matchingService.requestMatch(requester.getId(), target.getId());
+
+        ArgumentCaptor<Match> matchCaptor = ArgumentCaptor.forClass(Match.class);
+        verify(matchRepository).save(matchCaptor.capture());
+        assertEquals(MatchStatus.USER1_ACCEPTED, matchCaptor.getValue().getStatus());
+        org.junit.jupiter.api.Assertions.assertNotNull(matchCaptor.getValue().getRespondedAt());
+    }
+
+    @Test
+    void incomingRequestsAreLoadedFromTheDatabaseForTheUserWhoMustRespond() {
+        User requester = user(1L, true);
+        User target = user(2L, true);
+        Match match = new Match();
+        match.setId("incoming-match");
+        match.setUser1(requester);
+        match.setUser2(target);
+        match.setStatus(MatchStatus.USER1_ACCEPTED);
+        match.setCreatedAt(LocalDateTime.now());
+        match.setExpiresAt(LocalDateTime.now().plusHours(1));
+
+        when(userRepository.findById(target.getId())).thenReturn(Optional.of(target));
+        when(matchingPreferencesRepository.findByUserId(target.getId())).thenReturn(Optional.empty());
+        when(matchRepository.findByUserId(target.getId())).thenReturn(List.of(match));
+
+        List<MatchProfileDto> requests = matchingService.getIncomingRequests(target.getId());
+
+        assertEquals(1, requests.size());
+        assertEquals("incoming-match", requests.get(0).getMatchId());
+        assertEquals(requester.getUsername(), requests.get(0).getUsername());
+    }
+
+    @Test
+    void acceptingDirectRequestReturnsCreatedChatRoom() {
+        User requester = user(1L, true);
+        User target = user(2L, true);
+        Match match = new Match();
+        match.setId("direct-request");
+        match.setUser1(requester);
+        match.setUser2(target);
+        match.setStatus(MatchStatus.USER1_ACCEPTED);
+        match.setExpiresAt(LocalDateTime.now().plusHours(1));
+        ChatRoomDto room = new ChatRoomDto();
+        room.setId("chat-room");
+
+        when(matchRepository.findByIdAndUserId(match.getId(), target.getId())).thenReturn(Optional.of(match));
+        when(matchRepository.save(match)).thenReturn(match);
+        when(chatService.findOneOnOneChatRoom(target.getId(), requester.getId())).thenReturn(null);
+        when(chatService.createRoom(any(), any(), eq(target.getId().toString()), anyList())).thenReturn(room);
+
+        ChatRoomDto result = matchingService.acceptMatch(match.getId(), target.getId());
+
+        assertEquals(MatchStatus.BOTH_ACCEPTED, match.getStatus());
+        assertEquals("chat-room", result.getId());
     }
 
     private User user(Long id, boolean completeProfile) {

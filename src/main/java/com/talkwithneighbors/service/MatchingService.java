@@ -131,6 +131,30 @@ public class MatchingService {
                 .collect(Collectors.toList());
     }
 
+    @Transactional(readOnly = true)
+    public List<MatchProfileDto> getIncomingRequests(Long userId) {
+        User currentUser = getUserById(userId);
+        MatchingPreferencesDto preferences = matchingPreferencesRepository.findByUserId(userId)
+                .map(preference -> compatibilityScoreService.toDto(preference, currentUser))
+                .orElseGet(() -> compatibilityScoreService.toDto(null, currentUser));
+
+        return matchRepository.findByUserId(userId).stream()
+                .filter(match -> !isExpired(match))
+                .filter(match -> isWaitingForResponseFrom(match, userId))
+                .sorted(Comparator.comparing(Match::getCreatedAt, Comparator.nullsLast(Comparator.reverseOrder())))
+                .map(match -> {
+                    User requester = match.getUser1().getId().equals(userId) ? match.getUser2() : match.getUser1();
+                    return toMatchProfile(
+                            requester,
+                            currentUser,
+                            compatibilityScoreService.calculateDistance(currentUser, requester),
+                            match.getId(),
+                            preferences
+                    );
+                })
+                .collect(Collectors.toList());
+    }
+
     @Transactional
     public MatchProfileDto requestMatch(Long requesterId, Long targetUserId) {
         User requester = getUserById(requesterId);
@@ -154,7 +178,12 @@ public class MatchingService {
                 .map(preference -> compatibilityScoreService.toDto(preference, requester))
                 .orElseGet(() -> compatibilityScoreService.toDto(null, requester));
 
-        Match savedMatch = matchRepository.save(createPendingMatch(requester, target));
+        Match pendingMatch = createPendingMatch(requester, target);
+        // 요청을 보낸 사용자는 이미 매칭 의사를 표현했으므로 첫 수락 상태로 시작합니다.
+        // 상대방이 수락하면 즉시 BOTH_ACCEPTED가 되어 1:1 채팅방이 열립니다.
+        pendingMatch.setStatus(MatchStatus.USER1_ACCEPTED);
+        pendingMatch.setRespondedAt(LocalDateTime.now());
+        Match savedMatch = matchRepository.save(pendingMatch);
         sendMatchOfferNotification(savedMatch, requester, target, preferences);
         return toMatchProfile(target, requester, compatibilityScoreService.calculateDistance(requester, target), savedMatch.getId(), preferences);
     }
@@ -193,7 +222,7 @@ public class MatchingService {
     }
 
     @Transactional
-    public void acceptMatch(String matchId, Long userId) {
+    public ChatRoomDto acceptMatch(String matchId, Long userId) {
         Match match = getMatchForUser(matchId, userId);
         ensureMatchCanBeResponded(match);
 
@@ -209,8 +238,9 @@ public class MatchingService {
         notifyMatchAccepted(savedMatch, currentUser, otherUser);
 
         if (savedMatch.getStatus() == MatchStatus.BOTH_ACCEPTED) {
-            createOrReuseChatRoom(savedMatch, currentUser, otherUser);
+            return createOrReuseChatRoom(savedMatch, currentUser, otherUser);
         }
+        return null;
     }
 
     @Transactional
@@ -331,6 +361,15 @@ public class MatchingService {
         throw new MatchingException("이미 수락한 매칭이에요.", HttpStatus.CONFLICT);
     }
 
+    private boolean isWaitingForResponseFrom(Match match, Long userId) {
+        boolean currentUserIsUser1 = match.getUser1().getId().equals(userId);
+        return switch (match.getStatus()) {
+            case PENDING, USER1_ACCEPTED -> !currentUserIsUser1;
+            case USER2_ACCEPTED -> currentUserIsUser1;
+            default -> false;
+        };
+    }
+
     private void ensureMatchCanBeResponded(Match match) {
         if (match.getStatus() == MatchStatus.BOTH_ACCEPTED
                 || match.getStatus() == MatchStatus.REJECTED
@@ -356,9 +395,9 @@ public class MatchingService {
         return chatService != null && chatService.findOneOnOneChatRoom(user1Id, user2Id) != null;
     }
 
-    private void createOrReuseChatRoom(Match match, User currentUser, User otherUser) {
+    private ChatRoomDto createOrReuseChatRoom(Match match, User currentUser, User otherUser) {
         if (chatService == null) {
-            return;
+            return null;
         }
 
         ChatRoomDto chatRoom = chatService.findOneOnOneChatRoom(currentUser.getId(), otherUser.getId());
@@ -380,6 +419,7 @@ public class MatchingService {
         );
         sendToUser(currentUser.getId(), notification);
         sendToUser(otherUser.getId(), notification);
+        return chatRoom;
     }
 
     private void sendMatchOfferNotification(Match match, User requester, User target, MatchingPreferencesDto preferences) {

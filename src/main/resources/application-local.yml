@@ -1,0 +1,27 @@
+spring:
+  datasource:
+    url: jdbc:h2:mem:talk_with_neighbors_local;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE
+    driver-class-name: org.h2.Driver
+    username: sa
+    password:
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+    database: h2
+    database-platform: org.hibernate.dialect.H2Dialect
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.H2Dialect
+  session:
+    store-type: none
+  data:
+    redis:
+      repositories:
+        enabled: false
+
+server:
+  port: 8080
+
+app:
+  redis:
+    enabled: false

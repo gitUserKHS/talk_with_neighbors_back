@@ -44,14 +44,14 @@ public class FeedPostDto {
         dto.setAuthorProfileImage(author != null ? author.getProfileImage() : null);
         dto.setImageUrl(post.getImageUrl());
         dto.setCaption(post.getCaption());
-        dto.setInterestTags(post.getInterestTags() != null ? post.getInterestTags() : List.of());
+        dto.setInterestTags(post.getInterestTags() != null ? List.copyOf(post.getInterestTags()) : List.of());
         dto.setCreatedAt(post.getCreatedAt());
         dto.setUpdatedAt(post.getUpdatedAt());
         dto.setLikeCount(likeCount);
         dto.setCommentCount(commentCount);
         dto.setLikedByCurrentUser(likedByCurrentUser);
         dto.setCompatibilityScore(compatibilityScore);
-        dto.setSharedInterests(sharedInterests != null ? sharedInterests : List.of());
+        dto.setSharedInterests(sharedInterests != null ? List.copyOf(sharedInterests) : List.of());
         return dto;
     }
 }

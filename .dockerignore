@@ -1,0 +1,9 @@
+.git
+.github
+.gradle
+build
+target
+*.log
+.idea
+.vscode
+**/application-secret.yml

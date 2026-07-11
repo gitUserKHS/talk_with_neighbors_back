@@ -199,7 +199,7 @@ public class MatchingControllerTest {
     void acceptMatchSuccess() throws Exception {
         // given
         String matchId = "test-match-id";
-        doNothing().when(matchingService).acceptMatch(anyString(), anyLong());
+        when(matchingService.acceptMatch(anyString(), anyLong())).thenReturn(null);
 
         // when & then
         var result = mockMvc.perform(post("/api/matching/{matchId}/accept", matchId)

@@ -155,9 +155,17 @@ public class ChatServiceImpl implements ChatService {
         ChatRoom chatRoom = chatRoomRepository.findById(roomId)
                 .orElseThrow(() -> new RuntimeException("Chat room not found"));
 
+        if (chatRoom.getType() != ChatRoomType.GROUP || !chatRoom.isPublicRoom()) {
+            throw new ChatException("Only public hobby meetups can be joined directly.", HttpStatus.FORBIDDEN);
+        }
+
         if (chatRoom.getParticipants().contains(user)) {
             log.info("User {} is already a participant in room {}", user.getId(), roomId);
             return;
+        }
+        if (chatRoom.getMaxParticipants() != null
+                && chatRoom.getParticipants().size() >= chatRoom.getMaxParticipants()) {
+            throw new ChatException("This hobby meetup is already full.", HttpStatus.CONFLICT);
         }
         chatRoom.getParticipants().add(user);
         chatRoomRepository.save(chatRoom);
@@ -185,6 +193,13 @@ public class ChatServiceImpl implements ChatService {
     public MessageDto sendMessage(String roomId, Long senderId, String content) {
         log.info("[SendMessage] Attempting to send message. RoomId: {}, SenderId: {}, Content: '{}'", roomId, senderId, content);
 
+        if (content == null || content.trim().isEmpty()) {
+            throw new ChatException("Message content cannot be empty.", HttpStatus.BAD_REQUEST);
+        }
+        if (content.trim().length() > 2000) {
+            throw new ChatException("Message content is too long.", HttpStatus.BAD_REQUEST);
+        }
+
         ChatRoom room = chatRoomRepository.findById(roomId)
                 .orElseThrow(() -> {
                     log.error("[SendMessage] Chat room not found with id: {}", roomId);
@@ -199,18 +214,17 @@ public class ChatServiceImpl implements ChatService {
                 });
         log.info("[SendMessage] Found sender: ID={}, Username='{}'", sender.getId(), sender.getUsername());
         
-        // 메시지 발신자가 채팅방 참여자인지 확인 (선택적이지만 권장)
+        // 참여 중인 사용자만 메시지를 보낼 수 있습니다.
         if (room.getParticipants().stream().noneMatch(p -> p.getId().equals(senderId))) {
-            log.warn("[SendMessage] Sender (ID: {}) is not a participant in room (ID: {}). Message will be saved but may not be intended.", senderId, roomId);
-            // 필요시 여기서 예외를 던져 메시지 전송을 막을 수 있습니다.
-            // throw new ChatException("Sender is not a participant of this chat room.", HttpStatus.FORBIDDEN);
+            log.warn("[SendMessage] Sender (ID: {}) is not a participant in room (ID: {}).", senderId, roomId);
+            throw new ChatException("Sender is not a participant of this chat room.", HttpStatus.FORBIDDEN);
         }
 
         Message message = new Message();
         message.setId(UUID.randomUUID().toString());
         message.setChatRoom(room);
         message.setSender(sender);
-        message.setContent(content);
+        message.setContent(content.trim());
         message.setType(MessageType.TEXT);
         message.setCreatedAt(LocalDateTime.now());
         message.getReadByUsers().add(sender.getId()); // 발신자는 항상 읽음 처리

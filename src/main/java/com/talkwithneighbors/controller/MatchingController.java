@@ -1,5 +1,6 @@
 package com.talkwithneighbors.controller;
 
+import com.talkwithneighbors.dto.ChatRoomDto;
 import com.talkwithneighbors.dto.matching.MatchProfileDto;
 import com.talkwithneighbors.dto.matching.MatchingPreferencesDto;
 import com.talkwithneighbors.security.RequireLogin;
@@ -57,6 +58,11 @@ public class MatchingController {
         return ResponseEntity.ok(matchingService.getRecommendations(userSession.getUserId()));
     }
 
+    @GetMapping("/requests/incoming")
+    public ResponseEntity<List<MatchProfileDto>> getIncomingRequests(UserSession userSession) {
+        return ResponseEntity.ok(matchingService.getIncomingRequests(userSession.getUserId()));
+    }
+
     @PostMapping("/users/{targetUserId}/request")
     public ResponseEntity<MatchProfileDto> requestMatch(
             @PathVariable("targetUserId") Long targetUserId,
@@ -83,14 +89,14 @@ public class MatchingController {
     }
 
     @PostMapping("/{matchId}/accept")
-    public ResponseEntity<Void> acceptMatch(
+    public ResponseEntity<ChatRoomDto> acceptMatch(
             @PathVariable("matchId") String matchId,
             UserSession userSession
     ) {
         log.info("[MatchingController] acceptMatch request received: matchId={}, userId={}", matchId, userSession.getUserId());
-        matchingService.acceptMatch(matchId, userSession.getUserId());
+        ChatRoomDto chatRoom = matchingService.acceptMatch(matchId, userSession.getUserId());
         log.info("[MatchingController] acceptMatch completed successfully: matchId={}, userId={}", matchId, userSession.getUserId());
-        return ResponseEntity.ok().build();
+        return ResponseEntity.ok(chatRoom);
     }
 
     @PostMapping("/{matchId}/reject")

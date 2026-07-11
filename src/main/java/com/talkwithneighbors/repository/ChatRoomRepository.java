@@ -54,6 +54,8 @@ public interface ChatRoomRepository extends JpaRepository<ChatRoom, String> {
      * @return 채팅방 페이지
      */
     Page<ChatRoom> findByType(ChatRoomType type, Pageable pageable);
+
+    List<ChatRoom> findByTypeAndPublicRoomTrueOrderByLastMessageTimeDesc(ChatRoomType type);
     
     /**
      * 채팅방 타입과 이름 또는 ID로 채팅방을 조회합니다. (페이징 처리)

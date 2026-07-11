@@ -8,6 +8,7 @@ import lombok.Getter;
 import lombok.Setter;
 import lombok.NoArgsConstructor;
 import java.time.format.DateTimeFormatter;
+import java.util.List;
 import java.util.Set;
 import java.util.stream.Collectors;
 import org.slf4j.Logger;
@@ -22,6 +23,11 @@ public class ChatRoomDto {
     private String id;
     private String roomName;
     private ChatRoomType type;
+    private Boolean publicRoom;
+    private String description;
+    private List<String> interestTags;
+    private String location;
+    private Integer maxParticipants;
     private String creatorId;
     private Set<Long> participantIds;
     private String lastMessage;
@@ -40,6 +46,11 @@ public class ChatRoomDto {
         dto.setId(chatRoom.getId()); 
         dto.setRoomName(chatRoom.getName());
         dto.setType(chatRoom.getType());
+        dto.setPublicRoom(chatRoom.isPublicRoom());
+        dto.setDescription(chatRoom.getDescription());
+        dto.setInterestTags(chatRoom.getInterestTags() != null ? List.copyOf(chatRoom.getInterestTags()) : List.of());
+        dto.setLocation(chatRoom.getLocation());
+        dto.setMaxParticipants(chatRoom.getMaxParticipants());
 
         if (chatRoom.getCreator() != null && chatRoom.getCreator().getId() != null) {
             // User의 ID는 Long이므로 .toString()이 필요합니다.
