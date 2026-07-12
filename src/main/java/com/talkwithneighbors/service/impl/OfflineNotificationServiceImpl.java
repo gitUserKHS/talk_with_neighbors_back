@@ -107,14 +107,8 @@ public class OfflineNotificationServiceImpl implements OfflineNotificationServic
             int errorCount = 0;
             
             // 전송할 알림 타입 정의
-            Set<OfflineNotification.NotificationType> allowedTypes = EnumSet.of(
-                    OfflineNotification.NotificationType.NEW_MESSAGE,
-                    OfflineNotification.NotificationType.MATCH_REQUEST,
-                    OfflineNotification.NotificationType.MATCH_ACCEPTED,
-                    OfflineNotification.NotificationType.MATCH_REJECTED,
-                    OfflineNotification.NotificationType.ROOM_DELETED,
-                    OfflineNotification.NotificationType.UNREAD_COUNT_UPDATE
-            );
+            Set<OfflineNotification.NotificationType> allowedTypes =
+                    EnumSet.allOf(OfflineNotification.NotificationType.class);
             
             for (OfflineNotification notification : pendingNotifications) {
                 // 허용된 타입의 알림인지 확인

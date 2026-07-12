@@ -11,6 +11,7 @@
 5. [API 및 실시간 통신](05-api-and-realtime.md) — REST, WebSocket 계약과 알려진 불일치
 6. [실행·배포·CI/CD](06-operations-and-cicd.md) — Docker Compose, GHCR, GitHub Actions
 7. [아키텍처 발전 계획](07-architecture-roadmap.md) — 모듈형 모놀리스와 Kafka 도입 기준
+8. [제품 기능 백로그](08-product-backlog.md) — 다음 기능 후보와 우선순위
 
 ## 빠른 시작
 
