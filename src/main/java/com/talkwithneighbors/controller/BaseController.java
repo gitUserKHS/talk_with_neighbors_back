@@ -7,6 +7,7 @@ import com.talkwithneighbors.service.SessionValidationService;
 import com.talkwithneighbors.service.UserService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpSession;
+import jakarta.servlet.http.Cookie;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
@@ -36,8 +37,19 @@ public abstract class BaseController {
 
     protected User getCurrentUser(HttpServletRequest request) {
         String headerSessionId = request.getHeader("X-Session-Id");
+        if ((headerSessionId == null || headerSessionId.isBlank()) && request.getCookies() != null) {
+            for (Cookie cookie : request.getCookies()) {
+                if ("TWN_SESSION".equals(cookie.getName())) {
+                    headerSessionId = cookie.getValue();
+                    break;
+                }
+            }
+        }
         if (headerSessionId != null && !headerSessionId.isBlank()) {
-            UserSession userSession = sessionValidationService.validateSession(extractSessionId(request));
+            String resolvedSessionId = headerSessionId.contains(",")
+                    ? headerSessionId.split(",")[0].trim()
+                    : headerSessionId.trim();
+            UserSession userSession = sessionValidationService.validateSession(resolvedSessionId);
             if (userSession == null) {
                 throw new AuthException("세션이 만료되었어요. 다시 로그인해 주세요.", HttpStatus.UNAUTHORIZED);
             }

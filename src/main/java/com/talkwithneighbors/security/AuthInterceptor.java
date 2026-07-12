@@ -4,6 +4,7 @@ import com.talkwithneighbors.service.SessionValidationService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.servlet.http.HttpSession;
+import jakarta.servlet.http.Cookie;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
@@ -74,6 +75,14 @@ public class AuthInterceptor implements HandlerInterceptor {
         if (userSession == null) {
             log.debug("[AuthInterceptor] UserSession not found in HttpSession, checking X-Session-Id header.");
             sessionId = request.getHeader("X-Session-Id");
+            if ((sessionId == null || sessionId.isBlank()) && request.getCookies() != null) {
+                for (Cookie cookie : request.getCookies()) {
+                    if ("TWN_SESSION".equals(cookie.getName())) {
+                        sessionId = cookie.getValue();
+                        break;
+                    }
+                }
+            }
             if (sessionId != null && !sessionId.isEmpty()) {
                 if (sessionId.contains(",")) {
                     String originalSessionId = sessionId;
@@ -110,4 +119,4 @@ public class AuthInterceptor implements HandlerInterceptor {
             return false;
         }
     }
-} 
+}

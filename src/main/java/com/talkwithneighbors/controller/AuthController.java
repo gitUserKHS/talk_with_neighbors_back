@@ -9,8 +9,12 @@ import com.talkwithneighbors.service.AuthService;
 import com.talkwithneighbors.service.AuthService.AuthResponse;
 import com.talkwithneighbors.service.AuthService.DuplicateCheckResponse;
 import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.Cookie;
+import org.springframework.http.ResponseCookie;
+import java.time.Duration;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -21,7 +25,12 @@ import org.springframework.web.bind.annotation.*;
 @RequiredArgsConstructor
 public class AuthController {
 
+    private static final String SESSION_COOKIE = "TWN_SESSION";
+
     private final AuthService authService;
+
+    @Value("${app.session.cookie-secure:false}")
+    private boolean secureSessionCookie;
 
     @PostMapping("/login")
     public ResponseEntity<UserDto> login(@RequestBody LoginRequestDto request) {
@@ -33,6 +42,7 @@ public class AuthController {
         headers.add("X-Session-Id", response.getSessionId());
         // 세션 ID 설정에 "replace" 추가
         headers.add("Access-Control-Expose-Headers", "X-Session-Id");
+        headers.add(HttpHeaders.SET_COOKIE, sessionCookie(response.getSessionId()).toString());
         log.info("Login successful. Setting session ID in header: {}", response.getSessionId());
         
         return ResponseEntity.ok()
@@ -50,6 +60,7 @@ public class AuthController {
         headers.add("X-Session-Id", response.getSessionId());
         // 세션 ID 설정에 "replace" 추가
         headers.add("Access-Control-Expose-Headers", "X-Session-Id");
+        headers.add(HttpHeaders.SET_COOKIE, sessionCookie(response.getSessionId()).toString());
         log.info("Registration successful. Setting session ID in header: {}", response.getSessionId());
         
         return ResponseEntity.ok()
@@ -58,10 +69,12 @@ public class AuthController {
     }
     
     @PostMapping("/logout")
-    public ResponseEntity<Void> logout(@RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+    public ResponseEntity<Void> logout(@RequestHeader(value = "X-Session-Id", required = false) String sessionId,
+                                       HttpServletRequest request) {
+        sessionId = resolveSessionId(sessionId, request);
         if (sessionId == null || sessionId.isEmpty()) {
             log.warn("Logout request received with no session ID");
-            return ResponseEntity.ok().build();
+            return ResponseEntity.noContent().header(HttpHeaders.SET_COOKIE, expiredSessionCookie().toString()).build();
         }
         
         log.info("Logout request received for session: {}", sessionId);
@@ -70,11 +83,13 @@ public class AuthController {
         log.info("Using first session ID for logout: {}", actualSessionId);
         
         authService.logout(actualSessionId);
-        return ResponseEntity.ok().build();
+        return ResponseEntity.noContent().header(HttpHeaders.SET_COOKIE, expiredSessionCookie().toString()).build();
     }
 
     @GetMapping("/me")
-    public ResponseEntity<UserDto> getCurrentUser(@RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+    public ResponseEntity<UserDto> getCurrentUser(@RequestHeader(value = "X-Session-Id", required = false) String sessionId,
+                                                   HttpServletRequest request) {
+        sessionId = resolveSessionId(sessionId, request);
         if (sessionId == null || sessionId.isEmpty()) {
             log.warn("getCurrentUser request received with no session ID");
             throw new RuntimeException("세션이 없습니다. 다시 로그인해주세요.");
@@ -90,7 +105,9 @@ public class AuthController {
 
     @PutMapping("/profile")
     @RequireLogin
-    public ResponseEntity<UserDto> updateProfile(@RequestBody UserDto request, @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+    public ResponseEntity<UserDto> updateProfile(@RequestBody UserDto request, @RequestHeader(value = "X-Session-Id", required = false) String sessionId,
+                                                  HttpServletRequest httpRequest) {
+        sessionId = resolveSessionId(sessionId, httpRequest);
         if (sessionId == null || sessionId.isEmpty()) {
             log.warn("updateProfile request received with no session ID");
             throw new RuntimeException("세션이 없습니다. 다시 로그인해주세요.");
@@ -106,8 +123,29 @@ public class AuthController {
 
     @GetMapping("/profile")
     @RequireLogin
-    public ResponseEntity<UserDto> getProfile(@RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
-        return getCurrentUser(sessionId);
+    public ResponseEntity<UserDto> getProfile(@RequestHeader(value = "X-Session-Id", required = false) String sessionId,
+                                               HttpServletRequest request) {
+        return getCurrentUser(sessionId, request);
+    }
+
+    private String resolveSessionId(String headerSessionId, HttpServletRequest request) {
+        if (headerSessionId != null && !headerSessionId.isBlank()) return headerSessionId;
+        if (request.getCookies() == null) return null;
+        for (Cookie cookie : request.getCookies()) {
+            if (SESSION_COOKIE.equals(cookie.getName()) && !cookie.getValue().isBlank()) return cookie.getValue();
+        }
+        return null;
+    }
+
+    private ResponseCookie sessionCookie(String sessionId) {
+        return ResponseCookie.from(SESSION_COOKIE, sessionId)
+                .httpOnly(true).secure(secureSessionCookie).sameSite("Lax").path("/")
+                .maxAge(Duration.ofHours(24)).build();
+    }
+
+    private ResponseCookie expiredSessionCookie() {
+        return ResponseCookie.from(SESSION_COOKIE, "").httpOnly(true).secure(secureSessionCookie)
+                .sameSite("Lax").path("/").maxAge(Duration.ZERO).build();
     }
 
     /**
@@ -124,4 +162,4 @@ public class AuthController {
         DuplicateCheckResponse response = authService.checkDuplicates(email, username);
         return ResponseEntity.ok(response);
     }
-} 
+}
