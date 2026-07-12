@@ -170,6 +170,7 @@ public class AuthService {
         user.setAge(request.getAge());
         user.setGender(request.getGender());
         user.setBio(request.getBio());
+        user.setProfileImage(request.getProfileImage());
         user.setLatitude(request.getLatitude());
         user.setLongitude(request.getLongitude());
         user.setAddress(request.getAddress());

@@ -99,6 +99,8 @@ public interface ChatRoomRepository extends JpaRepository<ChatRoom, String> {
     @Query("SELECT DISTINCT cr FROM ChatRoom cr JOIN FETCH cr.participants WHERE :user MEMBER OF cr.participants AND cr.type = :type")
     List<ChatRoom> findByParticipantsContainingAndType(@Param("user") User user, @Param("type") ChatRoomType type);
 
+    List<ChatRoom> findByCreator_IdAndTypeOrderByScheduledAtDesc(Long creatorId, ChatRoomType type);
+
     List<ChatRoom> findByPublicRoomTrueAndScheduledAtBetweenAndReminderSentAtIsNull(
             LocalDateTime start, LocalDateTime end);
 }

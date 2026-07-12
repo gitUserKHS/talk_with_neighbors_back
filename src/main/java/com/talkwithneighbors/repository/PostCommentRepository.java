@@ -11,4 +11,9 @@ public interface PostCommentRepository extends JpaRepository<PostComment, String
     List<PostComment> findByPost_IdOrderByCreatedAtAsc(String postId);
 
     long countByPost_Id(String postId);
+
+    List<PostComment> findByAuthor_IdOrderByCreatedAtDesc(Long authorId);
+
+    @org.springframework.transaction.annotation.Transactional
+    void deleteByPost_Id(String postId);
 }

@@ -52,7 +52,7 @@ public class MatchProfileDto {
         // 공개 프로필에는 정확한 좌표를 노출하지 않는다. 거리는 서버에서 계산하고 동네 단위 주소만 제공한다.
         locationDto.setLatitude(null);
         locationDto.setLongitude(null);
-        locationDto.setAddress(generalizeAddress(user.getAddress()));
+        locationDto.setAddress(Boolean.FALSE.equals(user.getShowNeighborhood()) ? null : generalizeAddress(user.getAddress()));
         dto.setLocation(locationDto);
         
         dto.setDistance(distance);

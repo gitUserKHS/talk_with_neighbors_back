@@ -69,6 +69,17 @@ public class HobbyMeetupService {
         return new PageImpl<>(meetups.subList(start, end), pageable, meetups.size());
     }
 
+    @Transactional(readOnly = true)
+    public List<HobbyMeetupDto> myMeetups(Long currentUserId) {
+        User currentUser = getUser(currentUserId);
+        return chatRoomRepository.findByParticipantsContainingAndType(currentUser, ChatRoomType.GROUP).stream()
+                .filter(ChatRoom::isPublicRoom)
+                .sorted(Comparator.comparing(ChatRoom::getScheduledAt,
+                        Comparator.nullsLast(Comparator.reverseOrder())))
+                .map(room -> toDto(room, currentUser))
+                .toList();
+    }
+
     public HobbyMeetupDto createMeetup(Long creatorId, CreateHobbyMeetupRequest request) {
         User creator = getUser(creatorId);
         List<String> tags = cleanTags(request.getInterestTags());

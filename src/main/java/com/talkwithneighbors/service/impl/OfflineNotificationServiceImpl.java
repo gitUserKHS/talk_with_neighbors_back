@@ -34,6 +34,7 @@ public class OfflineNotificationServiceImpl implements OfflineNotificationServic
     private final SimpUserRegistry simpUserRegistry;
     private final ObjectMapper objectMapper;
     private final RedisSessionService redisSessionService;
+    private final com.talkwithneighbors.repository.UserRepository userRepository;
     
     @Override
     @Transactional
@@ -43,6 +44,10 @@ public class OfflineNotificationServiceImpl implements OfflineNotificationServic
                                        String message, 
                                        String actionUrl, 
                                        Integer priority) {
+        if (!notificationEnabled(userId, type)) {
+            log.debug("Notification disabled by user preference. userId={}, type={}", userId, type);
+            return null;
+        }
         log.info("=== [OfflineNotificationService] saveOfflineNotification START ===");
         log.info("[OfflineNotificationService] userId: {}, type: {}, priority: {}", userId, type, priority);
         log.info("[OfflineNotificationService] message: {}", message);
@@ -80,6 +85,17 @@ public class OfflineNotificationServiceImpl implements OfflineNotificationServic
                       userId, type, e.getMessage(), e);
             throw e; // 예외를 다시 던져서 상위에서 확인할 수 있도록
         }
+    }
+
+    private boolean notificationEnabled(Long userId, OfflineNotification.NotificationType type) {
+        if (userRepository == null) return true;
+        return userRepository.findById(userId).map(user -> switch (type) {
+            case MATCH_REQUEST, MATCH_ACCEPTED, MATCH_REJECTED -> !Boolean.FALSE.equals(user.getMatchNotificationsEnabled());
+            case NEW_MESSAGE, CHAT_ROOM_LIST_UPDATE, UNREAD_COUNT_UPDATE, MESSAGE_READ_STATUS, ROOM_DELETED ->
+                    !Boolean.FALSE.equals(user.getChatNotificationsEnabled());
+            case MEETUP_REMINDER, MEETUP_WAITLIST_PROMOTED -> !Boolean.FALSE.equals(user.getMeetupNotificationsEnabled());
+            case SYSTEM_NOTICE -> true;
+        }).orElse(true);
     }
     
     @Override

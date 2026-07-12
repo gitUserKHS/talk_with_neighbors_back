@@ -110,6 +110,45 @@ public class SafetyService {
                 .ifPresent(hiddenContentRepository::delete);
     }
 
+    @Transactional(readOnly = true)
+    public List<HiddenContentDto> hiddenContents(Long currentUserId) {
+        return hiddenContentRepository.findByUser_IdOrderByCreatedAtDesc(currentUserId).stream()
+                .map(this::toHiddenContentDto)
+                .toList();
+    }
+
+    private HiddenContentDto toHiddenContentDto(HiddenContent hidden) {
+        String title = "숨긴 콘텐츠";
+        String preview = null;
+        String imageUrl = null;
+        boolean available = false;
+        if (hidden.getTargetType() == SafetyTargetType.FEED_POST) {
+            FeedPost post = feedPostRepository.findById(hidden.getTargetId()).orElse(null);
+            if (post != null) {
+                title = post.getAuthor() != null ? post.getAuthor().getUsername() + "님의 게시글" : "게시글";
+                preview = post.getCaption();
+                imageUrl = post.getImageUrl();
+                available = true;
+            }
+        } else if (hidden.getTargetType() == SafetyTargetType.COMMENT) {
+            PostComment comment = postCommentRepository.findById(hidden.getTargetId()).orElse(null);
+            if (comment != null) {
+                title = comment.getAuthor() != null ? comment.getAuthor().getUsername() + "님의 댓글" : "댓글";
+                preview = comment.getContent();
+                available = true;
+            }
+        } else if (hidden.getTargetType() == SafetyTargetType.MESSAGE) {
+            Message message = messageRepository.findById(hidden.getTargetId()).orElse(null);
+            if (message != null) {
+                title = "숨긴 메시지";
+                preview = message.getContent();
+                available = true;
+            }
+        }
+        return new HiddenContentDto(hidden.getId(), hidden.getTargetType(), hidden.getTargetId(), title,
+                preview, imageUrl, available, hidden.getCreatedAt());
+    }
+
     private void validateTarget(SafetyTargetType type, String id) {
         boolean exists = switch (type) {
             case USER -> parseUserId(id) != null && userRepository.existsById(parseUserId(id));

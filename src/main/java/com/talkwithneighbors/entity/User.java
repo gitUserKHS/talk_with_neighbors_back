@@ -119,6 +119,26 @@ public class User {
     @Column(name = "last_location_update")
     private LocalDateTime lastLocationUpdate;
 
+    @Column(name = "profile_discoverable")
+    @Builder.Default
+    private Boolean profileDiscoverable = true;
+
+    @Column(name = "show_neighborhood")
+    @Builder.Default
+    private Boolean showNeighborhood = true;
+
+    @Column(name = "match_notifications_enabled")
+    @Builder.Default
+    private Boolean matchNotificationsEnabled = true;
+
+    @Column(name = "chat_notifications_enabled")
+    @Builder.Default
+    private Boolean chatNotificationsEnabled = true;
+
+    @Column(name = "meetup_notifications_enabled")
+    @Builder.Default
+    private Boolean meetupNotificationsEnabled = true;
+
     @JsonIgnore
     @OneToMany(mappedBy = "creator", cascade = CascadeType.ALL)
     @Builder.Default

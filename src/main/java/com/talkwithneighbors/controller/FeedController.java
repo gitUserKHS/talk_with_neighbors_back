@@ -77,4 +77,16 @@ public class FeedController {
     ) {
         return ResponseEntity.ok(feedService.addComment(userSession.getUserId(), postId, request));
     }
+
+    @DeleteMapping("/{postId}")
+    public ResponseEntity<Void> deletePost(@PathVariable String postId, UserSession userSession) {
+        feedService.deletePost(userSession.getUserId(), postId);
+        return ResponseEntity.noContent().build();
+    }
+
+    @DeleteMapping("/comments/{commentId}")
+    public ResponseEntity<Void> deleteComment(@PathVariable String commentId, UserSession userSession) {
+        feedService.deleteComment(userSession.getUserId(), commentId);
+        return ResponseEntity.noContent().build();
+    }
 }

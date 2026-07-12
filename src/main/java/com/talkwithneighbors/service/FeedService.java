@@ -16,6 +16,7 @@ import com.talkwithneighbors.repository.UserRepository;
 import com.talkwithneighbors.repository.UserBlockRepository;
 import com.talkwithneighbors.repository.HiddenContentRepository;
 import com.talkwithneighbors.entity.SafetyTargetType;
+import com.talkwithneighbors.dto.mypage.MyCommentActivityDto;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
@@ -124,6 +125,53 @@ public class FeedService {
         comment.setAuthor(getUser(currentUserId));
         comment.setContent(request.getContent().trim());
         return PostCommentDto.fromEntity(postCommentRepository.save(comment));
+    }
+
+    @Transactional(readOnly = true)
+    public List<FeedPostDto> myPosts(Long currentUserId) {
+        User user = getUser(currentUserId);
+        return feedPostRepository.findByAuthor_IdOrderByCreatedAtDesc(currentUserId).stream()
+                .map(post -> toDto(post, user))
+                .toList();
+    }
+
+    @Transactional(readOnly = true)
+    public List<FeedPostDto> likedPosts(Long currentUserId) {
+        User user = getUser(currentUserId);
+        return postLikeRepository.findByUser_IdOrderByCreatedAtDesc(currentUserId).stream()
+                .map(PostLike::getPost)
+                .filter(Objects::nonNull)
+                .map(post -> toDto(post, user))
+                .toList();
+    }
+
+    @Transactional(readOnly = true)
+    public List<MyCommentActivityDto> myComments(Long currentUserId) {
+        return postCommentRepository.findByAuthor_IdOrderByCreatedAtDesc(currentUserId).stream()
+                .map(comment -> new MyCommentActivityDto(comment.getId(), comment.getPost().getId(),
+                        comment.getPost().getCaption(), comment.getContent(), comment.getCreatedAt()))
+                .toList();
+    }
+
+    @Transactional
+    public void deletePost(Long currentUserId, String postId) {
+        FeedPost post = getPost(postId);
+        if (post.getAuthor() == null || !Objects.equals(post.getAuthor().getId(), currentUserId)) {
+            throw new MatchingException("내가 작성한 게시글만 삭제할 수 있어요.", HttpStatus.FORBIDDEN);
+        }
+        postLikeRepository.deleteByPost_Id(postId);
+        postCommentRepository.deleteByPost_Id(postId);
+        feedPostRepository.delete(post);
+    }
+
+    @Transactional
+    public void deleteComment(Long currentUserId, String commentId) {
+        PostComment comment = postCommentRepository.findById(commentId)
+                .orElseThrow(() -> new MatchingException("댓글을 찾을 수 없어요.", HttpStatus.NOT_FOUND));
+        if (comment.getAuthor() == null || !Objects.equals(comment.getAuthor().getId(), currentUserId)) {
+            throw new MatchingException("내가 작성한 댓글만 삭제할 수 있어요.", HttpStatus.FORBIDDEN);
+        }
+        postCommentRepository.delete(comment);
     }
 
     private FeedPostDto toDto(FeedPost post, User currentUser) {

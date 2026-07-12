@@ -9,4 +9,6 @@ import java.util.List;
 @Repository
 public interface FeedPostRepository extends JpaRepository<FeedPost, String> {
     List<FeedPost> findAllByOrderByCreatedAtDesc();
+
+    List<FeedPost> findByAuthor_IdOrderByCreatedAtDesc(Long authorId);
 }

@@ -14,4 +14,6 @@ public interface HiddenContentRepository extends JpaRepository<HiddenContent, Lo
 
     @Query("select h.targetId from HiddenContent h where h.user.id = :userId and h.targetType = :targetType")
     List<String> findTargetIds(@Param("userId") Long userId, @Param("targetType") SafetyTargetType targetType);
+
+    List<HiddenContent> findByUser_IdOrderByCreatedAtDesc(Long userId);
 }

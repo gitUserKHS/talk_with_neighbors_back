@@ -58,4 +58,9 @@ public class SafetyController {
         safetyService.unhide(session.getUserId(), targetType, targetId);
         return ResponseEntity.noContent().build();
     }
+
+    @GetMapping("/hidden")
+    public ResponseEntity<List<HiddenContentDto>> hidden(UserSession session) {
+        return ResponseEntity.ok(safetyService.hiddenContents(session.getUserId()));
+    }
 }

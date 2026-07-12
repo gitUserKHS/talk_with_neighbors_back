@@ -177,6 +177,9 @@ public class MatchingService {
         if (!target.isProfileComplete()) {
             throw new MatchingException("상대방 프로필이 아직 완성되지 않았어요.", HttpStatus.BAD_REQUEST);
         }
+        if (Boolean.FALSE.equals(target.getProfileDiscoverable())) {
+            throw new MatchingException("상대방이 현재 새로운 매칭 요청을 받지 않아요.", HttpStatus.CONFLICT);
+        }
         if (hasOneOnOneChatRoom(requesterId, targetUserId)) {
             throw new MatchingException("이미 1:1 채팅방이 있는 사용자예요.", HttpStatus.CONFLICT);
         }
@@ -279,6 +282,7 @@ public class MatchingService {
         Set<Long> excludedUserIds = new HashSet<>(userBlockRepository.findExcludedUserIds(userId));
         return userRepository.findNearbyUsers(latitude, longitude, radius).stream()
                 .filter(user -> !user.getId().equals(userId))
+                .filter(user -> !Boolean.FALSE.equals(user.getProfileDiscoverable()))
                 .filter(user -> !excludedUserIds.contains(user.getId()))
                 .map(user -> {
                     Double distance = compatibilityScoreService.calculateDistance(
@@ -308,6 +312,7 @@ public class MatchingService {
         Set<Long> excludedUserIds = new HashSet<>(userBlockRepository.findExcludedUserIds(currentUser.getId()));
 
         return nearbyUsers.stream()
+                .filter(candidate -> !Boolean.FALSE.equals(candidate.getProfileDiscoverable()))
                 .map(candidate -> new ScoredUser(candidate, compatibilityScoreService.calculateDistance(currentUser, candidate)))
                 .filter(candidate -> compatibilityScoreService.isEligible(currentUser, candidate.user(), preferences, candidate.distance()))
                 .filter(candidate -> !existingChatPartnerIds.contains(candidate.user().getId()))
