@@ -46,6 +46,10 @@ public class ChatRoom {
     @Column(nullable = false)
     private ChatRoomType type;
 
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false, columnDefinition = "varchar(20) default 'ACTIVE'")
+    private ChatRoomStatus status = ChatRoomStatus.ACTIVE;
+
     /**
      * 공개 취미 모임인지 표시합니다. 일반 그룹 채팅은 초대된 참여자만 이용합니다.
      */
@@ -118,5 +122,8 @@ public class ChatRoom {
         if (lastMessageTime == null) {
             lastMessageTime = LocalDateTime.now();
         }
+        if (status == null) {
+            status = ChatRoomStatus.ACTIVE;
+        }
     }
-} 
+}

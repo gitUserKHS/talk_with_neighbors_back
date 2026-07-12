@@ -1,5 +1,7 @@
 # Talk With Neighbors API
 
+전체 시스템 구조, 기능 명세, 데이터 모델, 흐름, API, 운영 및 발전 계획은 [기술 문서](docs/README.md)에서 확인할 수 있어.
+
 Spring Boot 3 기반의 이웃톡 백엔드야. 인증, 피드, 관심사 매칭, 취미 모임, 채팅과 알림 API를 제공해.
 
 ## 로컬 실행

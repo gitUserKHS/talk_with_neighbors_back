@@ -2,12 +2,14 @@ package com.talkwithneighbors.service;
 
 import com.talkwithneighbors.dto.meetup.CreateHobbyMeetupRequest;
 import com.talkwithneighbors.dto.meetup.HobbyMeetupDto;
+import com.talkwithneighbors.domain.event.MeetupJoinedEvent;
 import com.talkwithneighbors.entity.ChatRoom;
 import com.talkwithneighbors.entity.ChatRoomType;
 import com.talkwithneighbors.entity.User;
 import com.talkwithneighbors.exception.ChatException;
 import com.talkwithneighbors.repository.ChatRoomRepository;
 import com.talkwithneighbors.repository.UserRepository;
+import com.talkwithneighbors.outbox.DomainEventPublisher;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -35,6 +37,9 @@ class HobbyMeetupServiceTest {
 
     @Mock
     private UserRepository userRepository;
+
+    @Mock
+    private DomainEventPublisher domainEventPublisher;
 
     @InjectMocks
     private HobbyMeetupService hobbyMeetupService;
@@ -94,6 +99,19 @@ class HobbyMeetupServiceTest {
         assertEquals(HttpStatus.CONFLICT, exception.getStatus());
         assertFalse(room.getParticipants().contains(currentUser));
         verify(chatRoomRepository, never()).save(any(ChatRoom.class));
+    }
+
+    @Test
+    void publishesEventWhenUserJoinsMeetup() {
+        User joiningUser = user(2L, "joining-user", "산책", "서울");
+        ChatRoom room = publicMeetup("meetup-1", 4);
+        when(userRepository.findById(joiningUser.getId())).thenReturn(Optional.of(joiningUser));
+        when(chatRoomRepository.findById(room.getId())).thenReturn(Optional.of(room));
+        when(chatRoomRepository.save(room)).thenReturn(room);
+
+        hobbyMeetupService.joinMeetup(joiningUser.getId(), room.getId());
+
+        verify(domainEventPublisher).publish(any(MeetupJoinedEvent.class));
     }
 
     @Test

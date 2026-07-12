@@ -2,6 +2,7 @@ package com.talkwithneighbors.dto;
 
 import com.talkwithneighbors.entity.ChatRoom;
 import com.talkwithneighbors.entity.ChatRoomType;
+import com.talkwithneighbors.entity.ChatRoomStatus;
 import com.talkwithneighbors.entity.User;
 import com.talkwithneighbors.repository.MessageRepository;
 import lombok.Getter;
@@ -23,6 +24,7 @@ public class ChatRoomDto {
     private String id;
     private String roomName;
     private ChatRoomType type;
+    private ChatRoomStatus status;
     private Boolean publicRoom;
     private String description;
     private List<String> interestTags;
@@ -46,6 +48,7 @@ public class ChatRoomDto {
         dto.setId(chatRoom.getId()); 
         dto.setRoomName(chatRoom.getName());
         dto.setType(chatRoom.getType());
+        dto.setStatus(chatRoom.getStatus());
         dto.setPublicRoom(chatRoom.isPublicRoom());
         dto.setDescription(chatRoom.getDescription());
         dto.setInterestTags(chatRoom.getInterestTags() != null ? List.copyOf(chatRoom.getInterestTags()) : List.of());

@@ -2,12 +2,14 @@ package com.talkwithneighbors.service;
 
 import com.talkwithneighbors.dto.meetup.CreateHobbyMeetupRequest;
 import com.talkwithneighbors.dto.meetup.HobbyMeetupDto;
+import com.talkwithneighbors.domain.event.MeetupJoinedEvent;
 import com.talkwithneighbors.entity.ChatRoom;
 import com.talkwithneighbors.entity.ChatRoomType;
 import com.talkwithneighbors.entity.User;
 import com.talkwithneighbors.exception.ChatException;
 import com.talkwithneighbors.repository.ChatRoomRepository;
 import com.talkwithneighbors.repository.UserRepository;
+import com.talkwithneighbors.outbox.DomainEventPublisher;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
@@ -31,6 +33,7 @@ import java.util.stream.Collectors;
 public class HobbyMeetupService {
     private final ChatRoomRepository chatRoomRepository;
     private final UserRepository userRepository;
+    private final DomainEventPublisher domainEventPublisher;
 
     @Transactional(readOnly = true)
     public Page<HobbyMeetupDto> findMeetups(Long currentUserId, String keyword, String interest, Pageable pageable) {
@@ -85,6 +88,12 @@ public class HobbyMeetupService {
             }
             room.getParticipants().add(user);
             chatRoomRepository.save(room);
+            domainEventPublisher.publish(MeetupJoinedEvent.create(
+                    room.getId(),
+                    room.getName(),
+                    user.getId(),
+                    room.getCreator().getId()
+            ));
         }
         return HobbyMeetupDto.fromEntity(room, user);
     }

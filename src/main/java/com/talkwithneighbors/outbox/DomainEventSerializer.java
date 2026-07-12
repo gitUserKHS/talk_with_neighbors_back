@@ -1,0 +1,23 @@
+package com.talkwithneighbors.outbox;
+
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.talkwithneighbors.domain.event.DomainEvent;
+import com.talkwithneighbors.domain.event.MatchCompletedEvent;
+import com.talkwithneighbors.domain.event.MeetupJoinedEvent;
+import lombok.RequiredArgsConstructor;
+import org.springframework.stereotype.Component;
+
+@Component
+@RequiredArgsConstructor
+public class DomainEventSerializer {
+    private final ObjectMapper objectMapper;
+
+    public DomainEvent deserialize(String eventType, String payload) throws JsonProcessingException {
+        return switch (eventType) {
+            case MatchCompletedEvent.TYPE -> objectMapper.readValue(payload, MatchCompletedEvent.class);
+            case MeetupJoinedEvent.TYPE -> objectMapper.readValue(payload, MeetupJoinedEvent.class);
+            default -> throw new IllegalArgumentException("Unsupported domain event type: " + eventType);
+        };
+    }
+}

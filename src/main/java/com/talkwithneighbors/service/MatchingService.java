@@ -5,6 +5,7 @@ import com.talkwithneighbors.dto.ChatRoomDto;
 import com.talkwithneighbors.dto.matching.MatchProfileDto;
 import com.talkwithneighbors.dto.matching.MatchingPreferencesDto;
 import com.talkwithneighbors.dto.notification.WebSocketNotification;
+import com.talkwithneighbors.domain.event.MatchCompletedEvent;
 import com.talkwithneighbors.entity.ChatRoomType;
 import com.talkwithneighbors.entity.Match;
 import com.talkwithneighbors.entity.MatchStatus;
@@ -15,6 +16,7 @@ import com.talkwithneighbors.exception.MatchingException;
 import com.talkwithneighbors.repository.MatchRepository;
 import com.talkwithneighbors.repository.MatchingPreferencesRepository;
 import com.talkwithneighbors.repository.UserRepository;
+import com.talkwithneighbors.outbox.DomainEventPublisher;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -38,7 +40,6 @@ public class MatchingService {
     private static final String NOTIFICATION_TYPE_MATCH_OFFERED = "MATCH_OFFERED";
     private static final String NOTIFICATION_TYPE_MATCH_ACCEPTED_BY_OTHER = "MATCH_ACCEPTED_BY_OTHER";
     private static final String NOTIFICATION_TYPE_MATCH_REJECTED_BY_OTHER = "MATCH_REJECTED_BY_OTHER";
-    private static final String NOTIFICATION_TYPE_MATCH_COMPLETED_AND_CHAT_CREATED = "MATCH_COMPLETED_AND_CHAT_CREATED";
     private static final Set<MatchStatus> ACTIVE_MATCH_STATUSES = Set.of(
             MatchStatus.PENDING,
             MatchStatus.USER1_ACCEPTED,
@@ -55,6 +56,7 @@ public class MatchingService {
     private final ObjectMapper objectMapper;
     private final OfflineNotificationService offlineNotificationService;
     private final CompatibilityScoreService compatibilityScoreService;
+    private final DomainEventPublisher domainEventPublisher;
 
     @PostConstruct
     @Transactional
@@ -411,14 +413,12 @@ public class MatchingService {
             );
         }
 
-        WebSocketNotification<ChatRoomDto> notification = new WebSocketNotification<>(
-                NOTIFICATION_TYPE_MATCH_COMPLETED_AND_CHAT_CREATED,
-                chatRoom,
-                "매칭이 성사되어 채팅방이 열렸어요.",
-                "/chat/" + chatRoom.getId()
-        );
-        sendToUser(currentUser.getId(), notification);
-        sendToUser(otherUser.getId(), notification);
+        domainEventPublisher.publish(MatchCompletedEvent.create(
+                match.getId(),
+                chatRoom.getId(),
+                currentUser.getId(),
+                otherUser.getId()
+        ));
         return chatRoom;
     }
 

@@ -3,6 +3,7 @@ package com.talkwithneighbors.service.impl;
 import com.talkwithneighbors.dto.ChatMessageDto;
 import com.talkwithneighbors.dto.ChatRoomDto;
 import com.talkwithneighbors.dto.MessageDto;
+import com.talkwithneighbors.dto.UpdateChatRoomRequest;
 import com.talkwithneighbors.entity.ChatRoom;
 import com.talkwithneighbors.entity.ChatRoomType;
 import com.talkwithneighbors.entity.Message;
@@ -566,14 +567,40 @@ public class ChatServiceImpl implements ChatService {
     
     @Override
     @Transactional
-    public ChatRoomDto updateRoom(String roomId, String name, ChatRoomType type) {
+    public ChatRoomDto updateRoom(String roomId, Long requesterId, UpdateChatRoomRequest request) {
         ChatRoom chatRoom = chatRoomRepository.findById(roomId)
-                .orElseThrow(() -> new RuntimeException("Chat room not found: " + roomId));
-        
-        chatRoom.setName(name);
-        chatRoom.setType(type);
+                .orElseThrow(() -> new ChatException("Chat room not found: " + roomId, HttpStatus.NOT_FOUND));
+        User requester = userRepository.findById(requesterId)
+                .orElseThrow(() -> new ChatException("User not found: " + requesterId, HttpStatus.NOT_FOUND));
+        if (chatRoom.getCreator() == null || !chatRoom.getCreator().getId().equals(requesterId)) {
+            throw new ChatException("Only the room creator can update this room.", HttpStatus.FORBIDDEN);
+        }
+
+        String resolvedName = request.resolvedName();
+        if (resolvedName != null) {
+            if (resolvedName.isBlank()) {
+                throw new ChatException("Chat room name cannot be empty.", HttpStatus.BAD_REQUEST);
+            }
+            chatRoom.setName(resolvedName.trim());
+        }
+        if (request.getType() != null) {
+            chatRoom.setType(request.getType());
+        }
+        if (request.getDescription() != null) {
+            chatRoom.setDescription(request.getDescription().trim());
+        }
+        Integer maxParticipants = request.resolvedMaxParticipants();
+        if (maxParticipants != null) {
+            if (maxParticipants < chatRoom.getParticipants().size()) {
+                throw new ChatException("Maximum participants cannot be lower than the current participant count.", HttpStatus.CONFLICT);
+            }
+            chatRoom.setMaxParticipants(maxParticipants);
+        }
+        if (request.getStatus() != null) {
+            chatRoom.setStatus(request.getStatus());
+        }
         ChatRoom updatedRoom = chatRoomRepository.save(chatRoom);
-        return ChatRoomDto.fromEntity(updatedRoom, updatedRoom.getCreator(), messageRepository);
+        return ChatRoomDto.fromEntity(updatedRoom, requester, messageRepository);
     }
 
     @Override

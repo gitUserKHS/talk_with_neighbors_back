@@ -3,6 +3,7 @@ package com.talkwithneighbors.service;
 import com.talkwithneighbors.dto.ChatRoomDto;
 import com.talkwithneighbors.dto.matching.MatchProfileDto;
 import com.talkwithneighbors.dto.matching.MatchingPreferencesDto;
+import com.talkwithneighbors.domain.event.MatchCompletedEvent;
 import com.talkwithneighbors.entity.Match;
 import com.talkwithneighbors.entity.MatchStatus;
 import com.talkwithneighbors.entity.MatchingPreferences;
@@ -11,6 +12,7 @@ import com.talkwithneighbors.exception.MatchingException;
 import com.talkwithneighbors.repository.MatchRepository;
 import com.talkwithneighbors.repository.MatchingPreferencesRepository;
 import com.talkwithneighbors.repository.UserRepository;
+import com.talkwithneighbors.outbox.DomainEventPublisher;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.InjectMocks;
@@ -63,6 +65,9 @@ class MatchingServiceTest {
 
     @Mock
     private OfflineNotificationService offlineNotificationService;
+
+    @Mock
+    private DomainEventPublisher domainEventPublisher;
 
     @Spy
     private CompatibilityScoreService compatibilityScoreService = new CompatibilityScoreService();
@@ -234,6 +239,7 @@ class MatchingServiceTest {
 
         assertEquals(MatchStatus.BOTH_ACCEPTED, match.getStatus());
         assertEquals("chat-room", result.getId());
+        verify(domainEventPublisher).publish(any(MatchCompletedEvent.class));
     }
 
     private User user(Long id, boolean completeProfile) {
