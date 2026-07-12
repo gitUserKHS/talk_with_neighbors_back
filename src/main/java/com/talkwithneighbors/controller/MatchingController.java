@@ -3,6 +3,8 @@ package com.talkwithneighbors.controller;
 import com.talkwithneighbors.dto.ChatRoomDto;
 import com.talkwithneighbors.dto.matching.MatchProfileDto;
 import com.talkwithneighbors.dto.matching.MatchingPreferencesDto;
+import com.talkwithneighbors.dto.matching.RecommendationFeedbackRequest;
+import jakarta.validation.Valid;
 import com.talkwithneighbors.security.RequireLogin;
 import com.talkwithneighbors.security.UserSession;
 import com.talkwithneighbors.service.MatchingService;
@@ -131,4 +133,11 @@ public class MatchingController {
         matchingService.processPendingMatches(userSession.getUserId());
         return ResponseEntity.ok().build();
     }
-} 
+
+    @PostMapping("/recommendations/{candidateId}/feedback")
+    public ResponseEntity<Void> recommendationFeedback(@PathVariable Long candidateId,
+            @Valid @RequestBody RecommendationFeedbackRequest request, UserSession userSession) {
+        matchingService.saveRecommendationFeedback(userSession.getUserId(), candidateId, request);
+        return ResponseEntity.noContent().build();
+    }
+}

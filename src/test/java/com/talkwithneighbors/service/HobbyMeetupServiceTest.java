@@ -10,6 +10,8 @@ import com.talkwithneighbors.exception.ChatException;
 import com.talkwithneighbors.repository.ChatRoomRepository;
 import com.talkwithneighbors.repository.UserRepository;
 import com.talkwithneighbors.repository.UserBlockRepository;
+import com.talkwithneighbors.repository.MeetupWaitlistRepository;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.talkwithneighbors.outbox.DomainEventPublisher;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -44,6 +46,15 @@ class HobbyMeetupServiceTest {
 
     @Mock
     private UserBlockRepository userBlockRepository;
+
+    @Mock
+    private MeetupWaitlistRepository meetupWaitlistRepository;
+
+    @Mock
+    private OfflineNotificationService offlineNotificationService;
+
+    @Mock
+    private ObjectMapper objectMapper;
 
     @InjectMocks
     private HobbyMeetupService hobbyMeetupService;
@@ -86,7 +97,7 @@ class HobbyMeetupServiceTest {
     }
 
     @Test
-    void preventsJoiningFullMeetup() {
+    void addsUserToWaitlistWhenMeetupIsFull() {
         User currentUser = user(3L, "new-member", "독서");
         ChatRoom room = publicMeetup("meetup-full", 2);
         room.getParticipants().add(creator);
@@ -95,13 +106,10 @@ class HobbyMeetupServiceTest {
         when(userRepository.findById(currentUser.getId())).thenReturn(Optional.of(currentUser));
         when(chatRoomRepository.findById(room.getId())).thenReturn(Optional.of(room));
 
-        ChatException exception = assertThrows(
-                ChatException.class,
-                () -> hobbyMeetupService.joinMeetup(currentUser.getId(), room.getId())
-        );
+        HobbyMeetupDto result = hobbyMeetupService.joinMeetup(currentUser.getId(), room.getId());
 
-        assertEquals(HttpStatus.CONFLICT, exception.getStatus());
         assertFalse(room.getParticipants().contains(currentUser));
+        verify(meetupWaitlistRepository).save(any(com.talkwithneighbors.entity.MeetupWaitlistEntry.class));
         verify(chatRoomRepository, never()).save(any(ChatRoom.class));
     }
 

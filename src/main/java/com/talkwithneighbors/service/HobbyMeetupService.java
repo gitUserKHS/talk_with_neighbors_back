@@ -10,6 +10,8 @@ import com.talkwithneighbors.exception.ChatException;
 import com.talkwithneighbors.repository.ChatRoomRepository;
 import com.talkwithneighbors.repository.UserRepository;
 import com.talkwithneighbors.repository.UserBlockRepository;
+import com.talkwithneighbors.repository.MeetupWaitlistRepository;
+import com.talkwithneighbors.entity.MeetupWaitlistEntry;
 import com.talkwithneighbors.outbox.DomainEventPublisher;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
@@ -27,6 +29,9 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.stream.Collectors;
+import java.time.LocalDateTime;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.talkwithneighbors.entity.OfflineNotification;
 
 @Service
 @RequiredArgsConstructor
@@ -36,6 +41,9 @@ public class HobbyMeetupService {
     private final UserRepository userRepository;
     private final DomainEventPublisher domainEventPublisher;
     private final UserBlockRepository userBlockRepository;
+    private final MeetupWaitlistRepository meetupWaitlistRepository;
+    private final OfflineNotificationService offlineNotificationService;
+    private final ObjectMapper objectMapper;
 
     @Transactional(readOnly = true)
     public Page<HobbyMeetupDto> findMeetups(Long currentUserId, String keyword, String interest, Pageable pageable) {
@@ -49,7 +57,7 @@ public class HobbyMeetupService {
                 .stream()
                 .filter(room -> room.getCreator() == null || !excludedUserIds.contains(room.getCreator().getId()))
                 .filter(room -> matches(room, normalizedKeyword, normalizedInterest))
-                .map(room -> HobbyMeetupDto.fromEntity(room, currentUser))
+                .map(room -> toDto(room, currentUser))
                 .sorted(Comparator
                         .comparingInt((HobbyMeetupDto meetup) -> meetup.getSharedInterests().size()).reversed()
                         .thenComparing(HobbyMeetupDto::getLastMessageTime, Comparator.nullsLast(Comparator.reverseOrder()))
@@ -76,10 +84,20 @@ public class HobbyMeetupService {
         room.setInterestTags(tags);
         room.setLocation(trimToNull(request.getLocation()));
         room.setMaxParticipants(request.getMaxParticipants());
+        if (request.getScheduledAt() != null && request.getScheduledAt().isBefore(LocalDateTime.now())) {
+            throw new ChatException("모임 일정은 현재 이후여야 해요.", HttpStatus.BAD_REQUEST);
+        }
+        if (request.getRegistrationDeadline() != null && request.getScheduledAt() != null
+                && request.getRegistrationDeadline().isAfter(request.getScheduledAt())) {
+            throw new ChatException("신청 마감은 모임 시작 전이어야 해요.", HttpStatus.BAD_REQUEST);
+        }
+        room.setScheduledAt(request.getScheduledAt());
+        room.setDurationMinutes(request.getDurationMinutes() != null ? request.getDurationMinutes() : 120);
+        room.setRegistrationDeadline(request.getRegistrationDeadline());
         room.setCreator(creator);
         room.getParticipants().add(creator);
 
-        return HobbyMeetupDto.fromEntity(chatRoomRepository.save(room), creator);
+        return toDto(chatRoomRepository.save(room), creator);
     }
 
     public HobbyMeetupDto joinMeetup(Long userId, String roomId) {
@@ -88,10 +106,16 @@ public class HobbyMeetupService {
         if (room.getCreator() != null && userBlockRepository.existsBetween(userId, room.getCreator().getId())) {
             throw new ChatException("차단 관계인 사용자의 모임에는 참여할 수 없어요.", HttpStatus.FORBIDDEN);
         }
+        if (room.getRegistrationDeadline() != null && LocalDateTime.now().isAfter(room.getRegistrationDeadline())) {
+            throw new ChatException("모임 신청이 마감되었어요.", HttpStatus.CONFLICT);
+        }
 
         if (!room.getParticipants().contains(user)) {
             if (room.getMaxParticipants() != null && room.getParticipants().size() >= room.getMaxParticipants()) {
-                throw new ChatException("This hobby meetup is already full.", HttpStatus.CONFLICT);
+                if (!meetupWaitlistRepository.existsByRoom_IdAndUser_Id(roomId, userId)) {
+                    meetupWaitlistRepository.save(new MeetupWaitlistEntry(room, user));
+                }
+                return toDto(room, user);
             }
             room.getParticipants().add(user);
             chatRoomRepository.save(room);
@@ -102,16 +126,42 @@ public class HobbyMeetupService {
                     room.getCreator().getId()
             ));
         }
-        return HobbyMeetupDto.fromEntity(room, user);
+        return toDto(room, user);
     }
 
     public void leaveMeetup(Long userId, String roomId) {
         User user = getUser(userId);
         ChatRoom room = getPublicMeetup(roomId);
+        if (meetupWaitlistRepository.existsByRoom_IdAndUser_Id(roomId, userId)) {
+            meetupWaitlistRepository.deleteByRoom_IdAndUser_Id(roomId, userId);
+            return;
+        }
         if (!room.getParticipants().remove(user)) {
             throw new ChatException("You are not a participant in this hobby meetup.", HttpStatus.BAD_REQUEST);
         }
+        meetupWaitlistRepository.findFirstByRoom_IdOrderByCreatedAtAsc(roomId).ifPresent(entry -> {
+            room.getParticipants().add(entry.getUser());
+            meetupWaitlistRepository.delete(entry);
+            try {
+                OfflineNotification notification = offlineNotificationService.saveOfflineNotification(
+                        entry.getUser().getId(), OfflineNotification.NotificationType.MEETUP_WAITLIST_PROMOTED,
+                        objectMapper.writeValueAsString(Map.of("roomId", room.getId(), "title", room.getName())),
+                        "대기하던 모임에 자리가 나서 참여가 확정됐어.", "/meetups", 9);
+                offlineNotificationService.sendPendingNotifications(entry.getUser().getId());
+            } catch (Exception ignored) {
+                // 승급 트랜잭션은 알림 직렬화 실패 때문에 되돌리지 않는다.
+            }
+        });
         chatRoomRepository.save(room);
+    }
+
+    private HobbyMeetupDto toDto(ChatRoom room, User currentUser) {
+        HobbyMeetupDto dto = HobbyMeetupDto.fromEntity(room, currentUser);
+        if (currentUser != null) {
+            dto.setWaitlisted(meetupWaitlistRepository.existsByRoom_IdAndUser_Id(room.getId(), currentUser.getId()));
+        }
+        dto.setWaitlistCount(meetupWaitlistRepository.countByRoom_Id(room.getId()));
+        return dto;
     }
 
     private boolean matches(ChatRoom room, String keyword, String interest) {

@@ -12,6 +12,7 @@ import org.springframework.stereotype.Repository;
 
 import java.util.List;
 import java.util.Optional;
+import java.time.LocalDateTime;
 
 /**
  * 채팅방을 관리하는 리포지토리 인터페이스
@@ -97,4 +98,7 @@ public interface ChatRoomRepository extends JpaRepository<ChatRoom, String> {
      */
     @Query("SELECT DISTINCT cr FROM ChatRoom cr JOIN FETCH cr.participants WHERE :user MEMBER OF cr.participants AND cr.type = :type")
     List<ChatRoom> findByParticipantsContainingAndType(@Param("user") User user, @Param("type") ChatRoomType type);
-} 
+
+    List<ChatRoom> findByPublicRoomTrueAndScheduledAtBetweenAndReminderSentAtIsNull(
+            LocalDateTime start, LocalDateTime end);
+}

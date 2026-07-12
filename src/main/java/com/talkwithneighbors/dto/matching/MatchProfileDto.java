@@ -24,6 +24,7 @@ public class MatchProfileDto {
     private Double distance;
     private Integer compatibilityScore;
     private List<String> sharedInterests;
+    private List<String> explanationReasons;
 
     public static MatchProfileDto fromUser(User user, Double distance, String matchId) {
         return fromUser(user, distance, matchId, null, List.of());
@@ -48,9 +49,10 @@ public class MatchProfileDto {
         dto.setProfileImage(user.getProfileImage());
         
         LocationDto locationDto = new LocationDto();
-        locationDto.setLatitude(user.getLatitude());
-        locationDto.setLongitude(user.getLongitude());
-        locationDto.setAddress(user.getAddress());
+        // 공개 프로필에는 정확한 좌표를 노출하지 않는다. 거리는 서버에서 계산하고 동네 단위 주소만 제공한다.
+        locationDto.setLatitude(null);
+        locationDto.setLongitude(null);
+        locationDto.setAddress(generalizeAddress(user.getAddress()));
         dto.setLocation(locationDto);
         
         dto.setDistance(distance);
@@ -58,6 +60,12 @@ public class MatchProfileDto {
         dto.setSharedInterests(sharedInterests);
         
         return dto;
+    }
+
+    private static String generalizeAddress(String address) {
+        if (address == null || address.isBlank()) return null;
+        String[] parts = address.trim().split("\\s+");
+        return String.join(" ", java.util.Arrays.copyOf(parts, Math.min(parts.length, 2)));
     }
 
     public static MatchProfileDto fromUser(User user, Double distance) {

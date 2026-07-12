@@ -73,6 +73,18 @@ public class ChatRoom {
     @Column(name = "max_participants")
     private Integer maxParticipants;
 
+    @Column(name = "scheduled_at")
+    private LocalDateTime scheduledAt;
+
+    @Column(name = "duration_minutes")
+    private Integer durationMinutes;
+
+    @Column(name = "registration_deadline")
+    private LocalDateTime registrationDeadline;
+
+    @Column(name = "reminder_sent_at")
+    private LocalDateTime reminderSentAt;
+
     /**
      * 채팅방을 생성한 사용자
      */

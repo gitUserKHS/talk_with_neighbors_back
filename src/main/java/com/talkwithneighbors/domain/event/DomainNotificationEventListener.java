@@ -93,13 +93,8 @@ public class DomainNotificationEventListener {
             return;
         }
 
-        if (redisSessionService.isUserOnline(userId.toString())) {
-            messagingTemplate.convertAndSendToUser(userId.toString(), destination, notification);
-            return;
-        }
-
         try {
-            offlineNotificationService.saveOfflineNotification(
+            OfflineNotification saved = offlineNotificationService.saveOfflineNotification(
                     userId,
                     offlineType,
                     objectMapper.writeValueAsString(notification.getData()),
@@ -107,6 +102,12 @@ public class DomainNotificationEventListener {
                     notification.getNavigateTo(),
                     priority
             );
+            if (redisSessionService.isUserOnline(userId.toString())) {
+                messagingTemplate.convertAndSendToUser(userId.toString(), destination, notification);
+                if (saved != null) {
+                    offlineNotificationService.markAsDelivered(saved.getId());
+                }
+            }
         } catch (JsonProcessingException exception) {
             log.error("Failed to serialize notification for domain event. userId={}", userId, exception);
             throw new IllegalStateException("Failed to serialize domain notification", exception);

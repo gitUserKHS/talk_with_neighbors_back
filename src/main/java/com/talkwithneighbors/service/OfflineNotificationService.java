@@ -18,7 +18,7 @@ public interface OfflineNotificationService {
      * @param actionUrl 관련 URL (선택사항)
      * @param priority 우선순위 (높을수록 먼저 전송)
      */
-    void saveOfflineNotification(Long userId, 
+    OfflineNotification saveOfflineNotification(Long userId, 
                                 OfflineNotification.NotificationType type, 
                                 String data, 
                                 String message, 
@@ -52,4 +52,6 @@ public interface OfflineNotificationService {
      * @param userId 사용자 ID
      */
     void markAllAsSent(Long userId);
-} 
+
+    void markAsDelivered(Long notificationId);
+}

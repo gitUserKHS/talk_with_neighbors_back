@@ -9,6 +9,7 @@ import jakarta.validation.constraints.Size;
 import lombok.Data;
 
 import java.util.List;
+import java.time.LocalDateTime;
 
 @Data
 public class CreateHobbyMeetupRequest {
@@ -30,4 +31,12 @@ public class CreateHobbyMeetupRequest {
     @Min(value = 2, message = "모집 인원은 2명 이상이어야 해요.")
     @Max(value = 50, message = "모집 인원은 50명 이하여야 해요.")
     private Integer maxParticipants;
+
+    private LocalDateTime scheduledAt;
+
+    @Min(value = 30, message = "모임 시간은 30분 이상이어야 해요.")
+    @Max(value = 1440, message = "모임 시간은 하루를 넘길 수 없어요.")
+    private Integer durationMinutes;
+
+    private LocalDateTime registrationDeadline;
 }

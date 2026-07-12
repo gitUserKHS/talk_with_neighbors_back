@@ -17,6 +17,8 @@ import com.talkwithneighbors.repository.MatchRepository;
 import com.talkwithneighbors.repository.MatchingPreferencesRepository;
 import com.talkwithneighbors.repository.UserRepository;
 import com.talkwithneighbors.repository.UserBlockRepository;
+import com.talkwithneighbors.repository.RecommendationFeedbackRepository;
+import com.talkwithneighbors.entity.RecommendationFeedback;
 import com.talkwithneighbors.outbox.DomainEventPublisher;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
@@ -60,6 +62,7 @@ public class MatchingService {
     private final CompatibilityScoreService compatibilityScoreService;
     private final DomainEventPublisher domainEventPublisher;
     private final UserBlockRepository userBlockRepository;
+    private final RecommendationFeedbackRepository recommendationFeedbackRepository;
 
     @PostConstruct
     @Transactional
@@ -329,13 +332,41 @@ public class MatchingService {
             String matchId,
             MatchingPreferencesDto preferences
     ) {
-        return MatchProfileDto.fromUser(
+        MatchProfileDto profile = MatchProfileDto.fromUser(
                 candidate,
                 distance,
                 matchId,
                 compatibilityScoreService.calculateScore(currentUser, candidate, preferences, distance),
                 compatibilityScoreService.sharedInterests(currentUser, candidate)
         );
+        List<String> reasons = new ArrayList<>();
+        if (profile.getSharedInterests() != null && !profile.getSharedInterests().isEmpty()) {
+            reasons.add("공통 관심사 " + profile.getSharedInterests().size() + "개");
+        }
+        if (distance != null) {
+            reasons.add(distance < 1 ? "걸어서 만날 수 있는 거리" : String.format("약 %.1fkm 이내", distance));
+        }
+        if (candidate.getAge() != null && currentUser.getAge() != null
+                && Math.abs(candidate.getAge() - currentUser.getAge()) <= 5) {
+            reasons.add("비슷한 연령대");
+        }
+        profile.setExplanationReasons(reasons);
+        return profile;
+    }
+
+    @Transactional
+    public void saveRecommendationFeedback(Long userId, Long candidateId,
+                                           com.talkwithneighbors.dto.matching.RecommendationFeedbackRequest request) {
+        if (userId.equals(candidateId)) {
+            throw new MatchingException("자기 자신에 대한 추천 피드백은 남길 수 없어요.", HttpStatus.BAD_REQUEST);
+        }
+        User user = getUserById(userId);
+        User candidate = getUserById(candidateId);
+        RecommendationFeedback feedback = recommendationFeedbackRepository
+                .findByUser_IdAndCandidate_Id(userId, candidateId)
+                .orElseGet(() -> new RecommendationFeedback(user, candidate));
+        feedback.update(request.sentiment(), request.reason());
+        recommendationFeedbackRepository.save(feedback);
     }
 
     private Match createPendingMatch(User requester, User target) {
@@ -452,9 +483,7 @@ public class MatchingService {
                 requester.getUsername() + "님이 매칭 요청을 보냈어요."
         );
 
-        boolean delivered = sendToUser(target.getId(), notification);
-        if (!delivered) {
-            saveOfflineNotification(
+        OfflineNotification stored = saveOfflineNotification(
                     target.getId(),
                     OfflineNotification.NotificationType.MATCH_REQUEST,
                     requesterProfile,
@@ -462,6 +491,11 @@ public class MatchingService {
                     null,
                     10
             );
+        boolean delivered = sendToUser(target.getId(), notification);
+        if (delivered && stored != null) {
+            offlineNotificationService.markAsDelivered(stored.getId());
+        }
+        if (!delivered) {
             if (redisSessionService != null) {
                 redisSessionService.savePendingMatch(target.getId().toString(), match.getId());
             }
@@ -480,8 +514,7 @@ public class MatchingService {
                 data,
                 currentUser.getUsername() + "님이 매칭을 수락했어요."
         );
-        if (!sendToUser(otherUser.getId(), notification)) {
-            saveOfflineNotification(
+        OfflineNotification stored = saveOfflineNotification(
                     otherUser.getId(),
                     OfflineNotification.NotificationType.MATCH_ACCEPTED,
                     data,
@@ -489,6 +522,8 @@ public class MatchingService {
                     null,
                     10
             );
+        if (sendToUser(otherUser.getId(), notification) && stored != null) {
+            offlineNotificationService.markAsDelivered(stored.getId());
         }
     }
 
@@ -503,8 +538,7 @@ public class MatchingService {
                 data,
                 currentUser.getUsername() + "님이 매칭을 거절했어요."
         );
-        if (!sendToUser(otherUser.getId(), notification)) {
-            saveOfflineNotification(
+        OfflineNotification stored = saveOfflineNotification(
                     otherUser.getId(),
                     OfflineNotification.NotificationType.MATCH_REJECTED,
                     data,
@@ -512,6 +546,8 @@ public class MatchingService {
                     null,
                     8
             );
+        if (sendToUser(otherUser.getId(), notification) && stored != null) {
+            offlineNotificationService.markAsDelivered(stored.getId());
         }
     }
 
@@ -532,7 +568,7 @@ public class MatchingService {
         }
     }
 
-    private void saveOfflineNotification(
+    private OfflineNotification saveOfflineNotification(
             Long userId,
             OfflineNotification.NotificationType type,
             Object data,
@@ -541,10 +577,10 @@ public class MatchingService {
             Integer priority
     ) {
         if (offlineNotificationService == null || objectMapper == null) {
-            return;
+            return null;
         }
         try {
-            offlineNotificationService.saveOfflineNotification(
+            return offlineNotificationService.saveOfflineNotification(
                     userId,
                     type,
                     objectMapper.writeValueAsString(data),
@@ -554,6 +590,7 @@ public class MatchingService {
             );
         } catch (Exception e) {
             log.warn("Failed to save offline notification for user {}: {}", userId, e.getMessage());
+            return null;
         }
     }
 

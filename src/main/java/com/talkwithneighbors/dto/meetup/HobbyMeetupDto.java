@@ -32,6 +32,11 @@ public class HobbyMeetupDto {
     private String creatorUsername;
     private String lastMessage;
     private String lastMessageTime;
+    private String scheduledAt;
+    private Integer durationMinutes;
+    private String registrationDeadline;
+    private boolean waitlisted;
+    private long waitlistCount;
 
     public static HobbyMeetupDto fromEntity(ChatRoom room, User currentUser) {
         HobbyMeetupDto dto = new HobbyMeetupDto();
@@ -63,6 +68,9 @@ public class HobbyMeetupDto {
         if (room.getLastMessageTime() != null) {
             dto.setLastMessageTime(room.getLastMessageTime().format(DATE_TIME_FORMATTER));
         }
+        if (room.getScheduledAt() != null) dto.setScheduledAt(room.getScheduledAt().format(DATE_TIME_FORMATTER));
+        dto.setDurationMinutes(room.getDurationMinutes());
+        if (room.getRegistrationDeadline() != null) dto.setRegistrationDeadline(room.getRegistrationDeadline().format(DATE_TIME_FORMATTER));
         return dto;
     }
 }

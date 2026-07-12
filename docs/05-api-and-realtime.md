@@ -90,6 +90,18 @@
 | GET | `/api/safety/reports/mine` | 내 신고 내역 |
 | POST / DELETE | `/api/safety/hidden...` | 콘텐츠 숨김·복구 |
 
+## 알림함 API
+
+| 메서드 | 경로 | 목적 |
+|---|---|---|
+| GET | `/api/notifications` | 30일 알림 목록 |
+| GET | `/api/notifications/unread-count` | 미읽음 수 |
+| PATCH | `/api/notifications/{id}/read` | 한 건 읽음 |
+| PATCH | `/api/notifications/read-all` | 모두 읽음 |
+| DELETE | `/api/notifications/{id}` | 알림 삭제 |
+
+모임 일정·대기열과 추천 피드백 계약은 [제품 확장 기능](10-product-expansion.md)에 정리한다.
+
 ## WebSocket/STOMP
 
 - 연결: `/ws?sessionId={sessionId}`
