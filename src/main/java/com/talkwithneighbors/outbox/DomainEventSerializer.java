@@ -5,6 +5,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.talkwithneighbors.domain.event.DomainEvent;
 import com.talkwithneighbors.domain.event.MatchCompletedEvent;
 import com.talkwithneighbors.domain.event.MeetupJoinedEvent;
+import com.talkwithneighbors.domain.event.UserBlockedEvent;
+import com.talkwithneighbors.domain.event.ContentReportedEvent;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 
@@ -17,6 +19,8 @@ public class DomainEventSerializer {
         return switch (eventType) {
             case MatchCompletedEvent.TYPE -> objectMapper.readValue(payload, MatchCompletedEvent.class);
             case MeetupJoinedEvent.TYPE -> objectMapper.readValue(payload, MeetupJoinedEvent.class);
+            case UserBlockedEvent.TYPE -> objectMapper.readValue(payload, UserBlockedEvent.class);
+            case ContentReportedEvent.TYPE -> objectMapper.readValue(payload, ContentReportedEvent.class);
             default -> throw new IllegalArgumentException("Unsupported domain event type: " + eventType);
         };
     }

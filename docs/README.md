@@ -12,6 +12,7 @@
 6. [실행·배포·CI/CD](06-operations-and-cicd.md) — Docker Compose, GHCR, GitHub Actions
 7. [아키텍처 발전 계획](07-architecture-roadmap.md) — 모듈형 모놀리스와 Kafka 도입 기준
 8. [제품 기능 백로그](08-product-backlog.md) — 다음 기능 후보와 우선순위
+9. [사용자 안전 기능](09-safety-and-moderation.md) — 차단·신고·콘텐츠 숨김 정책과 API
 
 ## 빠른 시작
 

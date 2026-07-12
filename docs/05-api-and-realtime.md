@@ -78,6 +78,18 @@
 | GET | `/api/chat/rooms/{roomId}/unread-count` | 방의 미읽음 수 |
 | GET | `/api/chat/unread-counts` | 모든 방의 미읽음 수 |
 
+## 안전 API
+
+차단·신고·콘텐츠 숨김 API와 적용 규칙은 [사용자 안전 기능](09-safety-and-moderation.md)을 따른다. 차단 관계는 매칭, 피드, 공개 모임, 1:1 채팅에서 양방향으로 제외된다.
+
+| 메서드 | 경로 | 목적 |
+|---|---|---|
+| POST / DELETE | `/api/safety/blocks/{userId}` | 차단·차단 해제 |
+| GET | `/api/safety/blocks` | 내 차단 목록 |
+| POST | `/api/safety/reports` | 신고 접수 |
+| GET | `/api/safety/reports/mine` | 내 신고 내역 |
+| POST / DELETE | `/api/safety/hidden...` | 콘텐츠 숨김·복구 |
+
 ## WebSocket/STOMP
 
 - 연결: `/ws?sessionId={sessionId}`

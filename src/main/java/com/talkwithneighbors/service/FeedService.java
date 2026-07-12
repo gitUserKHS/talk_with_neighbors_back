@@ -13,6 +13,9 @@ import com.talkwithneighbors.repository.FeedPostRepository;
 import com.talkwithneighbors.repository.PostCommentRepository;
 import com.talkwithneighbors.repository.PostLikeRepository;
 import com.talkwithneighbors.repository.UserRepository;
+import com.talkwithneighbors.repository.UserBlockRepository;
+import com.talkwithneighbors.repository.HiddenContentRepository;
+import com.talkwithneighbors.entity.SafetyTargetType;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
@@ -24,6 +27,8 @@ import org.springframework.transaction.annotation.Transactional;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Objects;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 @Service
@@ -34,11 +39,17 @@ public class FeedService {
     private final PostCommentRepository postCommentRepository;
     private final UserRepository userRepository;
     private final CompatibilityScoreService compatibilityScoreService;
+    private final UserBlockRepository userBlockRepository;
+    private final HiddenContentRepository hiddenContentRepository;
 
     @Transactional(readOnly = true)
     public Page<FeedPostDto> getFeed(Long currentUserId, Pageable pageable) {
         User currentUser = getUser(currentUserId);
+        List<String> hiddenPostIds = hiddenContentRepository.findTargetIds(currentUserId, SafetyTargetType.FEED_POST);
+        Set<Long> excludedUserIds = new HashSet<>(userBlockRepository.findExcludedUserIds(currentUserId));
         List<FeedPostDto> posts = feedPostRepository.findAllByOrderByCreatedAtDesc().stream()
+                .filter(post -> !hiddenPostIds.contains(post.getId()))
+                .filter(post -> post.getAuthor() == null || !excludedUserIds.contains(post.getAuthor().getId()))
                 .map(post -> toDto(post, currentUser))
                 .sorted(Comparator
                         .comparingInt(FeedPostDto::getCompatibilityScore).reversed()
@@ -70,6 +81,7 @@ public class FeedService {
     public FeedPostDto likePost(Long currentUserId, String postId) {
         User user = getUser(currentUserId);
         FeedPost post = getPost(postId);
+        requireCanInteract(currentUserId, post);
         if (!postLikeRepository.existsByPost_IdAndUser_Id(postId, currentUserId)) {
             PostLike like = new PostLike();
             like.setPost(post);
@@ -87,9 +99,14 @@ public class FeedService {
     }
 
     @Transactional(readOnly = true)
-    public List<PostCommentDto> getComments(String postId) {
-        getPost(postId);
+    public List<PostCommentDto> getComments(Long currentUserId, String postId) {
+        FeedPost post = getPost(postId);
+        requireCanInteract(currentUserId, post);
+        List<String> hiddenCommentIds = hiddenContentRepository.findTargetIds(currentUserId, SafetyTargetType.COMMENT);
+        Set<Long> excludedUserIds = new HashSet<>(userBlockRepository.findExcludedUserIds(currentUserId));
         return postCommentRepository.findByPost_IdOrderByCreatedAtAsc(postId).stream()
+                .filter(comment -> !hiddenCommentIds.contains(comment.getId()))
+                .filter(comment -> comment.getAuthor() == null || !excludedUserIds.contains(comment.getAuthor().getId()))
                 .map(PostCommentDto::fromEntity)
                 .collect(Collectors.toList());
     }
@@ -100,8 +117,10 @@ public class FeedService {
             throw new MatchingException("댓글 내용을 입력해 주세요.", HttpStatus.BAD_REQUEST);
         }
 
+        FeedPost post = getPost(postId);
+        requireCanInteract(currentUserId, post);
         PostComment comment = new PostComment();
-        comment.setPost(getPost(postId));
+        comment.setPost(post);
         comment.setAuthor(getUser(currentUserId));
         comment.setContent(request.getContent().trim());
         return PostCommentDto.fromEntity(postCommentRepository.save(comment));
@@ -139,6 +158,12 @@ public class FeedService {
     private FeedPost getPost(String postId) {
         return feedPostRepository.findById(postId)
                 .orElseThrow(() -> new MatchingException("게시글을 찾을 수 없습니다.", HttpStatus.NOT_FOUND));
+    }
+
+    private void requireCanInteract(Long currentUserId, FeedPost post) {
+        if (post.getAuthor() != null && userBlockRepository.existsBetween(currentUserId, post.getAuthor().getId())) {
+            throw new MatchingException("차단 관계인 사용자와는 상호작용할 수 없어요.", HttpStatus.FORBIDDEN);
+        }
     }
 
     private List<String> cleanTags(List<String> tags) {

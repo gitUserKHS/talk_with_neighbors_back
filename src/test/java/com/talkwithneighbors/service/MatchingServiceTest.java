@@ -12,6 +12,7 @@ import com.talkwithneighbors.exception.MatchingException;
 import com.talkwithneighbors.repository.MatchRepository;
 import com.talkwithneighbors.repository.MatchingPreferencesRepository;
 import com.talkwithneighbors.repository.UserRepository;
+import com.talkwithneighbors.repository.UserBlockRepository;
 import com.talkwithneighbors.outbox.DomainEventPublisher;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -68,6 +69,9 @@ class MatchingServiceTest {
 
     @Mock
     private DomainEventPublisher domainEventPublisher;
+
+    @Mock
+    private UserBlockRepository userBlockRepository;
 
     @Spy
     private CompatibilityScoreService compatibilityScoreService = new CompatibilityScoreService();

@@ -9,6 +9,7 @@ import com.talkwithneighbors.entity.User;
 import com.talkwithneighbors.exception.ChatException;
 import com.talkwithneighbors.repository.ChatRoomRepository;
 import com.talkwithneighbors.repository.UserRepository;
+import com.talkwithneighbors.repository.UserBlockRepository;
 import com.talkwithneighbors.outbox.DomainEventPublisher;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -40,6 +41,9 @@ class HobbyMeetupServiceTest {
 
     @Mock
     private DomainEventPublisher domainEventPublisher;
+
+    @Mock
+    private UserBlockRepository userBlockRepository;
 
     @InjectMocks
     private HobbyMeetupService hobbyMeetupService;

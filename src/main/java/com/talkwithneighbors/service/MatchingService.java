@@ -16,6 +16,7 @@ import com.talkwithneighbors.exception.MatchingException;
 import com.talkwithneighbors.repository.MatchRepository;
 import com.talkwithneighbors.repository.MatchingPreferencesRepository;
 import com.talkwithneighbors.repository.UserRepository;
+import com.talkwithneighbors.repository.UserBlockRepository;
 import com.talkwithneighbors.outbox.DomainEventPublisher;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
@@ -31,6 +32,7 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.HashSet;
 import java.util.stream.Collectors;
 
 @Service
@@ -57,6 +59,7 @@ public class MatchingService {
     private final OfflineNotificationService offlineNotificationService;
     private final CompatibilityScoreService compatibilityScoreService;
     private final DomainEventPublisher domainEventPublisher;
+    private final UserBlockRepository userBlockRepository;
 
     @PostConstruct
     @Transactional
@@ -143,6 +146,7 @@ public class MatchingService {
         return matchRepository.findByUserId(userId).stream()
                 .filter(match -> !isExpired(match))
                 .filter(match -> isWaitingForResponseFrom(match, userId))
+                .filter(match -> !userBlockRepository.existsBetween(match.getUser1().getId(), match.getUser2().getId()))
                 .sorted(Comparator.comparing(Match::getCreatedAt, Comparator.nullsLast(Comparator.reverseOrder())))
                 .map(match -> {
                     User requester = match.getUser1().getId().equals(userId) ? match.getUser2() : match.getUser1();
@@ -161,6 +165,7 @@ public class MatchingService {
     public MatchProfileDto requestMatch(Long requesterId, Long targetUserId) {
         User requester = getUserById(requesterId);
         User target = getUserById(targetUserId);
+        requireNotBlocked(requesterId, targetUserId);
         requireCompleteProfile(requester, "프로필을 먼저 완성해야 매칭 요청을 보낼 수 있어요.");
 
         if (requesterId.equals(targetUserId)) {
@@ -226,6 +231,7 @@ public class MatchingService {
     @Transactional
     public ChatRoomDto acceptMatch(String matchId, Long userId) {
         Match match = getMatchForUser(matchId, userId);
+        requireNotBlocked(match.getUser1().getId(), match.getUser2().getId());
         ensureMatchCanBeResponded(match);
 
         boolean currentUserIsUser1 = match.getUser1().getId().equals(userId);
@@ -267,8 +273,10 @@ public class MatchingService {
         }
 
         User currentUser = getUserById(userId);
+        Set<Long> excludedUserIds = new HashSet<>(userBlockRepository.findExcludedUserIds(userId));
         return userRepository.findNearbyUsers(latitude, longitude, radius).stream()
                 .filter(user -> !user.getId().equals(userId))
+                .filter(user -> !excludedUserIds.contains(user.getId()))
                 .map(user -> {
                     Double distance = compatibilityScoreService.calculateDistance(
                             latitude,
@@ -294,11 +302,13 @@ public class MatchingService {
         List<Long> existingChatPartnerIds = chatService != null
                 ? safeList(chatService.getUsersWithOneOnOneChatRooms(currentUser.getId()))
                 : List.of();
+        Set<Long> excludedUserIds = new HashSet<>(userBlockRepository.findExcludedUserIds(currentUser.getId()));
 
         return nearbyUsers.stream()
                 .map(candidate -> new ScoredUser(candidate, compatibilityScoreService.calculateDistance(currentUser, candidate)))
                 .filter(candidate -> compatibilityScoreService.isEligible(currentUser, candidate.user(), preferences, candidate.distance()))
                 .filter(candidate -> !existingChatPartnerIds.contains(candidate.user().getId()))
+                .filter(candidate -> !excludedUserIds.contains(candidate.user().getId()))
                 .filter(candidate -> !hasActiveMatchBetween(currentUser.getId(), candidate.user().getId()))
                 .sorted(Comparator
                         .comparingInt((ScoredUser candidate) -> compatibilityScoreService.calculateScore(
@@ -391,6 +401,12 @@ public class MatchingService {
 
     private boolean hasActiveMatchBetween(Long user1Id, Long user2Id) {
         return matchRepository.existsActiveMatchBetween(user1Id, user2Id, ACTIVE_MATCH_STATUSES);
+    }
+
+    private void requireNotBlocked(Long firstId, Long secondId) {
+        if (userBlockRepository.existsBetween(firstId, secondId)) {
+            throw new MatchingException("차단 관계인 사용자에게는 매칭을 요청할 수 없어요.", HttpStatus.FORBIDDEN);
+        }
     }
 
     private boolean hasOneOnOneChatRoom(Long user1Id, Long user2Id) {

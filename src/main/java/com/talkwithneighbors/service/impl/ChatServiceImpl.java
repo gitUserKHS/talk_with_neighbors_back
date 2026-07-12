@@ -13,6 +13,7 @@ import com.talkwithneighbors.exception.ChatException;
 import com.talkwithneighbors.repository.ChatRoomRepository;
 import com.talkwithneighbors.repository.MessageRepository;
 import com.talkwithneighbors.repository.UserRepository;
+import com.talkwithneighbors.repository.UserBlockRepository;
 import com.talkwithneighbors.service.ChatService;
 import com.talkwithneighbors.service.NotificationService;
 import lombok.RequiredArgsConstructor;
@@ -45,6 +46,7 @@ public class ChatServiceImpl implements ChatService {
     private final UserRepository userRepository;
     private final SimpMessagingTemplate messagingTemplate;
     private final NotificationService notificationService;
+    private final UserBlockRepository userBlockRepository;
 
     @Override
     @Transactional
@@ -91,6 +93,7 @@ public class ChatServiceImpl implements ChatService {
             if (otherParticipant.getId().equals(creator.getId())) {
                  throw new ChatException("ONE_ON_ONE chat cannot be created with oneself as the only other participant.", HttpStatus.BAD_REQUEST);
             }
+            requireNotBlocked(creator.getId(), otherParticipant.getId());
             
             chatRoom.getParticipants().add(otherParticipant); // 다른 참여자 추가
             
@@ -219,6 +222,12 @@ public class ChatServiceImpl implements ChatService {
         if (room.getParticipants().stream().noneMatch(p -> p.getId().equals(senderId))) {
             log.warn("[SendMessage] Sender (ID: {}) is not a participant in room (ID: {}).", senderId, roomId);
             throw new ChatException("Sender is not a participant of this chat room.", HttpStatus.FORBIDDEN);
+        }
+        if (room.getType() == ChatRoomType.ONE_ON_ONE) {
+            room.getParticipants().stream()
+                    .filter(participant -> !participant.getId().equals(senderId))
+                    .findFirst()
+                    .ifPresent(participant -> requireNotBlocked(senderId, participant.getId()));
         }
 
         Message message = new Message();
@@ -607,6 +616,7 @@ public class ChatServiceImpl implements ChatService {
     @Transactional(readOnly = true)
     public ChatRoomDto findOneOnOneChatRoom(Long userId1, Long userId2) {
         log.info("[findOneOnOneChatRoom] Looking for existing 1:1 chat room between userId1: {} and userId2: {}", userId1, userId2);
+        requireNotBlocked(userId1, userId2);
         
         User user1 = userRepository.findById(userId1)
                 .orElseThrow(() -> new ChatException("User not found with id: " + userId1, HttpStatus.NOT_FOUND));
@@ -626,6 +636,12 @@ public class ChatServiceImpl implements ChatService {
         
         log.info("[findOneOnOneChatRoom] No existing 1:1 chat room found between userId1: {} and userId2: {}", userId1, userId2);
         return null;
+    }
+
+    private void requireNotBlocked(Long firstId, Long secondId) {
+        if (userBlockRepository != null && userBlockRepository.existsBetween(firstId, secondId)) {
+            throw new ChatException("차단 관계인 사용자와는 1:1 채팅을 이용할 수 없어요.", HttpStatus.FORBIDDEN);
+        }
     }
     
     @Override

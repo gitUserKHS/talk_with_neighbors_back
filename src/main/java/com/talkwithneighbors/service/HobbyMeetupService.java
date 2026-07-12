@@ -9,6 +9,7 @@ import com.talkwithneighbors.entity.User;
 import com.talkwithneighbors.exception.ChatException;
 import com.talkwithneighbors.repository.ChatRoomRepository;
 import com.talkwithneighbors.repository.UserRepository;
+import com.talkwithneighbors.repository.UserBlockRepository;
 import com.talkwithneighbors.outbox.DomainEventPublisher;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
@@ -34,16 +35,19 @@ public class HobbyMeetupService {
     private final ChatRoomRepository chatRoomRepository;
     private final UserRepository userRepository;
     private final DomainEventPublisher domainEventPublisher;
+    private final UserBlockRepository userBlockRepository;
 
     @Transactional(readOnly = true)
     public Page<HobbyMeetupDto> findMeetups(Long currentUserId, String keyword, String interest, Pageable pageable) {
         User currentUser = getUser(currentUserId);
         String normalizedKeyword = normalize(keyword);
         String normalizedInterest = normalize(interest);
+        List<Long> excludedUserIds = userBlockRepository.findExcludedUserIds(currentUserId);
 
         List<HobbyMeetupDto> meetups = chatRoomRepository
                 .findByTypeAndPublicRoomTrueOrderByLastMessageTimeDesc(ChatRoomType.GROUP)
                 .stream()
+                .filter(room -> room.getCreator() == null || !excludedUserIds.contains(room.getCreator().getId()))
                 .filter(room -> matches(room, normalizedKeyword, normalizedInterest))
                 .map(room -> HobbyMeetupDto.fromEntity(room, currentUser))
                 .sorted(Comparator
@@ -81,6 +85,9 @@ public class HobbyMeetupService {
     public HobbyMeetupDto joinMeetup(Long userId, String roomId) {
         User user = getUser(userId);
         ChatRoom room = getPublicMeetup(roomId);
+        if (room.getCreator() != null && userBlockRepository.existsBetween(userId, room.getCreator().getId())) {
+            throw new ChatException("차단 관계인 사용자의 모임에는 참여할 수 없어요.", HttpStatus.FORBIDDEN);
+        }
 
         if (!room.getParticipants().contains(user)) {
             if (room.getMaxParticipants() != null && room.getParticipants().size() >= room.getMaxParticipants()) {
