@@ -41,3 +41,6 @@ out/
 
 ### Local dev logs ###
 backend-dev*.log
+
+### Local uploaded media ###
+/uploads/

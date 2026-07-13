@@ -8,6 +8,7 @@ import jakarta.persistence.FetchType;
 import jakarta.persistence.Id;
 import jakarta.persistence.JoinColumn;
 import jakarta.persistence.ManyToOne;
+import jakarta.persistence.OrderColumn;
 import jakarta.persistence.PrePersist;
 import jakarta.persistence.PreUpdate;
 import jakarta.persistence.Table;
@@ -35,6 +36,11 @@ public class FeedPost {
 
     @Column(nullable = false, length = 1000)
     private String imageUrl;
+
+    @ElementCollection(fetch = FetchType.LAZY)
+    @CollectionTable(name = "feed_post_media", joinColumns = @JoinColumn(name = "post_id"))
+    @OrderColumn(name = "sort_order")
+    private List<FeedPostMedia> media = new ArrayList<>();
 
     @Column(columnDefinition = "TEXT")
     private String caption;

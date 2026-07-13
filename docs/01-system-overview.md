@@ -12,10 +12,13 @@
 flowchart LR
     U["사용자 브라우저"] -->|HTTP :3000| N["Nginx + React SPA"]
     N -->|/api 프록시| B["Spring Boot API"]
+    N -->|/uploads 프록시| F[("로컬 미디어 볼륨")]
     N -->|/ws 프록시| W["SockJS + STOMP"]
     W --> B
     B -->|JPA| M[("MySQL")]
     B -->|세션·온라인 상태| R[("Redis")]
+    B -->|검증·FFmpeg 변환| P["미디어 파이프라인"]
+    P -->|WebP·MP4·썸네일 저장| F
     B -->|같은 트랜잭션| O[("outbox_events")]
     O -->|커밋 후·재시도| E["ApplicationEventPublisher"]
 ```
@@ -28,10 +31,12 @@ flowchart LR
 | API | Java 17, Spring Boot 3.2, Spring MVC | REST API와 업무 규칙 |
 | 실시간 | Spring WebSocket, SockJS, STOMP | 채팅과 사용자별 알림 |
 | 영속 저장소 | MySQL 8.4, Spring Data JPA | 사용자, 피드, 매칭, 채팅, 알림 데이터 |
+| 미디어 처리 | FFmpeg·FFprobe | 이미지 WebP 압축, 영상 H.264/AAC 변환, WebP 썸네일과 메타데이터 생성 |
+| 미디어 저장소 | Docker `uploads_data` 볼륨 | 프로필·피드·채팅의 최적화 미디어와 파일 첨부 |
 | 임시 저장소 | Redis 7.4 | 세션, 온라인 상태, 대기 중 매칭, 현재 채팅방 |
-| 프록시 | Nginx | SPA 제공, `/api`, `/ws` 역방향 프록시 |
+| 프록시 | Nginx | SPA 제공, `/api`, `/ws`, `/uploads` 역방향 프록시 |
 | 실행 | Docker Compose | 프론트, 백엔드, MySQL, Redis 통합 실행 |
-| 자동화 | GitHub Actions, GHCR, GitHub Pages | 검사, 이미지 게시, 정적 프론트 배포 |
+| 자동화 | GitHub Actions | 타입 검사, 테스트, 빌드; 외부 배포 워크플로는 비활성화 |
 
 ## 저장소 구조
 
@@ -60,11 +65,11 @@ talk_with_neighbors/
 
 현재 코드는 기술 계층별 패키지로 구성되어 있지만 업무상 경계는 다음과 같다.
 
-- 인증·프로필: 가입, 로그인, 세션, 프로필, 온라인 상태
-- 피드: 게시물, 좋아요, 댓글
+- 인증·프로필: 가입, 로그인, 세션, 프로필, 프로필 사진 업로드, 온라인 상태
+- 피드: 다중 사진·동영상 게시물, 좋아요, 댓글
 - 매칭: 선호 조건, 추천, 요청, 수락·거절, 거리 검색
 - 모임: 공개 그룹 채팅방을 활용한 취미 모임
-- 채팅: 채팅방, 참가자, 메시지, 읽음 상태
+- 채팅: 채팅방, 참가자, 텍스트·다중 미디어·문서 메시지, 읽음 상태
 - 알림: 실시간 개인 큐와 오프라인 알림 저장·재전송
 - 도메인 이벤트: 매칭 성사와 모임 참가 이벤트를 Outbox에 기록한 뒤 커밋 후 전달
 

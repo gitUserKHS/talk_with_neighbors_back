@@ -7,8 +7,9 @@ import lombok.Getter;
 import lombok.Setter;
 import lombok.NoArgsConstructor;
 import java.time.format.DateTimeFormatter;
+import java.util.List;
 import java.util.Set;
-import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 
 @Getter
 @Setter
@@ -25,6 +26,7 @@ public class MessageDto {
     private boolean isDeleted;
     private Set<Long> readByUsers;
     private boolean readByCurrentUser;
+    private List<MessageAttachmentDto> attachments;
 
     private static final DateTimeFormatter formatter = DateTimeFormatter.ISO_DATE_TIME;
 
@@ -43,6 +45,14 @@ public class MessageDto {
         }
         dto.setType(message.getType());
         dto.setDeleted(message.isDeleted());
+        List<com.talkwithneighbors.entity.MessageAttachment> attachments = message.getAttachments();
+        if (attachments == null || attachments.isEmpty()) {
+            dto.setAttachments(List.of());
+        } else {
+            dto.setAttachments(IntStream.range(0, attachments.size())
+                    .mapToObj(index -> MessageAttachmentDto.fromEntity(attachments.get(index), index))
+                    .toList());
+        }
         
         Set<Long> readByUserIds = message.getReadByUsers();
         dto.setReadByUsers(readByUserIds);

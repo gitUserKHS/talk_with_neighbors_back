@@ -1,9 +1,7 @@
 package com.talkwithneighbors.entity;
 
-public enum MessageType {
-    TEXT,
+public enum ChatAttachmentType {
     IMAGE,
     VIDEO,
-    FILE,
-    SYSTEM
+    FILE
 }

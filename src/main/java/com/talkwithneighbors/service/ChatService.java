@@ -4,6 +4,7 @@ import com.talkwithneighbors.dto.ChatRoomDto;
 import com.talkwithneighbors.dto.MessageDto;
 import com.talkwithneighbors.entity.ChatRoomType;
 import com.talkwithneighbors.dto.UpdateChatRoomRequest;
+import com.talkwithneighbors.entity.MessageAttachment;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import java.util.List; // createRoom 메서드의 participantIds 때문에 유지
@@ -23,6 +24,8 @@ public interface ChatService {
 
     // 메시지 전송
     MessageDto sendMessage(String roomId, Long senderId, String content);
+
+    MessageDto sendMessage(String roomId, Long senderId, String content, List<MessageAttachment> attachments);
 
     // 특정 채팅방의 메시지 목록 조회 (페이징 처리)
     Page<MessageDto> getMessagesByRoomId(String roomId, String userId, Pageable pageable);

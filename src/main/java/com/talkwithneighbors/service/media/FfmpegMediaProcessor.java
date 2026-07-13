@@ -1,0 +1,302 @@
+package com.talkwithneighbors.service.media;
+
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Component;
+
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
+import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.Semaphore;
+
+@Component
+@Slf4j
+public class FfmpegMediaProcessor implements MediaProcessor {
+    private static final int THUMBNAIL_MAX_DIMENSION = 480;
+
+    private final String ffmpegCommand;
+    private final String ffprobeCommand;
+    private final Duration timeout;
+    private final Semaphore processingSlots;
+    private final ObjectMapper objectMapper = new ObjectMapper();
+
+    public FfmpegMediaProcessor(
+            @Value("${app.media.ffmpeg-command:ffmpeg}") String ffmpegCommand,
+            @Value("${app.media.ffprobe-command:ffprobe}") String ffprobeCommand,
+            @Value("${app.media.processing-timeout-seconds:180}") long timeoutSeconds,
+            @Value("${app.media.max-concurrent-processes:2}") int maxConcurrentProcesses
+    ) {
+        this.ffmpegCommand = ffmpegCommand;
+        this.ffprobeCommand = ffprobeCommand;
+        this.timeout = Duration.ofSeconds(Math.max(10, timeoutSeconds));
+        this.processingSlots = new Semaphore(Math.max(1, maxConcurrentProcesses), true);
+    }
+
+    @Override
+    public ProcessedMedia process(MediaProcessingRequest request) throws IOException {
+        Files.createDirectories(request.outputDirectory());
+        boolean acquired;
+        try {
+            acquired = processingSlots.tryAcquire(5, TimeUnit.SECONDS);
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            throw new MediaProcessingBusyException("미디어 변환 대기가 중단되었습니다.");
+        }
+        if (!acquired) {
+            throw new MediaProcessingBusyException("미디어 변환 요청이 많습니다. 잠시 후 다시 시도해주세요.");
+        }
+        try {
+            return switch (request.type()) {
+                case IMAGE -> processImage(request);
+                case VIDEO -> processVideo(request);
+                case FILE -> throw new IllegalArgumentException("Files do not require FFmpeg processing.");
+            };
+        } finally {
+            processingSlots.release();
+        }
+    }
+
+    private ProcessedMedia processImage(MediaProcessingRequest request) throws IOException {
+        boolean keepGif = request.preserveAnimation() && ".gif".equals(request.sourceExtension());
+        Path mediaPath = request.outputDirectory().resolve(
+                request.baseName() + (keepGif ? ".gif" : ".webp"));
+        Path thumbnailPath = request.generateThumbnail()
+                ? request.outputDirectory().resolve(request.baseName() + "-thumbnail.webp")
+                : null;
+
+        try {
+            if (keepGif) {
+                Files.move(request.input(), mediaPath, StandardCopyOption.REPLACE_EXISTING);
+            } else {
+                runFfmpeg(List.of(
+                        "-i", request.input().toString(),
+                        "-vf", boundedScale(request.maxDimension()),
+                        "-frames:v", "1",
+                        "-c:v", "libwebp",
+                        "-quality", "82",
+                        "-compression_level", "4",
+                        mediaPath.toString()
+                ));
+            }
+
+            requireNonEmptyOutput(mediaPath);
+
+            if (thumbnailPath != null) {
+                // Seeking into a still image can make FFmpeg exit successfully while
+                // producing an empty file, so image thumbnails always use frame zero.
+                runThumbnail(mediaPath, thumbnailPath, false);
+                requireNonEmptyOutput(thumbnailPath);
+            }
+            ProbeResult probe = probe(mediaPath);
+            return new ProcessedMedia(
+                    mediaPath,
+                    thumbnailPath,
+                    keepGif ? "image/gif" : "image/webp",
+                    probe.width(),
+                    probe.height(),
+                    null
+            );
+        } catch (IOException | RuntimeException exception) {
+            deleteQuietly(mediaPath);
+            deleteQuietly(thumbnailPath);
+            throw exception;
+        }
+    }
+
+    private ProcessedMedia processVideo(MediaProcessingRequest request) throws IOException {
+        Path mediaPath = request.outputDirectory().resolve(request.baseName() + ".mp4");
+        Path thumbnailPath = request.generateThumbnail()
+                ? request.outputDirectory().resolve(request.baseName() + "-thumbnail.webp")
+                : null;
+
+        try {
+            runFfmpeg(List.of(
+                    "-i", request.input().toString(),
+                    "-map", "0:v:0",
+                    "-map", "0:a?",
+                    "-vf", boundedScale(request.maxDimension()),
+                    "-c:v", "libx264",
+                    "-preset", "veryfast",
+                    "-crf", "25",
+                    "-pix_fmt", "yuv420p",
+                    "-c:a", "aac",
+                    "-b:a", "128k",
+                    "-movflags", "+faststart",
+                    "-map_metadata", "-1",
+                    mediaPath.toString()
+            ));
+            requireNonEmptyOutput(mediaPath);
+            if (thumbnailPath != null) {
+                createThumbnail(mediaPath, thumbnailPath);
+            }
+            ProbeResult probe = probe(mediaPath);
+            return new ProcessedMedia(
+                    mediaPath,
+                    thumbnailPath,
+                    "video/mp4",
+                    probe.width(),
+                    probe.height(),
+                    probe.durationSeconds()
+            );
+        } catch (IOException | RuntimeException exception) {
+            deleteQuietly(mediaPath);
+            deleteQuietly(thumbnailPath);
+            throw exception;
+        }
+    }
+
+    private void createThumbnail(Path source, Path target) throws IOException {
+        try {
+            runThumbnail(source, target, true);
+            requireNonEmptyOutput(target);
+        } catch (MediaProcessingException exception) {
+            deleteQuietly(target);
+            runThumbnail(source, target, false);
+            requireNonEmptyOutput(target);
+        }
+    }
+
+    private void runThumbnail(Path source, Path target, boolean seek) throws IOException {
+        List<String> arguments = new ArrayList<>();
+        if (seek) {
+            arguments.addAll(List.of("-ss", "0.1"));
+        }
+        arguments.addAll(List.of(
+                "-i", source.toString(),
+                "-vf", boundedScale(THUMBNAIL_MAX_DIMENSION),
+                "-frames:v", "1",
+                "-c:v", "libwebp",
+                "-quality", "76",
+                "-compression_level", "4",
+                target.toString()
+        ));
+        runFfmpeg(arguments);
+    }
+
+    private void requireNonEmptyOutput(Path path) {
+        try {
+            if (!Files.isRegularFile(path) || Files.size(path) == 0) {
+                throw new MediaProcessingException("미디어 변환 결과 파일이 비어 있습니다.");
+            }
+        } catch (IOException exception) {
+            throw new MediaProcessingException("미디어 변환 결과 파일을 확인할 수 없습니다.", exception);
+        }
+    }
+
+    private String boundedScale(int maxDimension) {
+        int safeMaximum = Math.max(64, maxDimension);
+        return "scale=w='min(" + safeMaximum + ",iw)':h='min(" + safeMaximum
+                + ",ih)':force_original_aspect_ratio=decrease:force_divisible_by=2";
+    }
+
+    private void runFfmpeg(List<String> arguments) throws IOException {
+        List<String> command = new ArrayList<>();
+        command.add(ffmpegCommand);
+        command.add("-hide_banner");
+        command.add("-loglevel");
+        command.add("error");
+        command.add("-y");
+        command.addAll(arguments);
+        String output = run(command);
+        if (!output.isBlank()) {
+            log.debug("FFmpeg output: {}", output);
+        }
+    }
+
+    private ProbeResult probe(Path mediaPath) {
+        List<String> command = List.of(
+                ffprobeCommand,
+                "-v", "error",
+                "-select_streams", "v:0",
+                "-show_entries", "stream=width,height:format=duration",
+                "-of", "json",
+                mediaPath.toString()
+        );
+        try {
+            JsonNode root = objectMapper.readTree(run(command));
+            JsonNode streams = root.path("streams");
+            JsonNode stream = streams.isArray() && !streams.isEmpty() ? streams.get(0) : null;
+            Integer width = stream != null && stream.path("width").canConvertToInt()
+                    ? stream.path("width").asInt() : null;
+            Integer height = stream != null && stream.path("height").canConvertToInt()
+                    ? stream.path("height").asInt() : null;
+            Double duration = parseDouble(root.path("format").path("duration").asText(null));
+            return new ProbeResult(width, height, duration);
+        } catch (Exception exception) {
+            log.warn("Could not read processed media metadata. path={}", mediaPath, exception);
+            return new ProbeResult(null, null, null);
+        }
+    }
+
+    private String run(List<String> command) throws IOException {
+        Process process;
+        try {
+            process = new ProcessBuilder(command)
+                    .redirectErrorStream(true)
+                    .start();
+        } catch (IOException exception) {
+            throw new IllegalStateException(
+                    "FFmpeg 실행 파일을 찾을 수 없습니다. Docker 이미지 또는 app.media 명령 설정을 확인해주세요.",
+                    exception
+            );
+        }
+
+        try {
+            boolean finished = process.waitFor(timeout.toSeconds(), TimeUnit.SECONDS);
+            if (!finished) {
+                process.destroyForcibly();
+                throw new MediaProcessingException("미디어 변환 제한 시간을 초과했습니다.");
+            }
+            String output = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8).trim();
+            if (process.exitValue() != 0) {
+                throw new MediaProcessingException(
+                        "지원하지 않거나 손상된 미디어입니다. " + abbreviate(output));
+            }
+            return output;
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            process.destroyForcibly();
+            throw new MediaProcessingException("미디어 변환이 중단되었습니다.", exception);
+        }
+    }
+
+    private Double parseDouble(String value) {
+        if (value == null || value.isBlank() || "N/A".equalsIgnoreCase(value)) {
+            return null;
+        }
+        try {
+            return Double.parseDouble(value);
+        } catch (NumberFormatException ignored) {
+            return null;
+        }
+    }
+
+    private String abbreviate(String value) {
+        if (value == null || value.isBlank()) {
+            return "";
+        }
+        return value.length() <= 500 ? value : value.substring(0, 500) + "…";
+    }
+
+    private void deleteQuietly(Path path) {
+        if (path == null) {
+            return;
+        }
+        try {
+            Files.deleteIfExists(path);
+        } catch (IOException ignored) {
+            // The caller still receives the original processing failure.
+        }
+    }
+
+    private record ProbeResult(Integer width, Integer height, Double durationSeconds) {
+    }
+}

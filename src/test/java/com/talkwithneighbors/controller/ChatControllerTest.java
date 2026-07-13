@@ -11,6 +11,7 @@ import com.talkwithneighbors.exception.ChatException;
 import com.talkwithneighbors.repository.MessageRepository;
 import com.talkwithneighbors.security.UserSession;
 import com.talkwithneighbors.service.ChatService;
+import com.talkwithneighbors.service.MediaStorageService;
 import com.talkwithneighbors.service.RedisSessionService;
 import com.talkwithneighbors.service.SessionValidationService;
 import com.talkwithneighbors.service.UserService;
@@ -66,6 +67,9 @@ class ChatControllerTest {
 
     @Autowired
     private ObjectMapper objectMapper;
+
+    @MockBean
+    private MediaStorageService mediaStorageService;
 
     @MockBean
     private ChatService chatService;

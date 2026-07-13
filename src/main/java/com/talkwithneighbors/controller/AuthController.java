@@ -8,6 +8,8 @@ import com.talkwithneighbors.security.UserSession;
 import com.talkwithneighbors.service.AuthService;
 import com.talkwithneighbors.service.AuthService.AuthResponse;
 import com.talkwithneighbors.service.AuthService.DuplicateCheckResponse;
+import com.talkwithneighbors.service.MediaStorageService;
+import com.talkwithneighbors.service.media.MediaAsset;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.Cookie;
 import org.springframework.http.ResponseCookie;
@@ -16,8 +18,10 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
 
 @Slf4j
 @RestController
@@ -28,6 +32,7 @@ public class AuthController {
     private static final String SESSION_COOKIE = "TWN_SESSION";
 
     private final AuthService authService;
+    private final MediaStorageService mediaStorageService;
 
     @Value("${app.session.cookie-secure:false}")
     private boolean secureSessionCookie;
@@ -121,6 +126,32 @@ public class AuthController {
         return ResponseEntity.ok(updatedUser);
     }
 
+    @PostMapping(value = "/profile/image", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    @RequireLogin
+    public ResponseEntity<UserDto> uploadProfileImage(
+            @RequestPart("file") MultipartFile file,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId,
+            HttpServletRequest request
+    ) {
+        String actualSessionId = requireSessionId(sessionId, request);
+        MediaAsset stored = mediaStorageService.storeProfileImage(file);
+        try {
+            return ResponseEntity.ok(authService.updateProfileImage(actualSessionId, stored.url()));
+        } catch (RuntimeException exception) {
+            mediaStorageService.deleteMedia(stored.ownedUrls());
+            throw exception;
+        }
+    }
+
+    @DeleteMapping("/profile/image")
+    @RequireLogin
+    public ResponseEntity<UserDto> deleteProfileImage(
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId,
+            HttpServletRequest request
+    ) {
+        return ResponseEntity.ok(authService.updateProfileImage(requireSessionId(sessionId, request), null));
+    }
+
     @GetMapping("/profile")
     @RequireLogin
     public ResponseEntity<UserDto> getProfile(@RequestHeader(value = "X-Session-Id", required = false) String sessionId,
@@ -135,6 +166,14 @@ public class AuthController {
             if (SESSION_COOKIE.equals(cookie.getName()) && !cookie.getValue().isBlank()) return cookie.getValue();
         }
         return null;
+    }
+
+    private String requireSessionId(String headerSessionId, HttpServletRequest request) {
+        String sessionId = resolveSessionId(headerSessionId, request);
+        if (sessionId == null || sessionId.isBlank()) {
+            throw new RuntimeException("세션이 없습니다. 다시 로그인해주세요.");
+        }
+        return sessionId.split(",")[0].trim();
     }
 
     private ResponseCookie sessionCookie(String sessionId) {

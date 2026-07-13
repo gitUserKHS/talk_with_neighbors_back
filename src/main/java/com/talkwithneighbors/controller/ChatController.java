@@ -8,10 +8,12 @@ import com.talkwithneighbors.dto.UpdateChatRoomRequest;
 import com.talkwithneighbors.entity.ChatRoom;
 import com.talkwithneighbors.entity.ChatRoomType;
 import com.talkwithneighbors.entity.Message;
+import com.talkwithneighbors.entity.MessageAttachment;
 import com.talkwithneighbors.entity.User;
 import com.talkwithneighbors.repository.MessageRepository;
 import com.talkwithneighbors.security.RequireLogin;
 import com.talkwithneighbors.service.ChatService;
+import com.talkwithneighbors.service.MediaStorageService;
 import com.talkwithneighbors.service.RedisSessionService;
 import com.talkwithneighbors.service.UserService;
 import org.springframework.data.domain.Page;
@@ -20,12 +22,14 @@ import org.springframework.data.domain.Pageable;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.messaging.handler.annotation.MessageMapping;
 import org.springframework.messaging.handler.annotation.Payload;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.messaging.handler.annotation.Header;
+import org.springframework.web.multipart.MultipartFile;
 
 import jakarta.servlet.http.HttpServletRequest;
 import java.util.List;
@@ -46,18 +50,21 @@ public class ChatController extends BaseController {
     private final UserService userService;
     private final SimpMessagingTemplate messagingTemplate;
     private final MessageRepository messageRepository;
+    private final MediaStorageService mediaStorageService;
 
     @Autowired
     public ChatController(ChatService chatService, 
                          RedisSessionService redisSessionService, 
                          UserService userService, 
                          SimpMessagingTemplate messagingTemplate,
-                         MessageRepository messageRepository) {
+                         MessageRepository messageRepository,
+                         MediaStorageService mediaStorageService) {
         this.chatService = chatService;
         this.redisSessionService = redisSessionService;
         this.userService = userService;
         this.messagingTemplate = messagingTemplate;
         this.messageRepository = messageRepository;
+        this.mediaStorageService = mediaStorageService;
     }
 
     @PostMapping("/rooms")
@@ -218,7 +225,7 @@ public class ChatController extends BaseController {
         return ResponseEntity.ok(messagesPage);
     }
 
-    @PostMapping("/rooms/{roomId}/messages")
+    @PostMapping(value = "/rooms/{roomId}/messages", consumes = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<MessageDto> postMessage(
             @PathVariable(name = "roomId") String roomId,
             @RequestBody ChatMessageDto chatMessageDto,
@@ -227,6 +234,24 @@ public class ChatController extends BaseController {
         MessageDto savedDto = chatService.sendMessage(
             roomId, user.getId(), chatMessageDto.getContent());
         return ResponseEntity.ok(savedDto);
+    }
+
+    @PostMapping(value = "/rooms/{roomId}/messages", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<MessageDto> postMessageWithAttachments(
+            @PathVariable(name = "roomId") String roomId,
+            @RequestPart(name = "message", required = false) ChatMessageDto chatMessageDto,
+            @RequestPart(name = "files") List<MultipartFile> files,
+            HttpServletRequest request
+    ) {
+        User user = getCurrentUser(request);
+        List<MessageAttachment> attachments = mediaStorageService.storeChatAttachments(files);
+        try {
+            String content = chatMessageDto == null ? "" : chatMessageDto.getContent();
+            return ResponseEntity.ok(chatService.sendMessage(roomId, user.getId(), content, attachments));
+        } catch (RuntimeException exception) {
+            mediaStorageService.deleteMedia(mediaStorageService.attachmentUrls(attachments));
+            throw exception;
+        }
     }
 
     @PostMapping("/rooms/{roomId}/messages/read")

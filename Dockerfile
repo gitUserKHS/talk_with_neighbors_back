@@ -12,7 +12,10 @@ RUN ./gradlew bootJar -x test --no-daemon
 FROM eclipse-temurin:17-jre-alpine
 WORKDIR /app
 
-RUN addgroup -S spring && adduser -S spring -G spring
+RUN apk add --no-cache ffmpeg \
+    && addgroup -S spring && adduser -S spring -G spring \
+    && mkdir -p /app/uploads \
+    && chown -R spring:spring /app/uploads
 COPY --from=builder /workspace/build/libs/*.jar app.jar
 USER spring:spring
 
