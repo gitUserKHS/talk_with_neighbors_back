@@ -5,6 +5,7 @@ import com.talkwithneighbors.dto.ChatMessageDto;
 import com.talkwithneighbors.dto.ChatRoomDto;
 import com.talkwithneighbors.dto.CreateRoomRequest;
 import com.talkwithneighbors.dto.MessageDto;
+import com.talkwithneighbors.dto.UpdateChatMessageRequest;
 import com.talkwithneighbors.entity.ChatRoomType;
 import com.talkwithneighbors.entity.User;
 import com.talkwithneighbors.exception.ChatException;
@@ -45,6 +46,7 @@ import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -203,6 +205,50 @@ class ChatControllerTest {
                         .content(objectMapper.writeValueAsString(request)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.id").value("msg-1"));
+    }
+
+    @Test
+    void updateMessageSuccess() throws Exception {
+        MessageDto response = new MessageDto();
+        response.setId("msg-1");
+        response.setContent("수정된 메시지");
+        when(chatService.updateMessage(eq("room-1"), eq("msg-1"), eq(1L), eq("수정된 메시지")))
+                .thenReturn(response);
+
+        mockMvc.perform(patch("/api/chat/rooms/{roomId}/messages/{messageId}", "room-1", "msg-1")
+                        .header(SESSION_HEADER, SESSION_ID)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(
+                                new UpdateChatMessageRequest("수정된 메시지"))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value("msg-1"))
+                .andExpect(jsonPath("$.content").value("수정된 메시지"));
+    }
+
+    @Test
+    void deleteMessageSuccess() throws Exception {
+        MessageDto response = new MessageDto();
+        response.setId("msg-1");
+        response.setDeleted(true);
+        when(chatService.deleteMessage("room-1", "msg-1", 1L)).thenReturn(response);
+
+        mockMvc.perform(delete("/api/chat/rooms/{roomId}/messages/{messageId}", "room-1", "msg-1")
+                        .header(SESSION_HEADER, SESSION_ID))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value("msg-1"))
+                .andExpect(jsonPath("$.isDeleted").value(true));
+    }
+
+    @Test
+    void updateAnotherUsersMessageReturnsForbidden() throws Exception {
+        when(chatService.updateMessage(anyString(), anyString(), anyLong(), anyString()))
+                .thenThrow(new ChatException("내 메시지만 수정할 수 있어.", HttpStatus.FORBIDDEN));
+
+        mockMvc.perform(patch("/api/chat/rooms/{roomId}/messages/{messageId}", "room-1", "msg-2")
+                        .header(SESSION_HEADER, SESSION_ID)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(new UpdateChatMessageRequest("수정"))))
+                .andExpect(status().isForbidden());
     }
 
     @Test

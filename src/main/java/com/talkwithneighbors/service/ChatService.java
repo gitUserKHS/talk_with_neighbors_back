@@ -27,6 +27,10 @@ public interface ChatService {
 
     MessageDto sendMessage(String roomId, Long senderId, String content, List<MessageAttachment> attachments);
 
+    MessageDto updateMessage(String roomId, String messageId, Long requesterId, String content);
+
+    MessageDto deleteMessage(String roomId, String messageId, Long requesterId);
+
     // 특정 채팅방의 메시지 목록 조회 (페이징 처리)
     Page<MessageDto> getMessagesByRoomId(String roomId, String userId, Pageable pageable);
 

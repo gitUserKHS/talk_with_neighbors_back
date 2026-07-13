@@ -78,11 +78,17 @@ public class Message {
      * 메시지 수정 시간
      */
     private LocalDateTime updatedAt;
+
+    @Column(name = "edited_at")
+    private LocalDateTime editedAt;
     
     /**
      * 메시지 삭제 상태
      */
     private boolean isDeleted = false;
+
+    @Column(name = "deleted_at")
+    private LocalDateTime deletedAt;
     
     /**
      * 메시지 읽음 상태
