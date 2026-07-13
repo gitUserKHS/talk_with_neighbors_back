@@ -2,7 +2,7 @@ name: talk-with-neighbors
 
 services:
   mysql:
-    image: mysql:8.4
+    image: mysql:8.4@sha256:c831a0f11348d402b43d77453e17d770be2eef356615a2823fe0f5a0d6c8b9af
     restart: unless-stopped
     environment:
       MYSQL_DATABASE: ${MYSQL_DATABASE:-talk_with_neighbors}
@@ -19,7 +19,7 @@ services:
       start_period: 20s
 
   redis:
-    image: redis:7.4-alpine
+    image: redis:7.4-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99
     restart: unless-stopped
     volumes:
       - redis_data:/data
@@ -33,19 +33,35 @@ services:
     image: ghcr.io/gituserkhs/talk_with_neighbors_back:${IMAGE_TAG:-latest}
     restart: unless-stopped
     environment:
+      SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-production}
       SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/${MYSQL_DATABASE:-talk_with_neighbors}?useUnicode=true&characterEncoding=UTF-8&useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true
       SPRING_DATASOURCE_USERNAME: ${MYSQL_USER:-twn}
       SPRING_DATASOURCE_PASSWORD: ${MYSQL_PASSWORD}
+      SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE: ${DB_POOL_MIN_IDLE:-2}
+      SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE: ${DB_POOL_MAX_SIZE:-10}
+      SPRING_JPA_SHOW_SQL: ${SPRING_JPA_SHOW_SQL:-false}
       SPRING_DATA_REDIS_HOST: redis
       SPRING_SESSION_STORE_TYPE: redis
       APP_REDIS_ENABLED: "true"
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET}
       CORS_ALLOWED_ORIGINS: ${PUBLIC_ORIGIN:?set PUBLIC_ORIGIN}
+      APP_SESSION_COOKIE_SECURE: ${APP_SESSION_COOKIE_SECURE:-false}
+      APP_MEDIA_STORAGE_DIRECTORY: /app/uploads
+      APP_MEDIA_MAX_CONCURRENT_PROCESSES: ${APP_MEDIA_MAX_CONCURRENT_PROCESSES:-1}
+      JAVA_OPTS: ${BACKEND_JAVA_OPTS:--Dfile.encoding=UTF-8 -XX:MaxRAMPercentage=70.0 -XX:InitialRAMPercentage=25.0 -XX:+UseG1GC}
+    volumes:
+      - media_data:/app/uploads
     depends_on:
       mysql:
         condition: service_healthy
       redis:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/actuator/health/readiness"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 45s
 
   frontend:
     image: ghcr.io/gituserkhs/talk_with_neighbors_front:${IMAGE_TAG:-latest}
@@ -59,3 +75,4 @@ services:
 volumes:
   mysql_data:
   redis_data:
+  media_data:

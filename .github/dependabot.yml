@@ -9,3 +9,11 @@ updates:
     directory: "/"
     schedule:
       interval: monthly
+  - package-ecosystem: terraform
+    directory: "/infra/aws-ec2"
+    schedule:
+      interval: monthly
+  - package-ecosystem: docker
+    directory: "/"
+    schedule:
+      interval: monthly

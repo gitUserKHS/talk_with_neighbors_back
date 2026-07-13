@@ -1,0 +1,24 @@
+# Seoul defaults. Change both values together if deploying to another region.
+aws_region        = "ap-northeast-2"
+availability_zone = "ap-northeast-2a"
+
+# ARM64 only. t4g.small is the low-cost 2 GiB portfolio default.
+instance_type              = "t4g.small"
+root_volume_size_gib       = 30
+k3s_version                = "v1.34.8+k3s1"
+k3s_install_script_sha256  = "40b487f0d8ef4f5d1bf422e7bb6228cc7789c40ecc66c5ab067d396bbee9816e"
+aws_cli_version             = "2.35.22"
+aws_cli_aarch64_sha256      = "022e392e079ada523be29cdbb45061a74be6344179f8fddf2b8183f1898683f1"
+media_bucket_force_destroy = false
+media_noncurrent_version_expiration_days = 30
+
+github_owner       = "gitUserKHS"
+github_repository  = "talk_with_neighbors_back"
+github_environment = "production"
+
+# Set this when the AWS account already has the GitHub Actions OIDC provider.
+# github_oidc_provider_arn = "arn:aws:iam::123456789012:oidc-provider/token.actions.githubusercontent.com"
+
+# Optional. When set, Terraform creates a $10/month budget with email alerts.
+# budget_alert_email = "you@example.com"
+monthly_budget_usd = 10

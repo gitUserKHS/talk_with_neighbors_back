@@ -12,6 +12,10 @@ import com.talkwithneighbors.service.media.MediaProcessingBusyException;
 import com.talkwithneighbors.service.media.MediaProcessingRequest;
 import com.talkwithneighbors.service.media.MediaProcessor;
 import com.talkwithneighbors.service.media.ProcessedMedia;
+import com.talkwithneighbors.service.media.storage.LocalMediaObjectStorage;
+import com.talkwithneighbors.service.media.storage.MediaObjectStorage;
+import com.talkwithneighbors.service.media.storage.MediaObjectStorageException;
+import com.talkwithneighbors.service.media.storage.MediaStoragePath;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
@@ -45,7 +49,6 @@ public class MediaStorageService {
     public static final long MAX_TOTAL_BYTES = 200L * 1024 * 1024;
     public static final long MAX_CHAT_TOTAL_BYTES = 120L * 1024 * 1024;
 
-    private static final String PUBLIC_ROOT = "/uploads/";
     private static final Set<String> ZIP_EXTENSIONS = Set.of(".zip", ".docx", ".xlsx", ".pptx");
     private static final Set<String> OLE_EXTENSIONS = Set.of(".doc", ".xls", ".ppt");
     private static final Set<String> TEXT_EXTENSIONS = Set.of(".txt", ".csv", ".json", ".md");
@@ -66,25 +69,31 @@ public class MediaStorageService {
 
     private final Path rootDirectory;
     private final Path incomingDirectory;
+    private final Path processingDirectory;
     private final MediaProcessor mediaProcessor;
+    private final MediaObjectStorage objectStorage;
 
     @Autowired
     public MediaStorageService(
             @Value("${app.media.storage-directory:./uploads}") String storageDirectory,
-            MediaProcessor mediaProcessor
+            MediaProcessor mediaProcessor,
+            MediaObjectStorage objectStorage
     ) {
         this.rootDirectory = Paths.get(storageDirectory).toAbsolutePath().normalize();
         this.incomingDirectory = rootDirectory.resolve(".incoming").normalize();
+        this.processingDirectory = incomingDirectory.resolve("processed").normalize();
         this.mediaProcessor = mediaProcessor;
-        createDirectories(rootDirectory, incomingDirectory);
+        this.objectStorage = objectStorage;
+        createDirectories(rootDirectory, incomingDirectory, processingDirectory);
+    }
+
+    public MediaStorageService(String storageDirectory, MediaProcessor mediaProcessor) {
+        this(storageDirectory, mediaProcessor, new LocalMediaObjectStorage(storageDirectory));
     }
 
     /** Lightweight constructor used by storage validation tests without requiring FFmpeg. */
     public MediaStorageService(String storageDirectory) {
-        this.rootDirectory = Paths.get(storageDirectory).toAbsolutePath().normalize();
-        this.incomingDirectory = rootDirectory.resolve(".incoming").normalize();
-        this.mediaProcessor = new PassthroughMediaProcessor();
-        createDirectories(rootDirectory, incomingDirectory);
+        this(storageDirectory, new PassthroughMediaProcessor(), new LocalMediaObjectStorage(storageDirectory));
     }
 
     public List<FeedPostMedia> storePostMedia(List<MultipartFile> files) {
@@ -144,14 +153,14 @@ public class MediaStorageService {
             return;
         }
         for (String url : urls) {
-            Path target = resolveOwnedUrl(url);
-            if (target == null) {
+            String relativeKey = MediaStoragePath.fromPublicUrl(url).orElse(null);
+            if (relativeKey == null) {
                 continue;
             }
             try {
-                Files.deleteIfExists(target);
-            } catch (IOException exception) {
-                log.warn("미디어 파일을 삭제하지 못했습니다. path={}", target, exception);
+                objectStorage.delete(relativeKey);
+            } catch (RuntimeException exception) {
+                log.warn("Could not delete owned media object. key={}", relativeKey, exception);
             }
         }
     }
@@ -169,13 +178,14 @@ public class MediaStorageService {
 
     private List<MediaAsset> storeAssets(List<MultipartFile> files, StoragePolicy policy) {
         validateRequest(files, policy);
-        Path outputDirectory = rootDirectory.resolve(policy.category()).normalize();
-        if (!outputDirectory.startsWith(rootDirectory)) {
+        Path outputDirectory = processingDirectory.resolve(policy.category()).normalize();
+        if (!outputDirectory.startsWith(processingDirectory)) {
             throw new MatchingException("안전하지 않은 미디어 경로입니다.", HttpStatus.BAD_REQUEST);
         }
         createDirectories(outputDirectory);
 
         List<Path> storedPaths = new ArrayList<>();
+        List<String> storedKeys = new ArrayList<>();
         List<MediaAsset> storedAssets = new ArrayList<>();
         try {
             for (MultipartFile file : files) {
@@ -198,13 +208,16 @@ public class MediaStorageService {
                         Path target = outputDirectory.resolve(baseName + detected.extension()).normalize();
                         Files.move(incoming, target, StandardCopyOption.REPLACE_EXISTING);
                         storedPaths.add(target);
+                        String relativeKey = relativeKey(policy.category(), target);
+                        long sizeBytes = Files.size(target);
+                        persistObject(relativeKey, target, detected.contentType(), storedKeys);
                         asset = new MediaAsset(
-                                publicUrl(policy.category(), target),
+                                MediaStoragePath.publicUrl(relativeKey),
                                 null,
                                 MediaAssetKind.FILE,
                                 detected.contentType(),
                                 originalName,
-                                Files.size(target),
+                                sizeBytes,
                                 null,
                                 null,
                                 null
@@ -224,14 +237,21 @@ public class MediaStorageService {
                         if (processed.thumbnailPath() != null) {
                             storedPaths.add(processed.thumbnailPath());
                         }
+                        String mediaKey = relativeKey(policy.category(), processed.mediaPath());
+                        String thumbnailKey = processed.thumbnailPath() == null
+                                ? null : relativeKey(policy.category(), processed.thumbnailPath());
+                        long sizeBytes = Files.size(processed.mediaPath());
+                        persistObject(mediaKey, processed.mediaPath(), processed.contentType(), storedKeys);
+                        if (processed.thumbnailPath() != null) {
+                            persistObject(thumbnailKey, processed.thumbnailPath(), "image/webp", storedKeys);
+                        }
                         asset = new MediaAsset(
-                                publicUrl(policy.category(), processed.mediaPath()),
-                                processed.thumbnailPath() == null
-                                        ? null : publicUrl(policy.category(), processed.thumbnailPath()),
+                                MediaStoragePath.publicUrl(mediaKey),
+                                thumbnailKey == null ? null : MediaStoragePath.publicUrl(thumbnailKey),
                                 detected.type(),
                                 processed.contentType(),
                                 originalName,
-                                Files.size(processed.mediaPath()),
+                                sizeBytes,
                                 processed.width(),
                                 processed.height(),
                                 processed.durationSeconds()
@@ -244,19 +264,25 @@ public class MediaStorageService {
             }
             return List.copyOf(storedAssets);
         } catch (MediaProcessingBusyException exception) {
-            deletePaths(storedPaths);
+            rollback(storedPaths, storedKeys);
             throw new MatchingException(exception.getMessage(), HttpStatus.SERVICE_UNAVAILABLE);
         } catch (MediaProcessingException exception) {
-            deletePaths(storedPaths);
+            rollback(storedPaths, storedKeys);
             throw new MatchingException(exception.getMessage(), HttpStatus.BAD_REQUEST);
+        } catch (MediaObjectStorageException exception) {
+            rollback(storedPaths, storedKeys);
+            throw new MatchingException(
+                    "미디어 파일을 저장하지 못했습니다. 잠시 후 다시 시도해주세요.",
+                    HttpStatus.INTERNAL_SERVER_ERROR
+            );
         } catch (IOException exception) {
-            deletePaths(storedPaths);
+            rollback(storedPaths, storedKeys);
             throw new MatchingException(
                     "미디어 파일을 저장하지 못했습니다. 잠시 후 다시 시도해주세요.",
                     HttpStatus.INTERNAL_SERVER_ERROR
             );
         } catch (RuntimeException exception) {
-            deletePaths(storedPaths);
+            rollback(storedPaths, storedKeys);
             throw exception;
         }
     }
@@ -412,29 +438,8 @@ public class MediaStorageService {
         return extension.length() <= 8 ? extension : "";
     }
 
-    private String publicUrl(String category, Path path) {
-        return PUBLIC_ROOT + category + "/" + path.getFileName();
-    }
-
-    private Path resolveOwnedUrl(String url) {
-        if (url == null || !url.startsWith(PUBLIC_ROOT)) {
-            return null;
-        }
-        String relative = url.substring(PUBLIC_ROOT.length());
-        if (relative.isBlank() || relative.contains("?") || relative.contains("#")) {
-            return null;
-        }
-        Path relativePath;
-        try {
-            relativePath = Paths.get(relative).normalize();
-        } catch (RuntimeException exception) {
-            return null;
-        }
-        if (relativePath.isAbsolute() || relativePath.getNameCount() != 2) {
-            return null;
-        }
-        Path target = rootDirectory.resolve(relativePath).normalize();
-        return target.startsWith(rootDirectory) ? target : null;
+    private String relativeKey(String category, Path path) {
+        return MediaStoragePath.relativeKey(category, path.getFileName().toString());
     }
 
     private String claimedTypeOr(String claimed, String fallback) {
@@ -485,6 +490,28 @@ public class MediaStorageService {
                 Files.deleteIfExists(path);
             } catch (IOException exception) {
                 log.warn("실패한 업로드의 임시 파일을 삭제하지 못했습니다. path={}", path, exception);
+            }
+        }
+    }
+
+    private void persistObject(
+            String relativeKey,
+            Path source,
+            String contentType,
+            Collection<String> storedKeys
+    ) throws IOException {
+        objectStorage.store(relativeKey, source, contentType);
+        storedKeys.add(relativeKey);
+        Files.deleteIfExists(source);
+    }
+
+    private void rollback(Collection<Path> paths, Collection<String> storedKeys) {
+        deletePaths(paths);
+        for (String relativeKey : storedKeys) {
+            try {
+                objectStorage.delete(relativeKey);
+            } catch (RuntimeException exception) {
+                log.warn("Could not roll back media object. key={}", relativeKey, exception);
             }
         }
     }
