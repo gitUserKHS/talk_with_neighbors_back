@@ -12,7 +12,7 @@ on:
         required: true
         type: string
       public_origin:
-        description: "Optional HTTP origin; blank derives the EC2 IPv4; diagnose://k3s collects a private diagnostic artifact"
+        description: "Optional HTTP origin; blank derives the EC2 IPv4; diagnose://k3s collects a redacted one-day diagnostic artifact"
         required: false
         type: string
       start_if_stopped:
@@ -31,7 +31,7 @@ permissions:
 
 jobs:
   diagnose:
-    name: Collect private k3s diagnostics
+    name: Collect redacted k3s diagnostics
     if: github.ref == 'refs/heads/main' && inputs.public_origin == 'diagnose://k3s'
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -59,6 +59,7 @@ jobs:
           diagnostic_script='set -eu
           namespace=talk-with-neighbors
           output=/tmp/twn-k3s-diagnostics.txt
+          redacted=/tmp/twn-k3s-diagnostics-redacted.txt
           {
             date --iso-8601=seconds
             k3s kubectl get nodes -o wide
@@ -69,8 +70,14 @@ jobs:
             k3s kubectl -n "$namespace" logs deployment/backend --all-containers=true --tail=300 || true
             k3s kubectl -n "$namespace" logs deployment/backend --all-containers=true --previous --tail=300 || true
           } >"$output" 2>&1
-          gzip -9 -c "$output" | base64 -w0
-          rm -f -- "$output"'
+          sed -E \
+            -e "/(authorization|cookie|password|secret|session([ _-]?id)?|token)/I c\\[REDACTED SENSITIVE LOG LINE]" \
+            -e "s/[[:alnum:]._%+-]+@[[:alnum:].-]+\\.[[:alpha:]]{2,}/[REDACTED_EMAIL]/g" \
+            -e "s/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/[REDACTED_UUID]/g" \
+            -e "s/eyJ[A-Za-z0-9._-]+/[REDACTED_JWT]/g" \
+            "$output" >"$redacted"
+          gzip -9 -c "$redacted" | base64 -w0
+          shred -u -- "$output" "$redacted" 2>/dev/null || rm -f -- "$output" "$redacted"'
           jq -n --arg script "$diagnostic_script" '{commands:[$script],executionTimeout:["180"]}' > "$parameters_file"
 
           command_id="$(aws ssm send-command \
@@ -106,7 +113,7 @@ jobs:
           [[ -n "$encoded" && "$encoded" != "None" ]] || { echo "Diagnostic output is empty" >&2; exit 1; }
           printf '%s' "$encoded" | base64 -d | gzip -d > "$RUNNER_TEMP/k3s-diagnostics.txt"
 
-      - name: Upload private diagnostic artifact
+      - name: Upload redacted diagnostic artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: k3s-diagnostics-${{ github.run_id }}
