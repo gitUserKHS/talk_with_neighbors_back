@@ -36,7 +36,7 @@ flowchart LR
 | 임시 저장소 | Redis 7.4 | 세션, 온라인 상태, 대기 중 매칭, 현재 채팅방 |
 | 프록시 | Nginx | SPA 제공, `/api`, `/ws`, `/uploads` 역방향 프록시 |
 | 실행 | Docker Compose | 프론트, 백엔드, MySQL, Redis 통합 실행 |
-| 자동화 | GitHub Actions | 타입 검사, 테스트, 빌드; 외부 배포 워크플로는 비활성화 |
+| 자동화 | GitHub Actions, Terraform, Kustomize | 테스트·이미지 게시·k3s 배포; 인프라 생성은 승인 후 수동 적용 |
 
 ## 저장소 구조
 

@@ -14,6 +14,7 @@
 8. [제품 기능 백로그](08-product-backlog.md) — 다음 기능 후보와 우선순위
 9. [사용자 안전 기능](09-safety-and-moderation.md) — 차단·신고·콘텐츠 숨김 정책과 API
 10. [제품 확장 기능](10-product-expansion.md) — 영구 알림함, 온보딩, 모임 일정, 프라이버시, 설명형 매칭
+11. [AWS EC2 + S3 + k3s 배포](deployment/aws-k3s.md) — 포트폴리오용 저비용 구조, Terraform, OIDC·SSM 배포, 테스트·비용 관리
 
 ## 빠른 시작
 

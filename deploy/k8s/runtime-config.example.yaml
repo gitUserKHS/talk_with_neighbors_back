@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: runtime-config
+  namespace: talk-with-neighbors
+data:
+  # Use the exact browser origin. Switch cookie-secure to true with HTTPS.
+  public-origin: http://203.0.113.10
+  cookie-secure: "false"
+  # The EC2 instance role supplies short-lived credentials; never put AWS keys here.
+  media-storage-type: s3
+  media-s3-region: ap-northeast-2
+  media-s3-bucket: replace-with-terraform-media-bucket-output
+  media-s3-prefix: media

@@ -4,7 +4,9 @@ import com.talkwithneighbors.entity.FeedMediaType;
 import com.talkwithneighbors.entity.FeedPostMedia;
 import com.talkwithneighbors.entity.ChatAttachmentType;
 import com.talkwithneighbors.service.media.MediaAssetKind;
+import com.talkwithneighbors.service.media.MediaProcessor;
 import com.talkwithneighbors.service.media.ProcessedMedia;
+import com.talkwithneighbors.service.media.storage.MediaObjectStorage;
 import com.talkwithneighbors.exception.MatchingException;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -14,7 +16,9 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -119,6 +123,64 @@ class MediaStorageServiceTest {
         assertThrows(MatchingException.class, () -> service.storeProfileImage(video));
     }
 
+    @Test
+    void storesProcessedObjectsInRemoteStorageButKeepsStablePublicUrls() throws IOException {
+        RecordingObjectStorage remoteStorage = new RecordingObjectStorage();
+        MediaStorageService service = new MediaStorageService(
+                tempDirectory.toString(), processorWithThumbnail(), remoteStorage);
+
+        FeedPostMedia stored = service.storePostMedia(List.of(new MockMultipartFile(
+                "files", "photo.jpg", "image/jpeg", jpegBytes()
+        ))).get(0);
+
+        String mediaKey = stored.getUrl().substring("/uploads/".length());
+        String thumbnailKey = stored.getThumbnailUrl().substring("/uploads/".length());
+        assertTrue(stored.getUrl().startsWith("/uploads/feed/"));
+        assertTrue(remoteStorage.objects.containsKey(mediaKey));
+        assertTrue(remoteStorage.objects.containsKey(thumbnailKey));
+        try (var files = Files.walk(tempDirectory.resolve(".incoming"))) {
+            assertEquals(0, files.filter(Files::isRegularFile).count());
+        }
+    }
+
+    @Test
+    void rollsBackRemoteObjectsWhenLaterFileInSameRequestIsInvalid() {
+        RecordingObjectStorage remoteStorage = new RecordingObjectStorage();
+        MediaStorageService service = new MediaStorageService(
+                tempDirectory.toString(), processorWithThumbnail(), remoteStorage);
+        MockMultipartFile valid = new MockMultipartFile(
+                "files", "photo.jpg", "image/jpeg", jpegBytes()
+        );
+        MockMultipartFile spoofed = new MockMultipartFile(
+                "files", "not-really-video.mp4", "video/mp4", "plain text".getBytes()
+        );
+
+        assertThrows(MatchingException.class, () -> service.storePostMedia(List.of(valid, spoofed)));
+
+        assertTrue(remoteStorage.objects.isEmpty());
+        assertFalse(remoteStorage.deletedKeys.isEmpty());
+    }
+
+    @Test
+    void deletesOnlyOwnedRemoteUploadUrls() {
+        RecordingObjectStorage remoteStorage = new RecordingObjectStorage();
+        MediaStorageService service = new MediaStorageService(
+                tempDirectory.toString(), processorWithThumbnail(), remoteStorage);
+        FeedPostMedia stored = service.storePostMedia(List.of(new MockMultipartFile(
+                "files", "photo.jpg", "image/jpeg", jpegBytes()
+        ))).get(0);
+
+        service.deleteMedia(List.of(
+                stored.getUrl(),
+                stored.getThumbnailUrl(),
+                "https://example.test/remote.jpg",
+                "/uploads/feed/../secret"
+        ));
+
+        assertTrue(remoteStorage.objects.isEmpty());
+        assertEquals(2, remoteStorage.deletedKeys.size());
+    }
+
     private Path resolve(String publicUrl) {
         return tempDirectory.resolve("feed").resolve(publicUrl.substring("/uploads/feed/".length()));
     }
@@ -134,5 +196,43 @@ class MediaStorageServiceTest {
                 'i', 's', 'o', 'm',
                 0x00, 0x00, 0x00, 0x00
         };
+    }
+
+    private MediaProcessor processorWithThumbnail() {
+        return request -> {
+            String extension = request.type() == MediaAssetKind.IMAGE ? ".webp" : ".mp4";
+            Path media = request.outputDirectory().resolve(request.baseName() + extension);
+            Path thumbnail = request.outputDirectory().resolve(request.baseName() + "-thumbnail.webp");
+            Files.move(request.input(), media, StandardCopyOption.REPLACE_EXISTING);
+            Files.write(thumbnail, new byte[] {1, 2, 3});
+            return new ProcessedMedia(media, thumbnail,
+                    request.type() == MediaAssetKind.IMAGE ? "image/webp" : "video/mp4",
+                    640, 360, null);
+        };
+    }
+
+    private static final class RecordingObjectStorage implements MediaObjectStorage {
+        private final Map<String, byte[]> objects = new HashMap<>();
+        private final java.util.Set<String> deletedKeys = new java.util.HashSet<>();
+
+        @Override
+        public void store(String relativeKey, Path source, String contentType) {
+            try {
+                objects.put(relativeKey, Files.readAllBytes(source));
+            } catch (IOException exception) {
+                throw new IllegalStateException(exception);
+            }
+        }
+
+        @Override
+        public void delete(String relativeKey) {
+            deletedKeys.add(relativeKey);
+            objects.remove(relativeKey);
+        }
+
+        @Override
+        public void checkHealth() {
+            // In-memory fake is always healthy.
+        }
     }
 }

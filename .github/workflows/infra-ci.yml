@@ -1,0 +1,91 @@
+name: Infrastructure CI
+
+on:
+  pull_request:
+    paths:
+      - "infra/**"
+      - "deploy/k8s/**"
+      - ".github/workflows/infra-ci.yml"
+      - ".github/workflows/deploy-k3s.yml"
+  push:
+    branches: [main]
+    paths:
+      - "infra/**"
+      - "deploy/k8s/**"
+      - ".github/workflows/infra-ci.yml"
+      - ".github/workflows/deploy-k3s.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: infrastructure-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  terraform:
+    name: Terraform format and validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: infra/aws-ec2
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4
+        with:
+          terraform_version: 1.14.6
+      - run: terraform fmt -check -recursive
+      - run: terraform init -backend=false -input=false
+      - run: terraform validate -no-color
+      - run: terraform test -no-color
+
+  kubernetes:
+    name: Render and validate Kubernetes
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - uses: azure/setup-kubectl@829323503d1be3d00ca8346e5391ca0b07a9ab0d # v5
+        with:
+          version: v1.34.1
+      - name: Render kustomization
+        run: kubectl kustomize deploy/k8s/base > rendered-kubernetes.yaml
+      - name: Validate schemas
+        run: >-
+          docker run --rm
+          -v "${PWD}:/work"
+          ghcr.io/yannh/kubeconform:v0.7.0@sha256:85dbef6b4b312b99133decc9c6fc9495e9fc5f92293d4ff3b7e1b30f5611823c
+          -strict -summary
+          -kubernetes-version 1.34.0
+          /work/rendered-kubernetes.yaml
+          /work/deploy/k8s/runtime-config.example.yaml
+          /work/deploy/k8s/secrets.example.yaml
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: rendered-kubernetes
+          path: rendered-kubernetes.yaml
+          if-no-files-found: error
+          retention-days: 7
+
+  workflows:
+    name: GitHub Actions lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - name: Run ShellCheck on deployment scripts
+        run: >-
+          docker run --rm
+          -v "${PWD}:/repo"
+          koalaman/shellcheck:stable@sha256:bb596a0d169b85ddd81d8b6d3a2ff6d5baf5fca10b97f575ebc647c3dff62b3d
+          /repo/deploy/k8s/build-bundle.sh
+          /repo/deploy/k8s/deploy-via-ssm.sh
+          /repo/deploy/k8s/deploy-on-node.sh
+      - name: Run actionlint
+        run: >-
+          docker run --rm
+          -v "${PWD}:/repo"
+          -w /repo
+          rhysd/actionlint:1.7.7@sha256:887a259a5a534f3c4f36cb02dca341673c6089431057242cdc931e9f133147e9

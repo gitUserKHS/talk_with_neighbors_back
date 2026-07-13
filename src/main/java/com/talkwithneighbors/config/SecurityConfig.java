@@ -28,7 +28,7 @@ public class SecurityConfig {
                 .anyRequest().permitAll()  // 모든 요청 허용
             )
             .sessionManagement(session -> session
-                .sessionCreationPolicy(SessionCreationPolicy.ALWAYS)  // 세션을 항상 생성
+                .sessionCreationPolicy(SessionCreationPolicy.IF_REQUIRED)
                 .maximumSessions(1)  // 동시 세션 제한
                 .maxSessionsPreventsLogin(false)  // 새로운 로그인 시 이전 세션 만료
             )
@@ -37,4 +37,4 @@ public class SecurityConfig {
 
         return http.build();
     }
-} 
+}
