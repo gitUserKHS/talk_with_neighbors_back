@@ -1,0 +1,178 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend
+  labels:
+    app.kubernetes.io/name: backend
+    app.kubernetes.io/component: api
+spec:
+  selector:
+    app.kubernetes.io/name: backend
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend
+  labels:
+    app.kubernetes.io/name: backend
+    app.kubernetes.io/component: api
+spec:
+  # In-memory STOMP and scheduled jobs still make one replica the safe limit.
+  # Durable media is stored in S3; /tmp is only an FFmpeg staging area.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: backend
+  template:
+    metadata:
+      annotations:
+        talkwithneighbors.io/release: REPLACE_RELEASE_ID
+      labels:
+        app.kubernetes.io/name: backend
+        app.kubernetes.io/component: api
+    spec:
+      imagePullSecrets:
+        - name: ghcr-pull
+      terminationGracePeriodSeconds: 300
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 100
+        runAsGroup: 101
+        fsGroup: 101
+        fsGroupChangePolicy: OnRootMismatch
+      containers:
+        - name: backend
+          image: ghcr.io/gituserkhs/talk_with_neighbors_back@sha256:0000000000000000000000000000000000000000000000000000000000000000
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: SPRING_PROFILES_ACTIVE
+              value: production
+            - name: SPRING_DATASOURCE_URL
+              value: jdbc:mysql://mysql:3306/talk_with_neighbors?useUnicode=true&characterEncoding=UTF-8&useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true&rewriteBatchedStatements=true
+            - name: SPRING_DATASOURCE_USERNAME
+              value: twn
+            - name: SPRING_DATASOURCE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: app-secrets
+                  key: mysql-password
+            - name: SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE
+              value: "1"
+            - name: SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE
+              value: "5"
+            - name: SPRING_DATA_REDIS_HOST
+              value: redis
+            - name: SPRING_DATA_REDIS_PORT
+              value: "6379"
+            - name: SPRING_SESSION_STORE_TYPE
+              value: redis
+            - name: APP_REDIS_ENABLED
+              value: "true"
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: app-secrets
+                  key: jwt-secret
+            - name: CORS_ALLOWED_ORIGINS
+              valueFrom:
+                configMapKeyRef:
+                  name: runtime-config
+                  key: public-origin
+            - name: CORS_ALLOWED_METHODS
+              value: GET,POST,PUT,PATCH,DELETE,OPTIONS
+            - name: APP_SESSION_COOKIE_SECURE
+              valueFrom:
+                configMapKeyRef:
+                  name: runtime-config
+                  key: cookie-secure
+            - name: APP_MEDIA_STORAGE_TYPE
+              valueFrom:
+                configMapKeyRef:
+                  name: runtime-config
+                  key: media-storage-type
+            - name: APP_MEDIA_S3_REGION
+              valueFrom:
+                configMapKeyRef:
+                  name: runtime-config
+                  key: media-s3-region
+            - name: APP_MEDIA_S3_BUCKET
+              valueFrom:
+                configMapKeyRef:
+                  name: runtime-config
+                  key: media-s3-bucket
+            - name: APP_MEDIA_S3_PREFIX
+              valueFrom:
+                configMapKeyRef:
+                  name: runtime-config
+                  key: media-s3-prefix
+            - name: APP_MEDIA_STORAGE_DIRECTORY
+              value: /tmp/twn-media
+            - name: APP_MEDIA_MAX_CONCURRENT_PROCESSES
+              value: "1"
+            - name: SERVER_TOMCAT_THREADS_MAX
+              value: "50"
+            - name: SERVER_TOMCAT_THREADS_MIN_SPARE
+              value: "5"
+            - name: JAVA_OPTS
+              value: -Dfile.encoding=UTF-8 -Xms192m -Xmx448m -XX:+UseG1GC -XX:+ExitOnOutOfMemoryError -Duser.timezone=UTC
+            - name: TZ
+              value: UTC
+            - name: SERVER_FORWARD_HEADERS_STRATEGY
+              value: framework
+            - name: SERVER_SHUTDOWN
+              value: graceful
+            - name: SPRING_LIFECYCLE_TIMEOUT_PER_SHUTDOWN_PHASE
+              value: 240s
+          startupProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: http
+            failureThreshold: 36
+            periodSeconds: 5
+            timeoutSeconds: 3
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: http
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 5
+          resources:
+            requests:
+              cpu: 200m
+              memory: 512Mi
+              ephemeral-storage: 256Mi
+            limits:
+              cpu: "1"
+              memory: 896Mi
+              ephemeral-storage: 2Gi
+          volumeMounts:
+            - name: temp
+              mountPath: /tmp
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+            readOnlyRootFilesystem: true
+            seccompProfile:
+              type: RuntimeDefault
+      volumes:
+        - name: temp
+          emptyDir:
+            sizeLimit: 2Gi

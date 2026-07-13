@@ -12,24 +12,99 @@ concurrency:
 
 permissions:
   contents: read
-  packages: write
 
 jobs:
-  publish:
+  quality:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    services:
+      mysql:
+        image: mysql:8.4@sha256:c831a0f11348d402b43d77453e17d770be2eef356615a2823fe0f5a0d6c8b9af
+        env:
+          MYSQL_DATABASE: talk_with_neighbors
+          MYSQL_USER: twn
+          MYSQL_PASSWORD: publish-ci-password
+          MYSQL_ROOT_PASSWORD: publish-ci-root-password
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -utwn -ppublish-ci-password --silent"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=30
+      redis:
+        image: redis:7.4-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=5s
+          --health-timeout=3s
+          --health-retries=20
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - uses: actions/setup-java@0f481fcb613427c0f801b606911222b5b6f3083a # v5
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+      - uses: gradle/actions/setup-gradle@3f131e8634966bd73d06cc69884922b02e6faf92 # v6
+      - run: chmod +x gradlew
+      - run: ./gradlew clean test bootJar --no-daemon
+      - name: Validate production compose
+        env:
+          MYSQL_PASSWORD: publish-ci-password
+          MYSQL_ROOT_PASSWORD: publish-ci-root-password
+          JWT_SECRET: publish-ci-only-secret-that-is-long-enough
+          PUBLIC_ORIGIN: https://example.invalid
+        run: docker compose -f compose.production.yml config --quiet
+
+  publish:
+    needs: quality
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      packages: write
+    services:
+      mysql:
+        image: mysql:8.4@sha256:c831a0f11348d402b43d77453e17d770be2eef356615a2823fe0f5a0d6c8b9af
+        env:
+          MYSQL_DATABASE: talk_with_neighbors
+          MYSQL_USER: twn
+          MYSQL_PASSWORD: publish-ci-password
+          MYSQL_ROOT_PASSWORD: publish-ci-root-password
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -utwn -ppublish-ci-password --silent"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=30
+      redis:
+        image: redis:7.4-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=5s
+          --health-timeout=3s
+          --health-retries=20
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
       - name: Normalize image name
         id: image
         shell: bash
         run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+      - uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - uses: docker/metadata-action@v5
+      - uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6
         id: meta
         with:
           images: ${{ steps.image.outputs.name }}
@@ -38,11 +113,81 @@ jobs:
             type=ref,event=tag
             type=sha
             type=raw,value=latest,enable={{is_default_branch}}
-      - uses: docker/build-push-action@v6
+      - name: Build and push an isolated candidate
+        id: push
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
         with:
           context: .
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ steps.image.outputs.name }}:candidate-${{ github.run_id }}-${{ github.run_attempt }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          provenance: mode=max
+          sbom: true
+      - name: Scan the exact pushed digest
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ steps.image.outputs.name }}@${{ steps.push.outputs.digest }}
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          vuln-type: os,library
+          severity: CRITICAL,HIGH
+      - name: Smoke-test the exact pushed digest
+        env:
+          RELEASE_IMAGE: ${{ steps.image.outputs.name }}@${{ steps.push.outputs.digest }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          trap 'docker rm -f talk-with-neighbors-backend-release >/dev/null 2>&1 || true' EXIT
+          docker run --detach --name talk-with-neighbors-backend-release --network host \
+            -e SPRING_PROFILES_ACTIVE=production \
+            -e 'SPRING_DATASOURCE_URL=jdbc:mysql://127.0.0.1:3306/talk_with_neighbors?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC' \
+            -e SPRING_DATASOURCE_USERNAME=twn \
+            -e SPRING_DATASOURCE_PASSWORD=publish-ci-password \
+            -e SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE=1 \
+            -e SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE=5 \
+            -e SPRING_DATA_REDIS_HOST=127.0.0.1 \
+            -e SPRING_DATA_REDIS_PORT=6379 \
+            -e APP_SESSION_COOKIE_SECURE=false \
+            -e CORS_ALLOWED_ORIGINS=http://127.0.0.1:3000 \
+            -e JAVA_OPTS='-Dfile.encoding=UTF-8 -Xms128m -Xmx512m -Duser.timezone=UTC' \
+            "$RELEASE_IMAGE"
+
+          for _ in {1..90}; do
+            if curl --fail --silent --show-error http://127.0.0.1:8080/actuator/health/readiness | grep --quiet '"status":"UP"'; then
+              curl --fail --silent --show-error \
+                'http://127.0.0.1:8080/api/auth/check-duplicates?email=publish%40example.invalid&username=publish-smoke' >/dev/null
+              exit 0
+            fi
+            if [ "$(docker inspect --format '{{.State.Running}}' talk-with-neighbors-backend-release)" != "true" ]; then
+              docker logs talk-with-neighbors-backend-release
+              exit 1
+            fi
+            sleep 2
+          done
+
+          docker logs talk-with-neighbors-backend-release
+          exit 1
+      - name: Promote the verified digest to release tags
+        env:
+          RELEASE_IMAGE: ${{ steps.image.outputs.name }}@${{ steps.push.outputs.digest }}
+          RELEASE_TAGS: ${{ steps.meta.outputs.tags }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag_args=()
+          while IFS= read -r tag; do
+            [[ -n "$tag" ]] && tag_args+=(--tag "$tag")
+          done <<<"$RELEASE_TAGS"
+          (( ${#tag_args[@]} > 0 )) || { echo "No release tags were generated" >&2; exit 1; }
+          docker buildx imagetools create "${tag_args[@]}" "$RELEASE_IMAGE"
+      - name: Write immutable deployment reference
+        env:
+          RELEASE_IMAGE: ${{ steps.image.outputs.name }}@${{ steps.push.outputs.digest }}
+        shell: bash
+        run: |
+          echo "### Verified backend image" >> "$GITHUB_STEP_SUMMARY"
+          printf "\`%s\`\n" "$RELEASE_IMAGE" >> "$GITHUB_STEP_SUMMARY"

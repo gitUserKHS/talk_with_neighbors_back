@@ -27,6 +27,7 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.util.List;
+import java.util.stream.Stream;
 
 @RestController
 @RequestMapping("/api/feed")
@@ -64,7 +65,11 @@ public class FeedController {
         try {
             return ResponseEntity.ok(feedService.createPost(userSession.getUserId(), request, storedMedia));
         } catch (RuntimeException exception) {
-            mediaStorageService.deletePostMedia(storedMedia.stream().map(FeedPostMedia::getUrl).toList());
+            mediaStorageService.deletePostMedia(storedMedia.stream()
+                    .flatMap(media -> Stream.of(media.getUrl(), media.getThumbnailUrl()))
+                    .filter(url -> url != null && !url.isBlank())
+                    .distinct()
+                    .toList());
             throw exception;
         }
     }

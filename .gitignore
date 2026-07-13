@@ -44,3 +44,16 @@ backend-dev*.log
 
 ### Local uploaded media ###
 /uploads/
+
+### Terraform ###
+**/.terraform/
+**/*.tfstate
+**/*.tfstate.*
+**/.terraform.tfstate.lock.info
+**/terraform.tfvars
+**/*.auto.tfvars
+**/crash.log
+**/crash.*.log
+**/tfplan
+**/*.tfplan
+!**/terraform.tfvars.example

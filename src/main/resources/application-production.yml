@@ -1,0 +1,35 @@
+spring:
+  datasource:
+    hikari:
+      minimum-idle: ${SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE:2}
+      maximum-pool-size: ${SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE:10}
+  jpa:
+    hibernate:
+      ddl-auto: ${SPRING_JPA_HIBERNATE_DDL_AUTO:update}
+    show-sql: ${SPRING_JPA_SHOW_SQL:false}
+    properties:
+      hibernate:
+        format_sql: false
+  session:
+    cookie:
+      secure: ${APP_SESSION_COOKIE_SECURE:false}
+
+server:
+  forward-headers-strategy: framework
+  servlet:
+    session:
+      cookie:
+        secure: ${APP_SESSION_COOKIE_SECURE:false}
+
+logging:
+  level:
+    root: ${LOGGING_LEVEL_ROOT:WARN}
+    com.talkwithneighbors: ${LOGGING_LEVEL_COM_TALKWITHNEIGHBORS:INFO}
+    org.springframework.messaging: ${LOGGING_LEVEL_ORG_SPRINGFRAMEWORK_MESSAGING:WARN}
+    org.springframework.web.socket: ${LOGGING_LEVEL_ORG_SPRINGFRAMEWORK_WEB_SOCKET:WARN}
+
+app:
+  media:
+    max-concurrent-processes: ${APP_MEDIA_MAX_CONCURRENT_PROCESSES:1}
+  session:
+    cookie-secure: ${APP_SESSION_COOKIE_SECURE:false}

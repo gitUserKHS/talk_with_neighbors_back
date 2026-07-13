@@ -66,12 +66,13 @@ flowchart TD
 PR과 `main`, `codex/**` 푸시에서 다음을 실행한다.
 
 1. `npm ci`
-2. `npm run typecheck`
-3. `npm run build`
+2. `npm test`
+3. 같은 출처(`/api`, `/ws`) 설정으로 `npm run build`
 4. 프로덕션 Docker 이미지 빌드
-5. `dist` 아티팩트 보관
+5. 실제 Nginx 컨테이너 `/healthz`와 SPA 응답 스모크 테스트
+6. `dist` 아티팩트 보관
 
-GitHub Pages와 프론트 이미지 게시 워크플로는 로컬 전용 운영 방침에 따라 수동 비활성화 상태다.
+GitHub Pages는 공개 API 주소를 명시해야 하는 수동 미리보기다. `main`과 버전 태그의 프론트 이미지는 위 품질 검증을 통과한 뒤 GHCR에 게시된다.
 
 ## 백엔드 CI/CD
 
@@ -81,9 +82,16 @@ PR과 `main`, `codex/**` 푸시에서 다음을 실행한다.
 2. `./gradlew clean test bootJar --no-daemon`
 3. `compose.production.yml` 구성 검증
 4. 프로덕션 Docker 이미지 빌드
-5. 테스트 보고서 보관
+5. 실제 MySQL 8·Redis 7과 함께 컨테이너 readiness 및 DB 조회 스모크 테스트
+6. 테스트 보고서 보관
 
-백엔드 이미지 게시 워크플로는 로컬 전용 운영 방침에 따라 수동 비활성화 상태다.
+`main`과 버전 태그의 백엔드 이미지는 별도 품질 작업이 성공한 뒤에만 GHCR에 게시된다. 게시 이미지에는 provenance와 SBOM attestation을 생성한다.
+
+## AWS 인프라와 k3s 배포
+
+백엔드 저장소의 `infra/aws-ec2/`는 서울 리전 EC2, VPC, S3, SSM, 비용 알림과 GitHub OIDC 배포 역할을 관리한다. `deploy/k8s/base/`는 단일 노드 k3s의 MySQL, Redis, 백엔드, 프론트엔드와 Traefik Ingress를 관리하며 미디어 원본과 변환 결과는 비공개 S3 버킷에 저장한다.
+
+`infra-ci.yml`은 Terraform 형식·스키마, Kustomize 렌더링, Kubernetes 스키마, GitHub Actions 문법을 검증하지만 비용이 발생하는 `terraform apply`는 실행하지 않는다. `deploy-k3s.yml`은 승인된 `production` Environment에서 고정된 GHCR digest만 받아 임시 S3 번들과 SSM Run Command로 배포하고 rollout·readiness·외부 API를 확인한다. SSH 22는 열지 않는다. 자세한 생성·비용 관리·롤백·삭제 절차는 [AWS EC2 + S3 + k3s 배포 가이드](deployment/aws-k3s.md)를 따른다.
 
 ## 참고용 운영 Compose
 
@@ -92,7 +100,7 @@ PR과 `main`, `codex/**` 푸시에서 다음을 실행한다.
 - `ghcr.io/gituserkhs/talk_with_neighbors_front:${IMAGE_TAG:-latest}`
 - `ghcr.io/gituserkhs/talk_with_neighbors_back:${IMAGE_TAG:-latest}`
 
-이 구성은 참고용으로 남아 있으며 현재 자동 게시되는 이미지가 없으므로 로컬 운영에는 사용하지 않는다.
+이 구성은 Kubernetes 없이 한 서버에서 GHCR 이미지를 점검할 때 사용할 수 있다. 업로드 미디어도 `media_data` 볼륨에 보존하지만, 새 배포는 SHA 태그를 명시하고 HTTPS·백업을 별도로 준비해야 한다.
 
 ```bash
 docker compose -f compose.production.yml up -d
