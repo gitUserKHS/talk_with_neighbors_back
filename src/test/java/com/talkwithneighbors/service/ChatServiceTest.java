@@ -18,6 +18,8 @@ import com.talkwithneighbors.repository.MessageRepository;
 import com.talkwithneighbors.repository.UserRepository;
 import com.talkwithneighbors.repository.UserBlockRepository;
 import com.talkwithneighbors.domain.event.ChatMessageCommittedEvent;
+import com.talkwithneighbors.domain.event.ChatMessageChangedEvent;
+import com.talkwithneighbors.domain.event.MediaFilesDeletedEvent;
 import com.talkwithneighbors.service.impl.ChatServiceImpl;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -35,6 +37,7 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import java.time.LocalDateTime;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
@@ -101,6 +104,9 @@ class ChatServiceTest {
         testMessage.setContent("Test message");
         testMessage.setSender(testUser);
         testMessage.setChatRoom(testChatRoom);
+        testMessage.setType(Message.MessageType.TEXT);
+        testMessage.setCreatedAt(LocalDateTime.now().minusMinutes(1));
+        testMessage.setUpdatedAt(testMessage.getCreatedAt());
 
         createRoomRequest = new CreateRoomRequest();
         createRoomRequest.setName("Test Room"); // 1:1 채팅 시 이 값은 무시될 수 있음
@@ -235,6 +241,87 @@ class ChatServiceTest {
         // when & then
         assertThrows(RuntimeException.class, () -> chatService.sendMessage(
             messageDto.getRoomId(), messageDto.getSenderId(), messageDto.getContent()));
+    }
+
+    @Test
+    void senderCanUpdateOwnMessageAndRoomPreview() {
+        when(chatRoomRepository.findByIdForUpdate(testChatRoom.getId())).thenReturn(Optional.of(testChatRoom));
+        when(messageRepository.findById(testMessage.getId())).thenReturn(Optional.of(testMessage));
+        when(messageRepository.save(testMessage)).thenReturn(testMessage);
+        when(messageRepository.findActiveByChatRoomIdOrderByCreatedAtDesc(eq(testChatRoom.getId()), any()))
+                .thenReturn(List.of(testMessage));
+
+        MessageDto result = chatService.updateMessage(
+                testChatRoom.getId(), testMessage.getId(), testUser.getId(), "  수정한 메시지  ");
+
+        assertEquals("수정한 메시지", result.getContent());
+        assertNotNull(result.getEditedAt());
+        assertEquals("수정한 메시지", testChatRoom.getLastMessage());
+        verify(applicationEventPublisher).publishEvent(any(ChatMessageChangedEvent.class));
+    }
+
+    @Test
+    void participantCannotUpdateAnotherUsersMessage() {
+        User otherParticipant = testChatRoom.getParticipants().stream()
+                .filter(user -> !user.getId().equals(testUser.getId()))
+                .findFirst()
+                .orElseThrow();
+        when(chatRoomRepository.findByIdForUpdate(testChatRoom.getId())).thenReturn(Optional.of(testChatRoom));
+        when(messageRepository.findById(testMessage.getId())).thenReturn(Optional.of(testMessage));
+
+        ChatException exception = assertThrows(ChatException.class, () -> chatService.updateMessage(
+                testChatRoom.getId(), testMessage.getId(), otherParticipant.getId(), "가로채기"));
+
+        assertEquals(HttpStatus.FORBIDDEN, exception.getStatus());
+        verify(messageRepository, never()).save(any(Message.class));
+    }
+
+    @Test
+    void senderCanDeleteAttachmentMessageAndMediaIsCleanedAfterCommit() {
+        MessageAttachment attachment = new MessageAttachment(
+                "/uploads/chat/photo.webp",
+                "/uploads/chat/photo-thumbnail.webp",
+                ChatAttachmentType.IMAGE,
+                "image/webp",
+                "photo.jpg",
+                128L,
+                100,
+                100,
+                null
+        );
+        testMessage.setAttachments(new java.util.ArrayList<>(List.of(attachment)));
+        testMessage.setType(Message.MessageType.IMAGE);
+        when(chatRoomRepository.findByIdForUpdate(testChatRoom.getId())).thenReturn(Optional.of(testChatRoom));
+        when(messageRepository.findById(testMessage.getId())).thenReturn(Optional.of(testMessage));
+        when(messageRepository.save(testMessage)).thenReturn(testMessage);
+        when(messageRepository.findActiveByChatRoomIdOrderByCreatedAtDesc(eq(testChatRoom.getId()), any()))
+                .thenReturn(List.of());
+
+        MessageDto result = chatService.deleteMessage(
+                testChatRoom.getId(), testMessage.getId(), testUser.getId());
+
+        assertTrue(result.isDeleted());
+        assertEquals("", result.getContent());
+        assertTrue(result.getAttachments().isEmpty());
+        assertNotNull(result.getDeletedAt());
+        assertNull(testChatRoom.getLastMessage());
+        verify(applicationEventPublisher).publishEvent(any(ChatMessageChangedEvent.class));
+        verify(applicationEventPublisher).publishEvent(argThat((Object event) ->
+                event instanceof MediaFilesDeletedEvent deletedEvent
+                        && deletedEvent.mediaUrls().contains("/uploads/chat/photo.webp")
+                        && deletedEvent.mediaUrls().contains("/uploads/chat/photo-thumbnail.webp")));
+    }
+
+    @Test
+    void deletedMessageCannotBeUpdated() {
+        testMessage.setDeleted(true);
+        when(chatRoomRepository.findByIdForUpdate(testChatRoom.getId())).thenReturn(Optional.of(testChatRoom));
+        when(messageRepository.findById(testMessage.getId())).thenReturn(Optional.of(testMessage));
+
+        ChatException exception = assertThrows(ChatException.class, () -> chatService.updateMessage(
+                testChatRoom.getId(), testMessage.getId(), testUser.getId(), "되살리기"));
+
+        assertEquals(HttpStatus.CONFLICT, exception.getStatus());
     }
 
     @Test

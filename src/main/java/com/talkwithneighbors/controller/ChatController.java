@@ -5,6 +5,7 @@ import com.talkwithneighbors.dto.ChatRoomDto;
 import com.talkwithneighbors.dto.CreateRoomRequest;
 import com.talkwithneighbors.dto.MessageDto;
 import com.talkwithneighbors.dto.UpdateChatRoomRequest;
+import com.talkwithneighbors.dto.UpdateChatMessageRequest;
 import com.talkwithneighbors.entity.ChatRoom;
 import com.talkwithneighbors.entity.ChatRoomType;
 import com.talkwithneighbors.entity.Message;
@@ -252,6 +253,28 @@ public class ChatController extends BaseController {
             mediaStorageService.deleteMedia(mediaStorageService.attachmentUrls(attachments));
             throw exception;
         }
+    }
+
+    @PatchMapping("/rooms/{roomId}/messages/{messageId}")
+    public ResponseEntity<MessageDto> updateMessage(
+            @PathVariable(name = "roomId") String roomId,
+            @PathVariable(name = "messageId") String messageId,
+            @RequestBody UpdateChatMessageRequest updateRequest,
+            HttpServletRequest request
+    ) {
+        User user = getCurrentUser(request);
+        return ResponseEntity.ok(chatService.updateMessage(
+                roomId, messageId, user.getId(), updateRequest.content()));
+    }
+
+    @DeleteMapping("/rooms/{roomId}/messages/{messageId}")
+    public ResponseEntity<MessageDto> deleteMessage(
+            @PathVariable(name = "roomId") String roomId,
+            @PathVariable(name = "messageId") String messageId,
+            HttpServletRequest request
+    ) {
+        User user = getCurrentUser(request);
+        return ResponseEntity.ok(chatService.deleteMessage(roomId, messageId, user.getId()));
     }
 
     @PostMapping("/rooms/{roomId}/messages/read")

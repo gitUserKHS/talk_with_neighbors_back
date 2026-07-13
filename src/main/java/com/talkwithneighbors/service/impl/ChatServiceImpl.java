@@ -5,6 +5,7 @@ import com.talkwithneighbors.dto.ChatRoomDto;
 import com.talkwithneighbors.dto.MessageDto;
 import com.talkwithneighbors.dto.UpdateChatRoomRequest;
 import com.talkwithneighbors.domain.event.ChatMessageCommittedEvent;
+import com.talkwithneighbors.domain.event.ChatMessageChangedEvent;
 import com.talkwithneighbors.domain.event.MediaFilesDeletedEvent;
 import com.talkwithneighbors.entity.ChatRoom;
 import com.talkwithneighbors.entity.ChatRoomType;
@@ -24,6 +25,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
 import org.springframework.context.ApplicationEventPublisher;
@@ -39,6 +41,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 @Service
 @RequiredArgsConstructor
@@ -296,6 +299,133 @@ public class ChatServiceImpl implements ChatService {
                         room.getParticipants().stream().map(User::getId).toList()));
 
         return messageDto;
+    }
+
+    @Override
+    @Transactional
+    public MessageDto updateMessage(String roomId, String messageId, Long requesterId, String content) {
+        Message message = requireOwnedMessage(roomId, messageId, requesterId);
+        if (message.isDeleted()) {
+            throw new ChatException("삭제된 메시지는 수정할 수 없어.", HttpStatus.CONFLICT);
+        }
+        requireUserGeneratedMessage(message);
+
+        String normalizedContent = content == null ? "" : content.trim();
+        List<MessageAttachment> attachments = message.getAttachments() == null
+                ? List.of() : message.getAttachments();
+        if (normalizedContent.isEmpty() && attachments.isEmpty()) {
+            throw new ChatException("메시지 내용을 비워둘 수 없어.", HttpStatus.BAD_REQUEST);
+        }
+        if (normalizedContent.length() > 2000) {
+            throw new ChatException("메시지는 2,000자까지 수정할 수 있어.", HttpStatus.BAD_REQUEST);
+        }
+        if (normalizedContent.equals(message.getContent())) {
+            return MessageDto.fromEntity(message, requesterId);
+        }
+
+        LocalDateTime changedAt = LocalDateTime.now();
+        message.setContent(normalizedContent);
+        message.setType(resolveMessageType(normalizedContent, attachments));
+        message.setEditedAt(changedAt);
+        message.setUpdatedAt(changedAt);
+        Message savedMessage = messageRepository.save(message);
+        Message latestMessage = refreshRoomLastMessage(savedMessage.getChatRoom());
+
+        MessageDto messageDto = MessageDto.fromEntity(savedMessage, requesterId);
+        publishChangedMessage(messageDto, savedMessage.getChatRoom(), latestMessage);
+        return messageDto;
+    }
+
+    @Override
+    @Transactional
+    public MessageDto deleteMessage(String roomId, String messageId, Long requesterId) {
+        Message message = requireOwnedMessage(roomId, messageId, requesterId);
+        if (message.isDeleted()) {
+            return MessageDto.fromEntity(message, requesterId);
+        }
+        requireUserGeneratedMessage(message);
+
+        List<MessageAttachment> attachments = message.getAttachments() == null
+                ? List.of() : new ArrayList<>(message.getAttachments());
+        List<String> mediaUrls = attachments.stream()
+                .flatMap(attachment -> Stream.of(attachment.getUrl(), attachment.getThumbnailUrl()))
+                .filter(url -> url != null && !url.isBlank())
+                .distinct()
+                .toList();
+
+        LocalDateTime changedAt = LocalDateTime.now();
+        message.setContent("");
+        if (message.getAttachments() != null) {
+            message.getAttachments().clear();
+        }
+        message.setType(MessageType.SYSTEM);
+        message.setDeleted(true);
+        message.setDeletedAt(changedAt);
+        message.setUpdatedAt(changedAt);
+        Message savedMessage = messageRepository.save(message);
+        Message latestMessage = refreshRoomLastMessage(savedMessage.getChatRoom());
+
+        MessageDto messageDto = MessageDto.fromEntity(savedMessage, requesterId);
+        publishChangedMessage(messageDto, savedMessage.getChatRoom(), latestMessage);
+        if (!mediaUrls.isEmpty()) {
+            applicationEventPublisher.publishEvent(new MediaFilesDeletedEvent(mediaUrls));
+        }
+        return messageDto;
+    }
+
+    private Message requireOwnedMessage(String roomId, String messageId, Long requesterId) {
+        ChatRoom room = chatRoomRepository.findByIdForUpdate(roomId)
+                .orElseThrow(() -> new ChatException("채팅방을 찾을 수 없어.", HttpStatus.NOT_FOUND));
+        Message message = messageRepository.findById(messageId)
+                .orElseThrow(() -> new ChatException("메시지를 찾을 수 없어.", HttpStatus.NOT_FOUND));
+        if (message.getChatRoom() == null || !roomId.equals(message.getChatRoom().getId())) {
+            throw new ChatException("메시지를 찾을 수 없어.", HttpStatus.NOT_FOUND);
+        }
+        boolean isParticipant = room.getParticipants().stream()
+                .anyMatch(participant -> participant.getId().equals(requesterId));
+        if (!isParticipant) {
+            throw new ChatException("이 채팅방의 메시지를 변경할 권한이 없어.", HttpStatus.FORBIDDEN);
+        }
+        if (message.getSender() == null || !message.getSender().getId().equals(requesterId)) {
+            throw new ChatException("내가 보낸 메시지만 수정하거나 삭제할 수 있어.", HttpStatus.FORBIDDEN);
+        }
+        return message;
+    }
+
+    private void requireUserGeneratedMessage(Message message) {
+        if (message.getType() != MessageType.TEXT
+                && message.getType() != MessageType.IMAGE
+                && message.getType() != MessageType.VIDEO
+                && message.getType() != MessageType.FILE) {
+            throw new ChatException("시스템 메시지는 수정하거나 삭제할 수 없어.", HttpStatus.BAD_REQUEST);
+        }
+    }
+
+    private Message refreshRoomLastMessage(ChatRoom room) {
+        List<Message> latestMessages = messageRepository.findActiveByChatRoomIdOrderByCreatedAtDesc(
+                room.getId(), PageRequest.of(0, 1));
+        Message latestMessage = null;
+        if (latestMessages == null || latestMessages.isEmpty()) {
+            room.setLastMessage(null);
+            room.setLastMessageTime(null);
+        } else {
+            latestMessage = latestMessages.get(0);
+            room.setLastMessage(lastMessagePreview(latestMessage));
+            room.setLastMessageTime(latestMessage.getCreatedAt());
+        }
+        chatRoomRepository.save(room);
+        return latestMessage;
+    }
+
+    private void publishChangedMessage(MessageDto messageDto, ChatRoom room, Message latestMessage) {
+        applicationEventPublisher.publishEvent(new ChatMessageChangedEvent(
+                messageDto,
+                room.getId(),
+                room.getLastMessage(),
+                room.getLastMessageTime() == null ? null : room.getLastMessageTime().toString(),
+                latestMessage == null || latestMessage.getSender() == null
+                        ? null : latestMessage.getSender().getUsername(),
+                room.getParticipants().stream().map(User::getId).toList()));
     }
 
     private MessageType resolveMessageType(String content, List<MessageAttachment> attachments) {

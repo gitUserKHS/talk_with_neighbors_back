@@ -1,5 +1,6 @@
 package com.talkwithneighbors.dto;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
 import com.talkwithneighbors.entity.Message;
 import com.talkwithneighbors.entity.Message.MessageType;
 
@@ -22,7 +23,10 @@ public class MessageDto {
     private String content;
     private String createdAt;
     private String updatedAt;
+    private String editedAt;
+    private String deletedAt;
     private MessageType type;
+    @JsonProperty("isDeleted")
     private boolean isDeleted;
     private Set<Long> readByUsers;
     private boolean readByCurrentUser;
@@ -43,10 +47,19 @@ public class MessageDto {
         if (message.getUpdatedAt() != null) {
             dto.setUpdatedAt(message.getUpdatedAt().format(formatter));
         }
+        if (message.getEditedAt() != null) {
+            dto.setEditedAt(message.getEditedAt().format(formatter));
+        }
+        if (message.getDeletedAt() != null) {
+            dto.setDeletedAt(message.getDeletedAt().format(formatter));
+        }
         dto.setType(message.getType());
         dto.setDeleted(message.isDeleted());
         List<com.talkwithneighbors.entity.MessageAttachment> attachments = message.getAttachments();
-        if (attachments == null || attachments.isEmpty()) {
+        if (message.isDeleted()) {
+            dto.setContent("");
+            dto.setAttachments(List.of());
+        } else if (attachments == null || attachments.isEmpty()) {
             dto.setAttachments(List.of());
         } else {
             dto.setAttachments(IntStream.range(0, attachments.size())
