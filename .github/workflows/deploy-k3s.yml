@@ -12,7 +12,7 @@ on:
         required: true
         type: string
       public_origin:
-        description: "Optional HTTP origin; blank derives the current EC2 public IPv4 address"
+        description: "Optional HTTP origin; blank derives the EC2 IPv4; diagnose://k3s collects a private diagnostic artifact"
         required: false
         type: string
       start_if_stopped:
@@ -30,9 +30,9 @@ permissions:
   id-token: write
 
 jobs:
-  diagnose-once:
+  diagnose:
     name: Collect private k3s diagnostics
-    if: github.ref == 'refs/heads/agent/k3s-diagnose-once' && inputs.public_origin == 'diagnose://k3s'
+    if: github.ref == 'refs/heads/main' && inputs.public_origin == 'diagnose://k3s'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment: production
@@ -78,7 +78,7 @@ jobs:
             --document-name AWS-RunShellScript \
             --parameters "file://${parameters_file}" \
             --timeout-seconds 60 \
-            --comment "talk-with-neighbors one-time diagnostics" \
+            --comment "talk-with-neighbors on-demand diagnostics" \
             --query 'Command.CommandId' \
             --output text)"
           echo "SSM diagnostic command: $command_id"
@@ -121,7 +121,7 @@ jobs:
 
   deploy:
     name: Deploy through AWS Systems Manager
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' && inputs.public_origin != 'diagnose://k3s'
     runs-on: ubuntu-latest
     timeout-minutes: 55
     environment: production
