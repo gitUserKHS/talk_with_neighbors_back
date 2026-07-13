@@ -1,4 +1,5 @@
-FROM eclipse-temurin:17-jdk-jammy@sha256:723151f3fc88ca2060153ee08ab8dbbea7983d6ed6f2622fe440acf178737c94 AS builder
+ARG BUILDPLATFORM
+FROM --platform=$BUILDPLATFORM eclipse-temurin:17-jdk-jammy@sha256:723151f3fc88ca2060153ee08ab8dbbea7983d6ed6f2622fe440acf178737c94 AS builder
 WORKDIR /workspace
 
 COPY gradlew settings.gradle build.gradle ./
