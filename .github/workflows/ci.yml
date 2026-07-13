@@ -1,0 +1,43 @@
+name: Backend CI
+
+on:
+  pull_request:
+  push:
+    branches: [main, "codex/**"]
+
+concurrency:
+  group: backend-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+      - uses: gradle/actions/setup-gradle@v6
+      - run: chmod +x gradlew
+      - run: ./gradlew clean test bootJar --no-daemon
+      - name: Validate production compose
+        env:
+          MYSQL_PASSWORD: ci-password
+          MYSQL_ROOT_PASSWORD: ci-root-password
+          JWT_SECRET: ci-only-secret-that-is-long-enough-for-validation
+          PUBLIC_ORIGIN: https://example.invalid
+        run: docker compose -f compose.production.yml config --quiet
+      - name: Build production container
+        run: docker build -t talk-with-neighbors-backend:ci .
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: backend-test-report
+          path: build/reports/tests/test
+          if-no-files-found: ignore
+          retention-days: 7

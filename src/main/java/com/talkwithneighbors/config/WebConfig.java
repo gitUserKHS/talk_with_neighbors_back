@@ -25,12 +25,16 @@ public class WebConfig implements WebMvcConfigurer {
     @Override
     public void addCorsMappings(CorsRegistry registry) {
         registry.addMapping("/**")
-            .allowedOrigins("http://localhost:3000") // 프론트엔드 URL
-            .allowedMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
+            .allowedOrigins(split(allowedOrigins))
+            .allowedMethods(split(allowedMethods))
             .allowedHeaders("*")
             .exposedHeaders("X-Session-Id") // 응답 헤더에 X-Session-Id를 노출
             .allowCredentials(true)
             .maxAge(3600);
+    }
+
+    private String[] split(String values) {
+        return values.split("\\s*,\\s*");
     }
 
     @Override

@@ -4,13 +4,18 @@ import com.talkwithneighbors.dto.ChatMessageDto;
 import com.talkwithneighbors.dto.ChatRoomDto;
 import com.talkwithneighbors.dto.CreateRoomRequest;
 import com.talkwithneighbors.dto.MessageDto;
+import com.talkwithneighbors.dto.UpdateChatRoomRequest;
 import com.talkwithneighbors.entity.ChatRoom;
 import com.talkwithneighbors.entity.ChatRoomType;
+import com.talkwithneighbors.entity.ChatRoomStatus;
 import com.talkwithneighbors.entity.Message;
 import com.talkwithneighbors.entity.User;
+import com.talkwithneighbors.exception.ChatException;
 import com.talkwithneighbors.repository.ChatRoomRepository;
 import com.talkwithneighbors.repository.MessageRepository;
 import com.talkwithneighbors.repository.UserRepository;
+import com.talkwithneighbors.repository.UserBlockRepository;
+import com.talkwithneighbors.domain.event.ChatMessageCommittedEvent;
 import com.talkwithneighbors.service.impl.ChatServiceImpl;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -20,7 +25,9 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.Page;
+import org.springframework.http.HttpStatus;
 
 import java.util.Arrays;
 import java.util.List;
@@ -45,6 +52,15 @@ class ChatServiceTest {
 
     @Mock
     private SimpMessagingTemplate messagingTemplate;
+
+    @Mock
+    private NotificationService notificationService;
+
+    @Mock
+    private UserBlockRepository userBlockRepository;
+
+    @Mock
+    private ApplicationEventPublisher applicationEventPublisher;
 
     @InjectMocks
     private ChatServiceImpl chatService;
@@ -72,6 +88,8 @@ class ChatServiceTest {
         testChatRoom.setName("Test Room"); // 1:1 채팅 시 이 이름은 덮어쓰여짐
         testChatRoom.setType(ChatRoomType.ONE_ON_ONE);
         testChatRoom.setCreator(testUser);
+        testChatRoom.getParticipants().add(testUser);
+        testChatRoom.getParticipants().add(participantUser);
         // 필요하다면 testChatRoom의 participants에도 participantUser 추가
         // testChatRoom.getParticipants().add(testUser);
         // testChatRoom.getParticipants().add(participantUser);
@@ -134,7 +152,8 @@ class ChatServiceTest {
     void getChatRoomsForUserSuccess() {
         // given
         Page<ChatRoom> chatRoomPage = new org.springframework.data.domain.PageImpl<>(List.of(testChatRoom));
-        when(chatRoomRepository.findByParticipantsContaining(any(User.class), any()))
+        when(userRepository.findById(testUser.getId())).thenReturn(Optional.of(testUser));
+        when(chatRoomRepository.findByParticipantsContainingOrderByLastMessageTimeDesc(any(User.class), any()))
             .thenReturn(chatRoomPage);
 
         // when
@@ -156,11 +175,9 @@ class ChatServiceTest {
         messageDto.setSenderId(testUser.getId());
         messageDto.setContent("Test message");
         
-        when(chatRoomRepository.findById(anyString())).thenReturn(Optional.of(testChatRoom));
+        when(chatRoomRepository.findByIdForUpdate(anyString())).thenReturn(Optional.of(testChatRoom));
         when(userRepository.findById(anyLong())).thenReturn(Optional.of(testUser));
         when(messageRepository.save(any())).thenReturn(testMessage);
-        
-        doNothing().when(messagingTemplate).convertAndSend(anyString(), any(com.talkwithneighbors.dto.MessageDto.class));
 
         // when
         MessageDto savedDto = chatService.sendMessage(
@@ -170,6 +187,8 @@ class ChatServiceTest {
         assertNotNull(savedDto);
         assertEquals(testMessage.getContent(), savedDto.getContent());
         assertEquals(testUser.getId().toString(), savedDto.getSenderId());
+        verify(applicationEventPublisher).publishEvent(any(ChatMessageCommittedEvent.class));
+        verifyNoInteractions(messagingTemplate, notificationService);
     }
 
     @Test
@@ -181,7 +200,7 @@ class ChatServiceTest {
         messageDto.setSenderId(testUser.getId());
         messageDto.setContent("Test message");
         
-        when(chatRoomRepository.findById(anyString())).thenReturn(Optional.empty());
+        when(chatRoomRepository.findByIdForUpdate(anyString())).thenReturn(Optional.empty());
 
         // when & then
         assertThrows(RuntimeException.class, () -> chatService.sendMessage(
@@ -193,6 +212,8 @@ class ChatServiceTest {
     void getMessagesSuccess() {
         // given
         Page<Message> messagePage = new org.springframework.data.domain.PageImpl<>(List.of(testMessage));
+        when(userRepository.findById(testUser.getId())).thenReturn(Optional.of(testUser));
+        when(chatRoomRepository.findById(testChatRoom.getId())).thenReturn(Optional.of(testChatRoom));
         when(messageRepository.findByChatRoomIdOrderByCreatedAtDesc(anyString(), any()))
             .thenReturn(messagePage);
 
@@ -205,4 +226,37 @@ class ChatServiceTest {
         assertEquals(1, dtoPage.getContent().size());
         assertEquals(testMessage.getContent(), dtoPage.getContent().get(0).getContent());
     }
-} 
+
+    @Test
+    void roomCreatorCanUpdateAndCloseRoom() {
+        UpdateChatRoomRequest request = new UpdateChatRoomRequest();
+        request.setTitle("Updated room");
+        request.setStatus(ChatRoomStatus.CLOSED);
+        request.setMaxMembers(4);
+        when(chatRoomRepository.findById(testChatRoom.getId())).thenReturn(Optional.of(testChatRoom));
+        when(userRepository.findById(testUser.getId())).thenReturn(Optional.of(testUser));
+        when(chatRoomRepository.save(testChatRoom)).thenReturn(testChatRoom);
+
+        ChatRoomDto result = chatService.updateRoom(testChatRoom.getId(), testUser.getId(), request);
+
+        assertEquals("Updated room", result.getRoomName());
+        assertEquals(ChatRoomStatus.CLOSED, result.getStatus());
+        assertEquals(4, result.getMaxParticipants());
+    }
+
+    @Test
+    void nonCreatorCannotUpdateRoom() {
+        User nonCreator = new User();
+        nonCreator.setId(99L);
+        UpdateChatRoomRequest request = new UpdateChatRoomRequest();
+        request.setTitle("Blocked update");
+        when(chatRoomRepository.findById(testChatRoom.getId())).thenReturn(Optional.of(testChatRoom));
+        when(userRepository.findById(nonCreator.getId())).thenReturn(Optional.of(nonCreator));
+
+        ChatException exception = assertThrows(ChatException.class,
+                () -> chatService.updateRoom(testChatRoom.getId(), nonCreator.getId(), request));
+
+        assertEquals(HttpStatus.FORBIDDEN, exception.getStatus());
+        verify(chatRoomRepository, never()).save(any(ChatRoom.class));
+    }
+}

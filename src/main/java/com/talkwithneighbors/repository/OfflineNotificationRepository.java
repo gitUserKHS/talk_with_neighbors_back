@@ -9,6 +9,9 @@ import org.springframework.stereotype.Repository;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Optional;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 
 /**
  * 오프라인 알림을 관리하는 리포지토리 인터페이스
@@ -38,7 +41,7 @@ public interface OfflineNotificationRepository extends JpaRepository<OfflineNoti
      * @return 삭제된 레코드 수
      */
     @Modifying
-    @Query("DELETE FROM OfflineNotification on WHERE on.expiresAt <= :now OR on.isSent = true")
+    @Query("DELETE FROM OfflineNotification on WHERE on.expiresAt <= :now")
     int deleteExpiredAndSentNotifications(@Param("now") LocalDateTime now);
     
     /**
@@ -56,8 +59,8 @@ public interface OfflineNotificationRepository extends JpaRepository<OfflineNoti
      * @return 업데이트된 레코드 수
      */
     @Modifying
-    @Query("UPDATE OfflineNotification on SET on.isSent = true WHERE on.id = :id")
-    int markAsSent(@Param("id") Long notificationId);
+    @Query("UPDATE OfflineNotification on SET on.isSent = true, on.deliveredAt = :deliveredAt WHERE on.id = :id")
+    int markAsSent(@Param("id") Long notificationId, @Param("deliveredAt") LocalDateTime deliveredAt);
     
     /**
      * 재시도 횟수 증가
@@ -79,4 +82,19 @@ public interface OfflineNotificationRepository extends JpaRepository<OfflineNoti
     List<OfflineNotification> findDuplicateNotifications(@Param("userId") Long userId, 
                                                           @Param("type") OfflineNotification.NotificationType type, 
                                                           @Param("data") String data);
-} 
+
+    Page<OfflineNotification> findByUserIdAndExpiresAtAfterOrderByCreatedAtDesc(
+            Long userId, LocalDateTime now, Pageable pageable);
+
+    long countByUserIdAndReadAtIsNullAndExpiresAtAfter(Long userId, LocalDateTime now);
+
+    Optional<OfflineNotification> findByIdAndUserId(Long id, Long userId);
+
+    @Modifying
+    @Query("UPDATE OfflineNotification n SET n.readAt = :readAt WHERE n.id = :id AND n.userId = :userId AND n.readAt IS NULL")
+    int markAsRead(@Param("id") Long id, @Param("userId") Long userId, @Param("readAt") LocalDateTime readAt);
+
+    @Modifying
+    @Query("UPDATE OfflineNotification n SET n.readAt = :readAt WHERE n.userId = :userId AND n.readAt IS NULL")
+    int markAllAsRead(@Param("userId") Long userId, @Param("readAt") LocalDateTime readAt);
+}

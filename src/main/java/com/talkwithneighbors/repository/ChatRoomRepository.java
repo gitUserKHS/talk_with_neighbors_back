@@ -6,12 +6,15 @@ import com.talkwithneighbors.entity.User;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import java.util.List;
 import java.util.Optional;
+import java.time.LocalDateTime;
+import jakarta.persistence.LockModeType;
 
 /**
  * 채팅방을 관리하는 리포지토리 인터페이스
@@ -19,6 +22,9 @@ import java.util.Optional;
  */
 @Repository
 public interface ChatRoomRepository extends JpaRepository<ChatRoom, String> {
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT cr FROM ChatRoom cr WHERE cr.id = :id")
+    Optional<ChatRoom> findByIdForUpdate(@Param("id") String id);
     /**
      * 특정 사용자가 참여한 모든 채팅방 목록을 조회합니다. (페이징 처리)
      * 
@@ -54,6 +60,8 @@ public interface ChatRoomRepository extends JpaRepository<ChatRoom, String> {
      * @return 채팅방 페이지
      */
     Page<ChatRoom> findByType(ChatRoomType type, Pageable pageable);
+
+    List<ChatRoom> findByTypeAndPublicRoomTrueOrderByLastMessageTimeDesc(ChatRoomType type);
     
     /**
      * 채팅방 타입과 이름 또는 ID로 채팅방을 조회합니다. (페이징 처리)
@@ -95,4 +103,9 @@ public interface ChatRoomRepository extends JpaRepository<ChatRoom, String> {
      */
     @Query("SELECT DISTINCT cr FROM ChatRoom cr JOIN FETCH cr.participants WHERE :user MEMBER OF cr.participants AND cr.type = :type")
     List<ChatRoom> findByParticipantsContainingAndType(@Param("user") User user, @Param("type") ChatRoomType type);
-} 
+
+    List<ChatRoom> findByCreator_IdAndTypeOrderByScheduledAtDesc(Long creatorId, ChatRoomType type);
+
+    List<ChatRoom> findByPublicRoomTrueAndScheduledAtBetweenAndReminderSentAtIsNull(
+            LocalDateTime start, LocalDateTime end);
+}

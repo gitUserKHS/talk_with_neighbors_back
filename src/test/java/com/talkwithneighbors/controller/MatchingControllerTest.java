@@ -137,7 +137,8 @@ public class MatchingControllerTest {
     @DisplayName("매칭 시작 성공 테스트")
     void startMatchingSuccess() throws Exception {
         // given
-        doNothing().when(matchingService).startMatching(any(MatchingPreferencesDto.class), anyLong());
+        when(matchingService.startMatching(any(MatchingPreferencesDto.class), anyLong()))
+                .thenReturn(List.of());
 
         // when & then
         mockMvc.perform(post("/api/matching/start")
@@ -198,7 +199,7 @@ public class MatchingControllerTest {
     void acceptMatchSuccess() throws Exception {
         // given
         String matchId = "test-match-id";
-        doNothing().when(matchingService).acceptMatch(anyString(), anyLong());
+        when(matchingService.acceptMatch(anyString(), anyLong())).thenReturn(null);
 
         // when & then
         var result = mockMvc.perform(post("/api/matching/{matchId}/accept", matchId)
@@ -273,7 +274,7 @@ public class MatchingControllerTest {
         MatchProfileDto profile1 = new MatchProfileDto();
         profile1.setId("2");
         profile1.setUsername("user2");
-        profile1.setAge("25");
+        profile1.setAge(25);
         profile1.setGender("M");
         profile1.setBio("안녕하세요");
         LocationDto location1 = new LocationDto();
@@ -285,7 +286,7 @@ public class MatchingControllerTest {
         MatchProfileDto profile2 = new MatchProfileDto();
         profile2.setId("3");
         profile2.setUsername("user3");
-        profile2.setAge("28");
+        profile2.setAge(28);
         profile2.setGender("F");
         profile2.setBio("반갑습니다");
         LocationDto location2 = new LocationDto();

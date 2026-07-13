@@ -124,6 +124,20 @@ public class NotificationServiceImpl implements NotificationService {
         String notificationMessage = String.format("%s님이 메시지를 보냈습니다: %s", 
                                                   message.getSender().getUsername(), 
                                                   truncateMessage(message.getContent()));
+
+        OfflineNotification inboxNotification = null;
+        try {
+            inboxNotification = offlineNotificationService.saveOfflineNotification(
+                    userId,
+                    OfflineNotification.NotificationType.NEW_MESSAGE,
+                    objectMapper.writeValueAsString(notificationData),
+                    notificationMessage,
+                    "/chat/" + chatRoom.getId(),
+                    5
+            );
+        } catch (Exception exception) {
+            log.error("[NotificationService] Failed to persist notification inbox item: {}", exception.getMessage(), exception);
+        }
         
         if (isUserOnline) {
             // 온라인 사용자에게는 즉시 전송
@@ -142,6 +156,9 @@ public class NotificationServiceImpl implements NotificationService {
                 destination, 
                 notification
             );
+            if (inboxNotification != null) {
+                offlineNotificationService.markAsDelivered(inboxNotification.getId());
+            }
             
             log.info("[NotificationService] ✅ Successfully sent notification to user {}", userId);
         } else {

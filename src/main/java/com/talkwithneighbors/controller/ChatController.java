@@ -4,6 +4,7 @@ import com.talkwithneighbors.dto.ChatMessageDto;
 import com.talkwithneighbors.dto.ChatRoomDto;
 import com.talkwithneighbors.dto.CreateRoomRequest;
 import com.talkwithneighbors.dto.MessageDto;
+import com.talkwithneighbors.dto.UpdateChatRoomRequest;
 import com.talkwithneighbors.entity.ChatRoom;
 import com.talkwithneighbors.entity.ChatRoomType;
 import com.talkwithneighbors.entity.Message;
@@ -31,6 +32,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.HashMap;
 import java.util.stream.Collectors;
+import com.talkwithneighbors.exception.AuthException;
 import com.talkwithneighbors.exception.ChatException;
 
 @RestController
@@ -74,11 +76,20 @@ public class ChatController extends BaseController {
 
     @GetMapping("/rooms")
     public ResponseEntity<Page<ChatRoomDto>> getRooms(
+            @RequestParam(name = "keyword", required = false, defaultValue = "") String keyword,
+            @RequestParam(name = "type", required = false) String typeString,
             @RequestParam(name = "page", defaultValue = "0") int page,
             @RequestParam(name = "size", defaultValue = "20") int size,
             HttpServletRequest request) {
         User user = getCurrentUser(request);
         Pageable pageable = PageRequest.of(page, size);
+        if ((keyword != null && !keyword.isBlank()) || (typeString != null && !typeString.isBlank())) {
+            ChatRoomType type = null;
+            if (typeString != null && !typeString.isBlank()) {
+                type = ChatRoomType.valueOf(typeString.toUpperCase());
+            }
+            return ResponseEntity.ok(chatService.searchRooms(keyword, type, user.getId().toString(), pageable));
+        }
         Page<ChatRoomDto> roomPage = chatService.getChatRoomsForUser(
             user.getId().toString(), pageable);
         return ResponseEntity.ok(roomPage);
@@ -107,6 +118,49 @@ public class ChatController extends BaseController {
         return ResponseEntity.ok(roomPage);
     }
 
+    @GetMapping("/rooms/search")
+    public ResponseEntity<List<ChatRoomDto>> searchGroupRooms(
+            @RequestParam(name = "keyword", required = false, defaultValue = "") String keyword,
+            HttpServletRequest request) {
+        User user = getCurrentUser(request);
+        Page<ChatRoomDto> rooms = chatService.searchRooms(
+                keyword,
+                ChatRoomType.GROUP,
+                user.getId().toString(),
+                PageRequest.of(0, 100)
+        );
+        return ResponseEntity.ok(rooms.getContent());
+    }
+
+    @GetMapping("/rooms/my")
+    public ResponseEntity<List<ChatRoomDto>> getMyRooms(HttpServletRequest request) {
+        User user = getCurrentUser(request);
+        return ResponseEntity.ok(chatService
+                .getChatRoomsForUser(user.getId().toString(), PageRequest.of(0, 100))
+                .getContent());
+    }
+
+    @PostMapping("/rooms/one-to-one/{otherUserId}")
+    public ResponseEntity<ChatRoomDto> getOrCreateOneToOneRoom(
+            @PathVariable Long otherUserId,
+            HttpServletRequest request) {
+        User currentUser = getCurrentUser(request);
+        if (currentUser.getId().equals(otherUserId)) {
+            throw new ChatException("Cannot create a one-to-one room with yourself.", HttpStatus.BAD_REQUEST);
+        }
+        ChatRoomDto existingRoom = chatService.findOneOnOneChatRoom(currentUser.getId(), otherUserId);
+        if (existingRoom != null) {
+            return ResponseEntity.ok(existingRoom);
+        }
+        User otherUser = userService.getUserById(otherUserId);
+        return ResponseEntity.ok(chatService.createRoom(
+                currentUser.getUsername() + ", " + otherUser.getUsername(),
+                ChatRoomType.ONE_ON_ONE,
+                currentUser.getId().toString(),
+                List.of(otherUser.getUsername())
+        ));
+    }
+
     @GetMapping("/rooms/{roomId}")
     public ResponseEntity<ChatRoomDto> getRoom(
             @PathVariable(name = "roomId") String roomId,
@@ -115,6 +169,15 @@ public class ChatController extends BaseController {
         ChatRoomDto dto = chatService.getRoomById(
             roomId, user.getId().toString());
         return ResponseEntity.ok(dto);
+    }
+
+    @PatchMapping("/rooms/{roomId}")
+    public ResponseEntity<ChatRoomDto> updateRoom(
+            @PathVariable String roomId,
+            @RequestBody UpdateChatRoomRequest updateRequest,
+            HttpServletRequest request) {
+        User user = getCurrentUser(request);
+        return ResponseEntity.ok(chatService.updateRoom(roomId, user.getId(), updateRequest));
     }
 
     @PostMapping("/rooms/{roomId}/join")
@@ -176,8 +239,18 @@ public class ChatController extends BaseController {
         return ResponseEntity.ok().build();
     }
 
+    @PostMapping("/rooms/{roomId}/messages/{messageId}/read")
+    public ResponseEntity<Void> markMessageAsRead(
+            @PathVariable(name = "roomId") String roomId,
+            @PathVariable(name = "messageId") String messageId,
+            HttpServletRequest request) {
+        User user = getCurrentUser(request);
+        chatService.markMessageAsRead(messageId, user.getId().toString());
+        return ResponseEntity.ok().build();
+    }
+
     @DeleteMapping("/rooms/{roomId}")
-    public ResponseEntity<Void> deleteRoom(@PathVariable(name = "roomId") String roomId, HttpServletRequest request) {
+    public ResponseEntity<Map<String, Object>> deleteRoom(@PathVariable(name = "roomId") String roomId, HttpServletRequest request) {
         log.info("[ChatController] deleteRoom request received for roomId: {}", roomId);
         
         try {
@@ -193,14 +266,18 @@ public class ChatController extends BaseController {
             
             chatService.deleteRoom(roomId);
             log.info("[ChatController] Successfully deleted roomId: {} by user: {}", roomId, user.getId());
-            return ResponseEntity.ok().build();
+            return ResponseEntity.ok(Map.of("success", true, "message", "Chat room deleted."));
             
         } catch (ChatException e) {
             log.error("[ChatController] ChatException while deleting roomId {}: {}", roomId, e.getMessage());
-            return ResponseEntity.status(e.getStatus()).build();
+            return ResponseEntity.status(e.getStatus()).body(Map.of("success", false, "message", e.getMessage()));
+        } catch (AuthException e) {
+            log.error("[ChatController] AuthException while deleting roomId {}: {}", roomId, e.getMessage());
+            return ResponseEntity.status(e.getStatus()).body(Map.of("success", false, "message", e.getMessage()));
         } catch (Exception e) {
             log.error("[ChatController] Unexpected error while deleting roomId {}: {}", roomId, e.getMessage(), e);
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("success", false, "message", "Failed to delete chat room."));
         }
     }
 

@@ -46,6 +46,45 @@ public class ChatRoom {
     @Column(nullable = false)
     private ChatRoomType type;
 
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false, columnDefinition = "varchar(20) default 'ACTIVE'")
+    private ChatRoomStatus status = ChatRoomStatus.ACTIVE;
+
+    /**
+     * 공개 취미 모임인지 표시합니다. 일반 그룹 채팅은 초대된 참여자만 이용합니다.
+     */
+    @Column(name = "is_public", nullable = false)
+    private boolean publicRoom = false;
+
+    /**
+     * 취미 모임 소개와 발견용 메타데이터입니다.
+     */
+    @Column(length = 500)
+    private String description;
+
+    @ElementCollection
+    @CollectionTable(name = "chat_room_interest_tags", joinColumns = @JoinColumn(name = "chat_room_id"))
+    @Column(name = "interest_tag", length = 50)
+    private List<String> interestTags = new ArrayList<>();
+
+    @Column(length = 100)
+    private String location;
+
+    @Column(name = "max_participants")
+    private Integer maxParticipants;
+
+    @Column(name = "scheduled_at")
+    private LocalDateTime scheduledAt;
+
+    @Column(name = "duration_minutes")
+    private Integer durationMinutes;
+
+    @Column(name = "registration_deadline")
+    private LocalDateTime registrationDeadline;
+
+    @Column(name = "reminder_sent_at")
+    private LocalDateTime reminderSentAt;
+
     /**
      * 채팅방을 생성한 사용자
      */
@@ -95,5 +134,8 @@ public class ChatRoom {
         if (lastMessageTime == null) {
             lastMessageTime = LocalDateTime.now();
         }
+        if (status == null) {
+            status = ChatRoomStatus.ACTIVE;
+        }
     }
-} 
+}

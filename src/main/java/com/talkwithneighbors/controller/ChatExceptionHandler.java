@@ -1,5 +1,6 @@
 package com.talkwithneighbors.controller;
 
+import com.talkwithneighbors.exception.AuthException;
 import com.talkwithneighbors.exception.ChatException;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -20,6 +21,13 @@ public class ChatExceptionHandler {
 
     @ExceptionHandler(ChatException.class)
     public ResponseEntity<Map<String, Object>> handleChatException(ChatException ex) {
+        Map<String, Object> error = new HashMap<>();
+        error.put("message", ex.getMessage());
+        return ResponseEntity.status(ex.getStatus()).body(error);
+    }
+
+    @ExceptionHandler(AuthException.class)
+    public ResponseEntity<Map<String, Object>> handleAuthException(AuthException ex) {
         Map<String, Object> error = new HashMap<>();
         error.put("message", ex.getMessage());
         return ResponseEntity.status(ex.getStatus()).body(error);

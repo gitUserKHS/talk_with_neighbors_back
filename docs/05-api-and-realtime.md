@@ -1,0 +1,133 @@
+# API 및 실시간 통신
+
+## 공통 규칙
+
+- 개발 기준 API 주소: `http://localhost:8080/api`
+- Docker 프론트 기준: 같은 출처의 `/api`를 Nginx가 백엔드로 전달
+- 인증 헤더: `X-Session-Id: {sessionId}`
+- 본문 형식: JSON
+- 페이지 응답: Spring Data `Page<T>` 형태
+- 인증 필요 API는 `@RequireLogin`과 사용자 세션 해석기를 사용한다.
+
+## 인증 API
+
+| 메서드 | 경로 | 인증 | 목적 |
+|---|---|---|---|
+| POST | `/api/auth/register` | 없음 | 가입, 응답 헤더로 세션 발급 |
+| POST | `/api/auth/login` | 없음 | 로그인, 응답 헤더로 세션 발급 |
+| POST | `/api/auth/logout` | 선택 | 세션 삭제 |
+| GET | `/api/auth/me` | 헤더 필요 | 현재 사용자 조회 |
+| GET | `/api/auth/profile` | 필요 | 프로필 조회 |
+| PUT | `/api/auth/profile` | 필요 | 프로필 수정 |
+| GET | `/api/auth/check-duplicates` | 없음 | `email`, `username` 중복 확인 |
+
+## 피드 API
+
+| 메서드 | 경로 | 목적 |
+|---|---|---|
+| GET | `/api/feed?page=0&size=20` | 피드 조회 |
+| POST | `/api/feed` | 게시물 생성 |
+| POST | `/api/feed/{postId}/likes` | 좋아요 |
+| DELETE | `/api/feed/{postId}/likes` | 좋아요 취소 |
+| GET | `/api/feed/{postId}/comments` | 댓글 조회 |
+| POST | `/api/feed/{postId}/comments` | 댓글 작성 |
+
+## 매칭 API
+
+| 메서드 | 경로 | 목적 |
+|---|---|---|
+| POST | `/api/matching/preferences` | 선호 조건 저장 |
+| POST | `/api/matching/start` | 매칭 시작·추천 반환 |
+| GET | `/api/matching/recommendations` | 추천 목록 |
+| GET | `/api/matching/requests/incoming` | 받은 요청 |
+| POST | `/api/matching/users/{targetUserId}/request` | 매칭 요청 |
+| POST | `/api/matching/stop` | 매칭 중지 |
+| POST | `/api/matching/{matchId}/accept` | 요청 수락, 채팅방 반환 |
+| POST | `/api/matching/{matchId}/reject` | 요청 거절 |
+| GET | `/api/matching/nearby?latitude=&longitude=&radius=` | 주변 사용자 검색 |
+| POST | `/api/matching/process-pending` | 대기 매칭 처리 |
+
+## 모임 API
+
+| 메서드 | 경로 | 목적 |
+|---|---|---|
+| GET | `/api/meetups?keyword=&interest=&page=0&size=20` | 모임 검색 |
+| POST | `/api/meetups` | 공개 그룹 모임 생성 |
+| POST | `/api/meetups/{roomId}/join` | 참가 |
+| POST | `/api/meetups/{roomId}/leave` | 탈퇴, 성공 시 204 |
+
+## 채팅 REST API
+
+| 메서드 | 경로 | 목적 |
+|---|---|---|
+| POST | `/api/chat/rooms` | 방 생성 |
+| GET | `/api/chat/rooms` | 내 방 또는 조건 검색 |
+| GET | `/api/chat/rooms/search/all` | 전체 공개 검색 |
+| GET | `/api/chat/rooms/search` | 그룹방 목록 검색 |
+| GET | `/api/chat/rooms/my` | 내 채팅방 목록 |
+| POST | `/api/chat/rooms/one-to-one/{otherUserId}` | 1:1 방 생성 또는 재사용 |
+| GET | `/api/chat/rooms/{roomId}` | 방 상세 |
+| PATCH | `/api/chat/rooms/{roomId}` | 생성자 전용 방 수정·종료 |
+| POST | `/api/chat/rooms/{roomId}/join` | 입장 |
+| POST | `/api/chat/rooms/{roomId}/leave` | 퇴장 |
+| DELETE | `/api/chat/rooms/{roomId}` | 방 삭제 |
+| GET | `/api/chat/rooms/{roomId}/messages` | 메시지 페이지 |
+| POST | `/api/chat/rooms/{roomId}/messages` | 메시지 저장 |
+| POST | `/api/chat/rooms/{roomId}/messages/read` | 방 전체 읽음 |
+| POST | `/api/chat/rooms/{roomId}/messages/{messageId}/read` | 메시지 하나 읽음 |
+| GET | `/api/chat/rooms/{roomId}/unread-count` | 방의 미읽음 수 |
+| GET | `/api/chat/unread-counts` | 모든 방의 미읽음 수 |
+
+## 안전 API
+
+차단·신고·콘텐츠 숨김 API와 적용 규칙은 [사용자 안전 기능](09-safety-and-moderation.md)을 따른다. 차단 관계는 매칭, 피드, 공개 모임, 1:1 채팅에서 양방향으로 제외된다.
+
+| 메서드 | 경로 | 목적 |
+|---|---|---|
+| POST / DELETE | `/api/safety/blocks/{userId}` | 차단·차단 해제 |
+| GET | `/api/safety/blocks` | 내 차단 목록 |
+| POST | `/api/safety/reports` | 신고 접수 |
+| GET | `/api/safety/reports/mine` | 내 신고 내역 |
+| POST / DELETE | `/api/safety/hidden...` | 콘텐츠 숨김·복구 |
+
+## 알림함 API
+
+| 메서드 | 경로 | 목적 |
+|---|---|---|
+| GET | `/api/notifications` | 30일 알림 목록 |
+| GET | `/api/notifications/unread-count` | 미읽음 수 |
+| PATCH | `/api/notifications/{id}/read` | 한 건 읽음 |
+| PATCH | `/api/notifications/read-all` | 모두 읽음 |
+| DELETE | `/api/notifications/{id}` | 알림 삭제 |
+
+모임 일정·대기열과 추천 피드백 계약은 [제품 확장 기능](10-product-expansion.md)에 정리한다.
+
+## WebSocket/STOMP
+
+- 연결: `/ws?sessionId={sessionId}`
+- 앱 전송 prefix: `/app`
+- 사용자 목적지 prefix: `/user`
+
+클라이언트 전송 목적지:
+
+- `/app/chat.sendMessage`
+- `/app/chat.markAsRead`
+- `/app/chat.markAllAsRead`
+- `/app/chat.enterRoom`
+- `/app/chat.leaveRoom`
+- `/app/chat.deleteRoom`
+- `/app/client/ready`
+
+클라이언트 구독 목적지:
+
+- `/user/queue/chat/room/{roomId}`
+- `/user/queue/chat-notifications`
+- `/user/queue/chat-updates`
+- `/user/queue/match-notifications`
+- `/user/queue/system-notifications`
+
+## 남은 계약·보안 과제
+
+- `category`는 현재 독립 필드가 아니며 관심사 태그 또는 채팅방 유형으로 모델링해야 한다.
+- 메시지 쓰기는 REST, 실시간 수신·읽음 상태·목록 갱신은 STOMP로 역할을 고정했다.
+- 테스트용 알림 HTTP 엔드포인트는 제거됐으며, 재접속 전달은 인증된 `/app/client/ready`만 사용한다.

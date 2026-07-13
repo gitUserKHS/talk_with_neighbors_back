@@ -21,6 +21,8 @@ public class UserDto {
     private Double longitude;
     private String address;
     private List<String> interests;
+    private boolean profileComplete;
+    private int profileCompletion;
 
     public static UserDto fromEntity(User user) {
         UserDto dto = new UserDto();
@@ -35,6 +37,14 @@ public class UserDto {
         dto.setLongitude(user.getLongitude());
         dto.setAddress(user.getAddress());
         dto.setInterests(user.getInterests());
+        dto.setProfileComplete(user.isProfileComplete());
+        int completed = 0;
+        if (user.getAge() != null) completed++;
+        if (user.getGender() != null && !user.getGender().isBlank()) completed++;
+        if (user.getInterests() != null && !user.getInterests().isEmpty()) completed++;
+        if (user.getLatitude() != null && user.getLongitude() != null) completed++;
+        if (user.getAddress() != null && !user.getAddress().isBlank()) completed++;
+        dto.setProfileCompletion(completed * 20);
         return dto;
     }
 } 

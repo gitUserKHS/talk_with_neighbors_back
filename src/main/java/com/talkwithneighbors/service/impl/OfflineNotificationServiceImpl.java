@@ -34,15 +34,20 @@ public class OfflineNotificationServiceImpl implements OfflineNotificationServic
     private final SimpUserRegistry simpUserRegistry;
     private final ObjectMapper objectMapper;
     private final RedisSessionService redisSessionService;
+    private final com.talkwithneighbors.repository.UserRepository userRepository;
     
     @Override
     @Transactional
-    public void saveOfflineNotification(Long userId, 
+    public OfflineNotification saveOfflineNotification(Long userId, 
                                        OfflineNotification.NotificationType type, 
                                        String data, 
                                        String message, 
                                        String actionUrl, 
                                        Integer priority) {
+        if (!notificationEnabled(userId, type)) {
+            log.debug("Notification disabled by user preference. userId={}, type={}", userId, type);
+            return null;
+        }
         log.info("=== [OfflineNotificationService] saveOfflineNotification START ===");
         log.info("[OfflineNotificationService] userId: {}, type: {}, priority: {}", userId, type, priority);
         log.info("[OfflineNotificationService] message: {}", message);
@@ -56,7 +61,7 @@ public class OfflineNotificationServiceImpl implements OfflineNotificationServic
             
             if (!duplicates.isEmpty()) {
                 log.info("[OfflineNotificationService] ⚠️ Duplicate notification found for userId: {}, type: {}. Count: {}. Skipping save.", userId, type, duplicates.size());
-                return;
+                return duplicates.get(0);
             }
             log.info("[OfflineNotificationService] ✅ No duplicates found. Proceeding with save...");
             
@@ -74,13 +79,23 @@ public class OfflineNotificationServiceImpl implements OfflineNotificationServic
             
             log.info("[OfflineNotificationService] ✅ Successfully saved offline notification: id={}, userId={}, type={}", 
                      savedNotification.getId(), userId, type);
-            
+            return savedNotification;
         } catch (Exception e) {
             log.error("[OfflineNotificationService] ❌ CRITICAL ERROR: Failed to save offline notification for userId: {}, type: {}: {}", 
                       userId, type, e.getMessage(), e);
             throw e; // 예외를 다시 던져서 상위에서 확인할 수 있도록
         }
-        log.info("=== [OfflineNotificationService] saveOfflineNotification END ===");
+    }
+
+    private boolean notificationEnabled(Long userId, OfflineNotification.NotificationType type) {
+        if (userRepository == null) return true;
+        return userRepository.findById(userId).map(user -> switch (type) {
+            case MATCH_REQUEST, MATCH_ACCEPTED, MATCH_REJECTED -> !Boolean.FALSE.equals(user.getMatchNotificationsEnabled());
+            case NEW_MESSAGE, CHAT_ROOM_LIST_UPDATE, UNREAD_COUNT_UPDATE, MESSAGE_READ_STATUS, ROOM_DELETED ->
+                    !Boolean.FALSE.equals(user.getChatNotificationsEnabled());
+            case MEETUP_REMINDER, MEETUP_WAITLIST_PROMOTED -> !Boolean.FALSE.equals(user.getMeetupNotificationsEnabled());
+            case SYSTEM_NOTICE -> true;
+        }).orElse(true);
     }
     
     @Override
@@ -107,14 +122,8 @@ public class OfflineNotificationServiceImpl implements OfflineNotificationServic
             int errorCount = 0;
             
             // 전송할 알림 타입 정의
-            Set<OfflineNotification.NotificationType> allowedTypes = EnumSet.of(
-                    OfflineNotification.NotificationType.NEW_MESSAGE,
-                    OfflineNotification.NotificationType.MATCH_REQUEST,
-                    OfflineNotification.NotificationType.MATCH_ACCEPTED,
-                    OfflineNotification.NotificationType.MATCH_REJECTED,
-                    OfflineNotification.NotificationType.ROOM_DELETED,
-                    OfflineNotification.NotificationType.UNREAD_COUNT_UPDATE
-            );
+            Set<OfflineNotification.NotificationType> allowedTypes =
+                    EnumSet.allOf(OfflineNotification.NotificationType.class);
             
             for (OfflineNotification notification : pendingNotifications) {
                 // 허용된 타입의 알림인지 확인
@@ -131,6 +140,7 @@ public class OfflineNotificationServiceImpl implements OfflineNotificationServic
 
                     // WebSocket을 통해 알림 전송
                     Map<String, Object> message = new HashMap<>();
+                    message.put("id", notification.getId());
                     message.put("type", notification.getType().name());
                     message.put("data", objectMapper.readValue(notification.getData(), Map.class));
                     message.put("message", notification.getMessage());
@@ -327,7 +337,7 @@ public class OfflineNotificationServiceImpl implements OfflineNotificationServic
             case NEW_MESSAGE, ROOM_DELETED -> "/queue/chat-notifications";
             case MATCH_REQUEST, MATCH_ACCEPTED, MATCH_REJECTED -> "/queue/match-notifications";
             case CHAT_ROOM_LIST_UPDATE, UNREAD_COUNT_UPDATE, MESSAGE_READ_STATUS -> "/queue/chat-updates";
-            case SYSTEM_NOTICE -> "/queue/system-notifications";
+            case SYSTEM_NOTICE, MEETUP_REMINDER, MEETUP_WAITLIST_PROMOTED -> "/queue/system-notifications";
             // 기본값이 없으면 컴파일 에러가 발생할 수 있으므로, 모든 NotificationType에 대한 case를 다루거나 default를 추가해야 합니다.
             // 만약 새로운 타입이 추가될 경우, 여기에 case를 추가해야 합니다.
             // default -> "/queue/notifications"; // 예를 들어 기본값
@@ -375,6 +385,7 @@ public class OfflineNotificationServiceImpl implements OfflineNotificationServic
             case MESSAGE_READ_STATUS -> 1; // 읽음 상태는 가장 낮은 우선순위
             case ROOM_DELETED -> 8; // 방 삭제는 중요
             case SYSTEM_NOTICE -> 7; // 시스템 공지
+            case MEETUP_REMINDER, MEETUP_WAITLIST_PROMOTED -> 9;
         };
     }
     
@@ -384,12 +395,20 @@ public class OfflineNotificationServiceImpl implements OfflineNotificationServic
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void markNotificationAsSent(Long notificationId) {
         try {
-            offlineNotificationRepository.markAsSent(notificationId);
+            offlineNotificationRepository.markAsSent(notificationId, LocalDateTime.now());
             log.debug("[OfflineNotificationService] Successfully marked notification {} as sent in separate transaction", notificationId);
         } catch (Exception e) {
             log.error("[OfflineNotificationService] Failed to mark notification {} as sent in separate transaction: {}", 
                       notificationId, e.getMessage(), e);
             throw e;
+        }
+    }
+
+    @Override
+    @Transactional
+    public void markAsDelivered(Long notificationId) {
+        if (notificationId != null) {
+            offlineNotificationRepository.markAsSent(notificationId, LocalDateTime.now());
         }
     }
 } 

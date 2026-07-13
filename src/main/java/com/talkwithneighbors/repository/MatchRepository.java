@@ -11,6 +11,7 @@ import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
@@ -58,6 +59,26 @@ public interface MatchRepository extends JpaRepository<Match, String> {
             @Param("user2Id") Long user2Id,
             @Param("status") MatchStatus status
     );
+
+    @Query("SELECT CASE WHEN COUNT(m) > 0 THEN true ELSE false END FROM Match m " +
+           "WHERE ((m.user1.id = :user1Id AND m.user2.id = :user2Id) OR " +
+           "(m.user1.id = :user2Id AND m.user2.id = :user1Id)) AND " +
+           "m.status IN :statuses")
+    boolean existsActiveMatchBetween(
+            @Param("user1Id") Long user1Id,
+            @Param("user2Id") Long user2Id,
+            @Param("statuses") Collection<MatchStatus> statuses
+    );
+
+    @Modifying
+    @Query("update Match m set m.status = :expiredStatus, m.respondedAt = :now " +
+           "where ((m.user1.id = :firstId and m.user2.id = :secondId) or " +
+           "(m.user1.id = :secondId and m.user2.id = :firstId)) and m.status in :activeStatuses")
+    int expireMatchesBetween(@Param("firstId") Long firstId,
+                             @Param("secondId") Long secondId,
+                             @Param("activeStatuses") Collection<MatchStatus> activeStatuses,
+                             @Param("expiredStatus") MatchStatus expiredStatus,
+                             @Param("now") LocalDateTime now);
 
     /**
      * 특정 상태이고 만료 시간이 지난 매칭 목록을 조회합니다.

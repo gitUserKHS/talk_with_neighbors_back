@@ -146,6 +146,7 @@ public class AuthService {
         redisSessionService.deleteSession(sessionId);
     }
 
+    @Transactional(readOnly = true)
     public UserDto getCurrentUser(String sessionId) {
         UserSession userSession = redisSessionService.getSession(sessionId);
         if (userSession == null) {
@@ -169,6 +170,7 @@ public class AuthService {
         user.setAge(request.getAge());
         user.setGender(request.getGender());
         user.setBio(request.getBio());
+        user.setProfileImage(request.getProfileImage());
         user.setLatitude(request.getLatitude());
         user.setLongitude(request.getLongitude());
         user.setAddress(request.getAddress());
@@ -178,6 +180,7 @@ public class AuthService {
         return UserDto.fromEntity(updatedUser);
     }
 
+    @Transactional(readOnly = true)
     public UserDto getUserById(Long userId) {
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new AuthException("사용자를 찾을 수 없습니다.", HttpStatus.NOT_FOUND));
@@ -216,4 +219,4 @@ public class AuthService {
         private UserDto user;
         private String sessionId;
     }
-} 
+}

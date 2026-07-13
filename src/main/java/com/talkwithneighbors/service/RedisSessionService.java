@@ -58,6 +58,7 @@ public class RedisSessionService implements ApplicationListener<SessionDisconnec
     private static final long CURRENT_ROOM_EXPIRATION = 30 * 60; // 30분 (채팅방 입장 상태 만료)
     private static final long SESSION_TIMEOUT_MINUTES = 30;
 
+    @Transactional
     public void saveSession(String sessionId, UserSession userSession) {
         // === UserSession의 username 로깅 추가 ===
         if (userSession != null && userSession.getUsername() != null) {
@@ -76,12 +77,7 @@ public class RedisSessionService implements ApplicationListener<SessionDisconnec
         }
         // === 로깅 추가 끝 ===
         try {
-            // Redis에 세션 저장
-            String key = SESSION_PREFIX + sessionId;
-            String value = objectMapper.writeValueAsString(userSession);
-            redisTemplate.opsForValue().set(key, value, SESSION_EXPIRATION, TimeUnit.SECONDS);
-            
-            // RDB에도 세션 정보 저장
+            // 세션 DB를 기준 저장소로 유지합니다. Redis는 빠른 조회를 위한 보조 저장소입니다.
             LocalDateTime now = LocalDateTime.now();
             Session session = new Session();
             session.setSessionId(sessionId);
@@ -93,96 +89,64 @@ public class RedisSessionService implements ApplicationListener<SessionDisconnec
             session.setExpiresAt(now.plusSeconds(SESSION_EXPIRATION));
             session.setLastAccessedAt(now);
             
-            // 세션 저장
             userSessionRepository.save(session);
-            
-            // 사용자를 온라인 상태로 표시
+
+            try {
+                String key = SESSION_PREFIX + sessionId;
+                String value = objectMapper.writeValueAsString(userSession);
+                redisTemplate.opsForValue().set(key, value, SESSION_EXPIRATION, TimeUnit.SECONDS);
+            } catch (Exception redisError) {
+                log.warn("Redis is unavailable. Keeping session {} in the database only.", sessionId);
+            }
+
             setUserOnline(userSession.getUserId().toString());
-            
             log.info("Session saved successfully for user: {} with sessionId: {}", userSession.getUsername(), sessionId);
         } catch (Exception e) {
-            log.error("Error saving session to Redis/RDB", e);
+            log.error("Error saving session", e);
             throw new RuntimeException("Failed to save session: " + e.getMessage(), e);
         }
     }
 
+    @Transactional
     public UserSession getSession(String sessionId) {
         log.info("Getting session: {}", sessionId);
-        
-        try {
-            // 1. Redis에서 먼저 조회
-            String key = SESSION_PREFIX + sessionId;
-            String sessionJson = redisTemplate.opsForValue().get(key);
-            
-            if (sessionJson != null && !sessionJson.isEmpty()) {
-                log.info("Session found in Redis: {}", sessionId);
-                UserSession userSession = objectMapper.readValue(sessionJson, UserSession.class);
-                // 세션 접근 시간 갱신 (만료 시간 연장)
-                redisTemplate.expire(key, SESSION_EXPIRATION, TimeUnit.SECONDS);
-                
-                // 온라인 상태 갱신
-                if (userSession != null && userSession.getUserId() != null) {
-                    setUserOnline(userSession.getUserId().toString());
-                }
-                
-                return userSession;
-            }
-            
-            // 2. Redis에 없으면 데이터베이스에서 조회
-            log.info("Session not found in Redis, checking database: {}", sessionId);
-            return userSessionRepository.findById(sessionId)
-                    .map(session -> {
-                        // RDB 세션 접근 시간 및 만료 시간 갱신
-                        LocalDateTime now = LocalDateTime.now();
-                        session.setLastAccessedAt(now);
-                        session.setExpiresAt(now.plusSeconds(SESSION_EXPIRATION));
-                        Session savedSession = userSessionRepository.save(session); // 변경 사항 저장
-                        
-                        User user = savedSession.getUser();
-                        // 지연 로딩 문제를 해결하기 위해 값을 미리 가져옴
-                        Long userId = user.getId();
-                        String username = user.getUsername();
-                        String email = user.getEmail();
-                        
-                        // === 사용자 이름 인코딩 상태 로깅 추가 ===
-                        log.info("Username from DB for session {}: '{}'", sessionId, username);
-                        byte[] usernameBytes = username.getBytes(java.nio.charset.StandardCharsets.UTF_8);
-                        log.info("Username from DB (UTF-8 bytes) for session {}: {}", sessionId, java.util.Arrays.toString(usernameBytes));
-                        try {
-                            log.info("Username from DB (re-decoded from UTF-8 bytes) for session {}: '{}'", sessionId, new String(usernameBytes, java.nio.charset.StandardCharsets.UTF_8));
-                            log.info("Username from DB (decoded as ISO-8859-1) for session {}: '{}'", sessionId, new String(username.getBytes(java.nio.charset.StandardCharsets.ISO_8859_1), java.nio.charset.StandardCharsets.ISO_8859_1));
-                            log.info("Username from DB (decoded as MS949) for session {}: '{}'", sessionId, new String(username.getBytes(java.nio.charset.Charset.forName("MS949")), java.nio.charset.Charset.forName("MS949")));
-                        } catch (Exception e) {
-                            log.error("Error logging username encodings", e);
-                        }
-                        // === 로깅 추가 끝 ===
-                        
-                        UserSession userSession = UserSession.of(
-                            userId,
-                            username,
-                            email,
-                            username  // nickname은 username과 동일하게 설정
-                        );
-                        
-                        try {
-                            // 세션을 Redis에 저장
-                            String userSessionJson = objectMapper.writeValueAsString(userSession);
-                            redisTemplate.opsForValue().set(key, userSessionJson, SESSION_EXPIRATION, TimeUnit.SECONDS);
-                            log.info("Session loaded from database (and updated) and saved to Redis: {}", sessionId);
-                            
-                            // 온라인 상태 갱신
-                            setUserOnline(userId.toString());
-                        } catch (Exception e) {
-                            log.error("Error saving session to Redis after database retrieval", e);
-                        }
-                        
-                        return userSession;
-                    })
-                    .orElse(null);
-        } catch (Exception e) {
-            log.error("Error retrieving session: {}", sessionId, e);
+
+        String key = SESSION_PREFIX + sessionId;
+        Optional<Session> storedSession = userSessionRepository.findById(sessionId);
+        if (storedSession.isEmpty()) {
+            log.info("Session {} is not present in the database. Ignoring any stale cache entry.", sessionId);
             return null;
         }
+
+        Session session = storedSession.get();
+        LocalDateTime now = LocalDateTime.now();
+        if (session.getExpiresAt() != null && !session.getExpiresAt().isAfter(now)) {
+            userSessionRepository.deleteById(sessionId);
+            try {
+                redisTemplate.delete(key);
+            } catch (Exception redisError) {
+                log.debug("Redis is unavailable while removing expired session {}.", sessionId);
+            }
+            return null;
+        }
+
+        session.setLastAccessedAt(now);
+        session.setExpiresAt(now.plusSeconds(SESSION_EXPIRATION));
+        User user = userSessionRepository.save(session).getUser();
+        if (user == null || user.getId() == null) {
+            return null;
+        }
+
+        UserSession userSession = UserSession.of(
+                user.getId(), user.getUsername(), user.getEmail(), user.getUsername());
+        try {
+            String userSessionJson = objectMapper.writeValueAsString(userSession);
+            redisTemplate.opsForValue().set(key, userSessionJson, SESSION_EXPIRATION, TimeUnit.SECONDS);
+        } catch (Exception redisError) {
+            log.debug("Redis is unavailable. Session {} remains database-backed.", sessionId);
+        }
+        setUserOnline(user.getId().toString());
+        return userSession;
     }
     
     private UserSession createNewSession() {
@@ -221,9 +185,12 @@ public class RedisSessionService implements ApplicationListener<SessionDisconnec
             }
         }
 
-        // Redis에서 현재 세션 삭제
-        redisTemplate.delete(sessionKey);
-        log.info("[RedisSessionService] Deleted session key {} from Redis.", sessionKey);
+        try {
+            redisTemplate.delete(sessionKey);
+            log.info("[RedisSessionService] Deleted session key {} from Redis.", sessionKey);
+        } catch (Exception e) {
+            log.debug("Redis is unavailable while deleting session {}.", sessionId);
+        }
 
         // RDB에서 현재 세션 삭제
         userSessionRepository.deleteById(sessionId);
@@ -287,9 +254,13 @@ public class RedisSessionService implements ApplicationListener<SessionDisconnec
         // log.info("[setUserOnline] userId: {}, DB_wasActuallyOnline: {}, DB_wasRecentlyOnline: {}, DB_lastOnline: {}", 
         //          userId, wasActuallyOnline, wasRecentlyOnline, lastOnline);
         
-        // Redis에 온라인 상태 저장 (캐시)
-        String key = ONLINE_PREFIX + userId;
-        redisTemplate.opsForValue().set(key, "online", ONLINE_EXPIRATION, TimeUnit.SECONDS);
+        // Redis에 온라인 상태를 캐시하지만, Redis가 없어도 DB 상태는 유지합니다.
+        try {
+            String key = ONLINE_PREFIX + userId;
+            redisTemplate.opsForValue().set(key, "online", ONLINE_EXPIRATION, TimeUnit.SECONDS);
+        } catch (Exception e) {
+            log.debug("Redis is unavailable while marking user {} online.", userId);
+        }
         
         // RDB에 온라인 상태 저장
         user.setIsOnline(true);
@@ -319,8 +290,12 @@ public class RedisSessionService implements ApplicationListener<SessionDisconnec
      * Redis에서만 온라인 상태를 확인합니다 (이벤트 중복 방지용)
      */
     private boolean isUserOnlineFromRedis(String userId) {
-        String key = ONLINE_PREFIX + userId;
-        return Boolean.TRUE.equals(redisTemplate.hasKey(key));
+        try {
+            String key = ONLINE_PREFIX + userId;
+            return Boolean.TRUE.equals(redisTemplate.hasKey(key));
+        } catch (Exception e) {
+            return false;
+        }
     }
     
     /**
@@ -393,24 +368,31 @@ public class RedisSessionService implements ApplicationListener<SessionDisconnec
      * 오프라인 사용자에게 매칭 요청을 저장합니다.
      */
     public void savePendingMatch(String userId, String matchId) {
-        String key = PENDING_MATCH_PREFIX + userId;
-        redisTemplate.opsForList().rightPush(key, matchId);
-        // 24시간 동안 보관
-        redisTemplate.expire(key, SESSION_EXPIRATION, TimeUnit.SECONDS);
-        log.info("[savePendingMatch] Pending matchId: {} saved for offline userId: {}", matchId, userId); // 로그 추가
+        try {
+            String key = PENDING_MATCH_PREFIX + userId;
+            redisTemplate.opsForList().rightPush(key, matchId);
+            redisTemplate.expire(key, SESSION_EXPIRATION, TimeUnit.SECONDS);
+            log.info("[savePendingMatch] Pending matchId: {} saved for offline userId: {}", matchId, userId);
+        } catch (Exception e) {
+            log.debug("Redis is unavailable. Pending match {} will be delivered through the database notification flow.", matchId);
+        }
     }
     
     /**
      * 사용자의 대기 중인 매칭 요청을 조회합니다.
      */
     public List<String> getPendingMatches(String userId) {
-        String key = PENDING_MATCH_PREFIX + userId;
-        List<String> matches = redisTemplate.opsForList().range(key, 0, -1);
-        if (matches != null && !matches.isEmpty()) {
-            // 조회 후 삭제
-            redisTemplate.delete(key);
+        try {
+            String key = PENDING_MATCH_PREFIX + userId;
+            List<String> matches = redisTemplate.opsForList().range(key, 0, -1);
+            if (matches != null && !matches.isEmpty()) {
+                redisTemplate.delete(key);
+            }
+            return matches;
+        } catch (Exception e) {
+            log.debug("Redis is unavailable while loading pending matches for user {}.", userId);
+            return List.of();
         }
-        return matches;
     }
 
     @Transactional
@@ -487,9 +469,12 @@ public class RedisSessionService implements ApplicationListener<SessionDisconnec
         // 이전 온라인 상태 확인
         boolean wasOnline = isUserOnlineFromRedis(userId);
         
-        // Redis에서 온라인 상태 삭제
-        String key = ONLINE_PREFIX + userId;
-        redisTemplate.delete(key);
+        try {
+            String key = ONLINE_PREFIX + userId;
+            redisTemplate.delete(key);
+        } catch (Exception e) {
+            log.debug("Redis is unavailable while marking user {} offline.", userId);
+        }
         
         // RDB에 오프라인 상태 저장
         User user = userRepository.findById(Long.parseLong(userId))

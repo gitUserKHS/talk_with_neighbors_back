@@ -77,6 +77,12 @@ public class OfflineNotification {
      */
     @Column(name = "is_sent", nullable = false)
     private Boolean isSent = false;
+
+    @Column(name = "delivered_at")
+    private LocalDateTime deliveredAt;
+
+    @Column(name = "read_at")
+    private LocalDateTime readAt;
     
     /**
      * 전송 시도 횟수
@@ -91,7 +97,7 @@ public class OfflineNotification {
         }
         if (expiresAt == null) {
             // 기본적으로 7일 후 만료
-            expiresAt = createdAt.plusDays(7);
+            expiresAt = createdAt.plusDays(30);
         }
     }
     
@@ -107,6 +113,8 @@ public class OfflineNotification {
         UNREAD_COUNT_UPDATE,   // 읽지 않은 메시지 수 업데이트
         MESSAGE_READ_STATUS,   // 메시지 읽음 상태 업데이트
         ROOM_DELETED,          // 채팅방 삭제
-        SYSTEM_NOTICE          // 시스템 공지
+        SYSTEM_NOTICE,         // 시스템 공지
+        MEETUP_REMINDER,
+        MEETUP_WAITLIST_PROMOTED
     }
 } 

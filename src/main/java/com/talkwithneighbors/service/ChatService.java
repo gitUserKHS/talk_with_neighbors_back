@@ -3,6 +3,7 @@ package com.talkwithneighbors.service;
 import com.talkwithneighbors.dto.ChatRoomDto;
 import com.talkwithneighbors.dto.MessageDto;
 import com.talkwithneighbors.entity.ChatRoomType;
+import com.talkwithneighbors.dto.UpdateChatRoomRequest;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import java.util.List; // createRoom 메서드의 participantIds 때문에 유지
@@ -51,7 +52,7 @@ public interface ChatService {
     void markAllMessagesInRoomAsRead(String roomId, String userIdString);
     
     // 채팅방 정보 업데이트
-    ChatRoomDto updateRoom(String roomId, String name, ChatRoomType type);
+    ChatRoomDto updateRoom(String roomId, Long requesterId, UpdateChatRoomRequest request);
 
     // === 매칭 관련 메서드 추가 ===
     // 두 사용자 간의 기존 1:1 채팅방 조회 (매칭 시스템용)

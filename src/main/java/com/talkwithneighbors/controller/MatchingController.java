@@ -1,11 +1,13 @@
 package com.talkwithneighbors.controller;
 
+import com.talkwithneighbors.dto.ChatRoomDto;
 import com.talkwithneighbors.dto.matching.MatchProfileDto;
 import com.talkwithneighbors.dto.matching.MatchingPreferencesDto;
+import com.talkwithneighbors.dto.matching.RecommendationFeedbackRequest;
+import jakarta.validation.Valid;
 import com.talkwithneighbors.security.RequireLogin;
 import com.talkwithneighbors.security.UserSession;
 import com.talkwithneighbors.service.MatchingService;
-import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
@@ -53,6 +55,24 @@ public class MatchingController {
         return ResponseEntity.ok(matchProfiles);
     }
 
+    @GetMapping("/recommendations")
+    public ResponseEntity<List<MatchProfileDto>> getRecommendations(UserSession userSession) {
+        return ResponseEntity.ok(matchingService.getRecommendations(userSession.getUserId()));
+    }
+
+    @GetMapping("/requests/incoming")
+    public ResponseEntity<List<MatchProfileDto>> getIncomingRequests(UserSession userSession) {
+        return ResponseEntity.ok(matchingService.getIncomingRequests(userSession.getUserId()));
+    }
+
+    @PostMapping("/users/{targetUserId}/request")
+    public ResponseEntity<MatchProfileDto> requestMatch(
+            @PathVariable("targetUserId") Long targetUserId,
+            UserSession userSession
+    ) {
+        return ResponseEntity.ok(matchingService.requestMatch(userSession.getUserId(), targetUserId));
+    }
+
     @PostMapping("/stop")
     public ResponseEntity<Void> stopMatching(UserSession userSession) {
         log.info("[MatchingController] 매칭 중지 요청: userSession={}", userSession);
@@ -71,19 +91,14 @@ public class MatchingController {
     }
 
     @PostMapping("/{matchId}/accept")
-    public ResponseEntity<Void> acceptMatch(
+    public ResponseEntity<ChatRoomDto> acceptMatch(
             @PathVariable("matchId") String matchId,
             UserSession userSession
     ) {
         log.info("[MatchingController] acceptMatch request received: matchId={}, userId={}", matchId, userSession.getUserId());
-        try {
-            matchingService.acceptMatch(matchId, userSession.getUserId());
-            log.info("[MatchingController] acceptMatch completed successfully: matchId={}, userId={}", matchId, userSession.getUserId());
-            return ResponseEntity.ok().build();
-        } catch (Exception e) {
-            log.error("[MatchingController] acceptMatch failed: matchId={}, userId={}, error={}", matchId, userSession.getUserId(), e.getMessage(), e);
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
-        }
+        ChatRoomDto chatRoom = matchingService.acceptMatch(matchId, userSession.getUserId());
+        log.info("[MatchingController] acceptMatch completed successfully: matchId={}, userId={}", matchId, userSession.getUserId());
+        return ResponseEntity.ok(chatRoom);
     }
 
     @PostMapping("/{matchId}/reject")
@@ -92,14 +107,9 @@ public class MatchingController {
             UserSession userSession
     ) {
         log.info("[MatchingController] rejectMatch request received: matchId={}, userId={}", matchId, userSession.getUserId());
-        try {
-            matchingService.rejectMatch(matchId, userSession.getUserId());
-            log.info("[MatchingController] rejectMatch completed successfully: matchId={}, userId={}", matchId, userSession.getUserId());
-            return ResponseEntity.ok().build();
-        } catch (Exception e) {
-            log.error("[MatchingController] rejectMatch failed: matchId={}, userId={}, error={}", matchId, userSession.getUserId(), e.getMessage(), e);
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
-        }
+        matchingService.rejectMatch(matchId, userSession.getUserId());
+        log.info("[MatchingController] rejectMatch completed successfully: matchId={}, userId={}", matchId, userSession.getUserId());
+        return ResponseEntity.ok().build();
     }
 
     @GetMapping("/nearby")
@@ -123,4 +133,11 @@ public class MatchingController {
         matchingService.processPendingMatches(userSession.getUserId());
         return ResponseEntity.ok().build();
     }
-} 
+
+    @PostMapping("/recommendations/{candidateId}/feedback")
+    public ResponseEntity<Void> recommendationFeedback(@PathVariable Long candidateId,
+            @Valid @RequestBody RecommendationFeedbackRequest request, UserSession userSession) {
+        matchingService.saveRecommendationFeedback(userSession.getUserId(), candidateId, request);
+        return ResponseEntity.noContent().build();
+    }
+}

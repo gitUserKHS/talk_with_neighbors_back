@@ -117,3 +117,10 @@ logging:
 jwt:
   secret: your-jwt-secret-key
   expiration: 86400000
+
+app:
+  session:
+    cookie-secure: ${APP_SESSION_COOKIE_SECURE:false}
+  outbox:
+    retry-interval-ms: 5000
+    cleanup-cron: "0 0 3 * * *"

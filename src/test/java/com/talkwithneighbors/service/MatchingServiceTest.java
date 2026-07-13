@@ -1,19 +1,27 @@
 package com.talkwithneighbors.service;
 
+import com.talkwithneighbors.dto.ChatRoomDto;
+import com.talkwithneighbors.dto.matching.MatchProfileDto;
 import com.talkwithneighbors.dto.matching.MatchingPreferencesDto;
-import com.talkwithneighbors.dto.LocationDto;
-import com.talkwithneighbors.entity.User;
-import com.talkwithneighbors.entity.MatchingPreferences;
+import com.talkwithneighbors.domain.event.MatchCompletedEvent;
+import com.talkwithneighbors.entity.Match;
 import com.talkwithneighbors.entity.MatchStatus;
+import com.talkwithneighbors.entity.MatchingPreferences;
+import com.talkwithneighbors.entity.User;
 import com.talkwithneighbors.exception.MatchingException;
 import com.talkwithneighbors.repository.MatchRepository;
 import com.talkwithneighbors.repository.MatchingPreferencesRepository;
 import com.talkwithneighbors.repository.UserRepository;
+import com.talkwithneighbors.repository.UserBlockRepository;
+import com.talkwithneighbors.repository.RecommendationFeedbackRepository;
+import com.talkwithneighbors.outbox.DomainEventPublisher;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.InjectMocks;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
+import org.mockito.Spy;
 import org.springframework.http.HttpStatus;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 
@@ -22,12 +30,17 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyDouble;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.*;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.times;
 
 class MatchingServiceTest {
 
@@ -41,10 +54,31 @@ class MatchingServiceTest {
     private MatchingPreferencesRepository matchingPreferencesRepository;
 
     @Mock
-    private SimpMessagingTemplate messagingTemplate; // Even if not directly used in these specific tests, it's a dependency
+    private SimpMessagingTemplate messagingTemplate;
 
     @Mock
-    private RedisSessionService redisSessionService; // Even if not directly used, it's a dependency
+    private RedisSessionService redisSessionService;
+
+    @Mock
+    private ChatService chatService;
+
+    @Mock
+    private com.fasterxml.jackson.databind.ObjectMapper objectMapper;
+
+    @Mock
+    private OfflineNotificationService offlineNotificationService;
+
+    @Mock
+    private DomainEventPublisher domainEventPublisher;
+
+    @Mock
+    private UserBlockRepository userBlockRepository;
+
+    @Mock
+    private RecommendationFeedbackRepository recommendationFeedbackRepository;
+
+    @Spy
+    private CompatibilityScoreService compatibilityScoreService = new CompatibilityScoreService();
 
     @InjectMocks
     private MatchingService matchingService;
@@ -58,22 +92,180 @@ class MatchingServiceTest {
         preferencesDto = createDummyMatchingPreferencesDto();
     }
 
-    // Helper method to create a User mock
-    private User mockUser(Long id, boolean isProfileComplete) {
-        User user = mock(User.class);
-        when(user.getId()).thenReturn(id);
-        when(user.isProfileComplete()).thenReturn(isProfileComplete);
-        // Stub other methods of User that might be called by MatchingService
-        // These ensure the service methods don't fail due to NullPointerExceptions from the User mock
-        when(user.getLatitude()).thenReturn(34.0522); 
-        when(user.getLongitude()).thenReturn(-118.2437);
-        when(user.getAddress()).thenReturn("123 Main St");
-        when(user.getAge()).thenReturn(30);
-        when(user.getGender()).thenReturn("Female");
-        when(user.getInterests()).thenReturn(List.of("reading"));
-        return user;
+    @Test
+    void startMatchingWithIncompleteProfileThrowsBadRequest() {
+        User incompleteUser = user(testUserId, false);
+        when(userRepository.findById(testUserId)).thenReturn(Optional.of(incompleteUser));
+
+        MatchingException exception = assertThrows(MatchingException.class, () ->
+                matchingService.startMatching(preferencesDto, testUserId)
+        );
+
+        assertEquals(HttpStatus.BAD_REQUEST, exception.getStatus());
+        verify(userRepository).findById(testUserId);
+        verifyNoInteractions(matchingPreferencesRepository);
+        verifyNoInteractions(matchRepository);
     }
 
+    @Test
+    void startMatchingWithCompleteProfileSavesPreferencesAndReturnsEmptyListWhenNoCandidates() {
+        User completeUser = user(testUserId, true);
+        when(userRepository.findById(testUserId)).thenReturn(Optional.of(completeUser));
+        when(matchingPreferencesRepository.findByUserId(testUserId)).thenReturn(Optional.empty());
+        when(matchingPreferencesRepository.save(any(MatchingPreferences.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(matchRepository.bulkExpireMatches(eq(MatchStatus.EXPIRED), any(LocalDateTime.class), eq(testUserId), eq(MatchStatus.PENDING))).thenReturn(0);
+        when(userRepository.findNearbyUsers(anyDouble(), anyDouble(), anyDouble())).thenReturn(Collections.emptyList());
+        when(chatService.getUsersWithOneOnOneChatRooms(testUserId)).thenReturn(Collections.emptyList());
+        when(matchRepository.saveAll(anyList())).thenReturn(Collections.emptyList());
+
+        assertDoesNotThrow(() -> matchingService.startMatching(preferencesDto, testUserId));
+
+        verify(userRepository, times(2)).findById(testUserId);
+        verify(matchingPreferencesRepository).findByUserId(testUserId);
+        verify(matchingPreferencesRepository).save(any(MatchingPreferences.class));
+        verify(matchRepository).bulkExpireMatches(eq(MatchStatus.EXPIRED), any(LocalDateTime.class), eq(testUserId), eq(MatchStatus.PENDING));
+        verify(userRepository).findNearbyUsers(anyDouble(), anyDouble(), anyDouble());
+        verify(matchRepository).saveAll(anyList());
+    }
+
+    @Test
+    void saveMatchingPreferencesWithIncompleteProfileThrowsBadRequest() {
+        User incompleteUser = user(testUserId, false);
+        when(userRepository.findById(testUserId)).thenReturn(Optional.of(incompleteUser));
+
+        MatchingException exception = assertThrows(MatchingException.class, () ->
+                matchingService.saveMatchingPreferences(preferencesDto, testUserId)
+        );
+
+        assertEquals(HttpStatus.BAD_REQUEST, exception.getStatus());
+        verify(userRepository).findById(testUserId);
+        verifyNoInteractions(matchingPreferencesRepository);
+    }
+
+    @Test
+    void saveMatchingPreferencesCreatesNewPreferences() {
+        User completeUser = user(testUserId, true);
+        when(userRepository.findById(testUserId)).thenReturn(Optional.of(completeUser));
+        when(matchingPreferencesRepository.findByUserId(testUserId)).thenReturn(Optional.empty());
+        when(matchingPreferencesRepository.save(any(MatchingPreferences.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        assertDoesNotThrow(() -> matchingService.saveMatchingPreferences(preferencesDto, testUserId));
+
+        verify(userRepository).findById(testUserId);
+        verify(matchingPreferencesRepository).findByUserId(testUserId);
+        verify(matchingPreferencesRepository).save(any(MatchingPreferences.class));
+    }
+
+    @Test
+    void saveMatchingPreferencesUpdatesExistingPreferences() {
+        User completeUser = user(testUserId, true);
+        MatchingPreferences existingPreferences = new MatchingPreferences();
+        existingPreferences.setUser(completeUser);
+        existingPreferences.setId(1L);
+        existingPreferences.setMaxDistance(5.0);
+        existingPreferences.setMinAge(20);
+
+        when(userRepository.findById(testUserId)).thenReturn(Optional.of(completeUser));
+        when(matchingPreferencesRepository.findByUserId(testUserId)).thenReturn(Optional.of(existingPreferences));
+        when(matchingPreferencesRepository.save(any(MatchingPreferences.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        assertDoesNotThrow(() -> matchingService.saveMatchingPreferences(preferencesDto, testUserId));
+
+        assertEquals(preferencesDto.getMaxDistance(), existingPreferences.getMaxDistance());
+        assertEquals(preferencesDto.getAgeRange()[0], existingPreferences.getMinAge());
+        assertEquals(preferencesDto.getAgeRange()[1], existingPreferences.getMaxAge());
+        assertEquals(preferencesDto.getGender(), existingPreferences.getPreferredGender());
+        assertEquals(preferencesDto.getInterests(), existingPreferences.getPreferredInterests());
+    }
+
+    @Test
+    void requestMatchMarksRequesterAsAccepted() {
+        User requester = user(1L, true);
+        User target = user(2L, true);
+        target.setUsername("user2");
+        when(userRepository.findById(requester.getId())).thenReturn(Optional.of(requester));
+        when(userRepository.findById(target.getId())).thenReturn(Optional.of(target));
+        when(chatService.findOneOnOneChatRoom(requester.getId(), target.getId())).thenReturn(null);
+        when(matchRepository.existsActiveMatchBetween(any(), any(), any())).thenReturn(false);
+        when(matchingPreferencesRepository.findByUserId(requester.getId())).thenReturn(Optional.empty());
+        when(matchRepository.save(any(Match.class))).thenAnswer(invocation -> {
+            Match match = invocation.getArgument(0);
+            match.setId("match-request");
+            return match;
+        });
+
+        matchingService.requestMatch(requester.getId(), target.getId());
+
+        ArgumentCaptor<Match> matchCaptor = ArgumentCaptor.forClass(Match.class);
+        verify(matchRepository).save(matchCaptor.capture());
+        assertEquals(MatchStatus.USER1_ACCEPTED, matchCaptor.getValue().getStatus());
+        org.junit.jupiter.api.Assertions.assertNotNull(matchCaptor.getValue().getRespondedAt());
+    }
+
+    @Test
+    void incomingRequestsAreLoadedFromTheDatabaseForTheUserWhoMustRespond() {
+        User requester = user(1L, true);
+        User target = user(2L, true);
+        Match match = new Match();
+        match.setId("incoming-match");
+        match.setUser1(requester);
+        match.setUser2(target);
+        match.setStatus(MatchStatus.USER1_ACCEPTED);
+        match.setCreatedAt(LocalDateTime.now());
+        match.setExpiresAt(LocalDateTime.now().plusHours(1));
+
+        when(userRepository.findById(target.getId())).thenReturn(Optional.of(target));
+        when(matchingPreferencesRepository.findByUserId(target.getId())).thenReturn(Optional.empty());
+        when(matchRepository.findByUserId(target.getId())).thenReturn(List.of(match));
+
+        List<MatchProfileDto> requests = matchingService.getIncomingRequests(target.getId());
+
+        assertEquals(1, requests.size());
+        assertEquals("incoming-match", requests.get(0).getMatchId());
+        assertEquals(requester.getUsername(), requests.get(0).getUsername());
+    }
+
+    @Test
+    void acceptingDirectRequestReturnsCreatedChatRoom() {
+        User requester = user(1L, true);
+        User target = user(2L, true);
+        Match match = new Match();
+        match.setId("direct-request");
+        match.setUser1(requester);
+        match.setUser2(target);
+        match.setStatus(MatchStatus.USER1_ACCEPTED);
+        match.setExpiresAt(LocalDateTime.now().plusHours(1));
+        ChatRoomDto room = new ChatRoomDto();
+        room.setId("chat-room");
+
+        when(matchRepository.findByIdAndUserId(match.getId(), target.getId())).thenReturn(Optional.of(match));
+        when(matchRepository.save(match)).thenReturn(match);
+        when(chatService.findOneOnOneChatRoom(target.getId(), requester.getId())).thenReturn(null);
+        when(chatService.createRoom(any(), any(), eq(target.getId().toString()), anyList())).thenReturn(room);
+
+        ChatRoomDto result = matchingService.acceptMatch(match.getId(), target.getId());
+
+        assertEquals(MatchStatus.BOTH_ACCEPTED, match.getStatus());
+        assertEquals("chat-room", result.getId());
+        verify(domainEventPublisher).publish(any(MatchCompletedEvent.class));
+    }
+
+    private User user(Long id, boolean completeProfile) {
+        User user = new User();
+        user.setId(id);
+        user.setEmail("user" + id + "@example.com");
+        user.setUsername("user" + id);
+        user.setPassword("password");
+        if (completeProfile) {
+            user.setAge(30);
+            user.setGender("Any");
+            user.setInterests(List.of("Reading"));
+            user.setLatitude(34.0522);
+            user.setLongitude(-118.2437);
+            user.setAddress("123 Main St");
+        }
+        return user;
+    }
 
     private MatchingPreferencesDto createDummyMatchingPreferencesDto() {
         MatchingPreferencesDto dto = new MatchingPreferencesDto();
@@ -82,127 +274,5 @@ class MatchingServiceTest {
         dto.setGender("Any");
         dto.setInterests(List.of("Hiking", "Reading"));
         return dto;
-    }
-
-    // Tests for startMatching
-    @Test
-    void testStartMatching_whenUserProfileIncomplete_shouldThrowMatchingException() {
-        User incompleteUser = mockUser(testUserId, false);
-        when(userRepository.findById(testUserId)).thenReturn(Optional.of(incompleteUser));
-
-        MatchingException exception = assertThrows(MatchingException.class, () -> {
-            matchingService.startMatching(preferencesDto, testUserId);
-        });
-
-        assertEquals("프로필을 먼저 설정해야 매칭 기능을 이용할 수 있습니다.", exception.getMessage());
-        assertEquals(HttpStatus.BAD_REQUEST, exception.getStatus());
-
-        verify(userRepository).findById(testUserId);
-        // Ensure no further interactions that would occur if profile was complete
-        verifyNoInteractions(matchingPreferencesRepository);
-        verifyNoInteractions(matchRepository);
-        verifyNoInteractions(messagingTemplate);
-        verifyNoInteractions(redisSessionService);
-    }
-
-    @Test
-    void testStartMatching_whenUserProfileComplete_shouldProceedNormally() {
-        User completeUser = mockUser(testUserId, true);
-        when(userRepository.findById(testUserId)).thenReturn(Optional.of(completeUser));
-
-        // Mocking behavior for saveMatchingPreferences internal call
-        when(matchingPreferencesRepository.findByUserId(testUserId)).thenReturn(Optional.empty());
-        when(matchingPreferencesRepository.save(any(MatchingPreferences.class))).thenAnswer(invocation -> invocation.getArgument(0));
-
-        // Mocking behavior for stopMatching internal call
-        when(matchRepository.bulkExpireMatches(eq(MatchStatus.EXPIRED), any(LocalDateTime.class), eq(testUserId), eq(MatchStatus.PENDING))).thenReturn(0);
-
-        // Mocking behavior for finding nearby users and saving matches
-        when(userRepository.findNearbyUsers(anyDouble(), anyDouble(), anyDouble())).thenReturn(Collections.emptyList());
-        when(matchRepository.saveAll(anyList())).thenReturn(Collections.emptyList());
-
-        assertDoesNotThrow(() -> {
-            matchingService.startMatching(preferencesDto, testUserId);
-        });
-
-        verify(userRepository).findById(testUserId); // Called once at the start
-        // Verifications for saveMatchingPreferences internal call
-        verify(matchingPreferencesRepository).findByUserId(testUserId);
-        verify(matchingPreferencesRepository).save(any(MatchingPreferences.class));
-        // Verification for stopMatching internal call
-        verify(matchRepository).bulkExpireMatches(eq(MatchStatus.EXPIRED), any(LocalDateTime.class), eq(testUserId), eq(MatchStatus.PENDING));
-        // Verifications for the rest of startMatching
-        verify(userRepository).findNearbyUsers(anyDouble(), anyDouble(), anyDouble());
-        verify(matchRepository).saveAll(anyList()); // saveAll is called even with an empty list
-    }
-
-    // Tests for saveMatchingPreferences
-    @Test
-    void testSaveMatchingPreferences_whenUserProfileIncomplete_shouldThrowMatchingException() {
-        User incompleteUser = mockUser(testUserId, false);
-        when(userRepository.findById(testUserId)).thenReturn(Optional.of(incompleteUser));
-
-        MatchingException exception = assertThrows(MatchingException.class, () -> {
-            matchingService.saveMatchingPreferences(preferencesDto, testUserId);
-        });
-
-        assertEquals("프로필을 먼저 설정해야 매칭 환경설정을 저장할 수 있습니다.", exception.getMessage());
-        assertEquals(HttpStatus.BAD_REQUEST, exception.getStatus());
-
-        verify(userRepository).findById(testUserId);
-        verifyNoInteractions(matchingPreferencesRepository);
-    }
-
-    @Test
-    void testSaveMatchingPreferences_whenUserProfileComplete_shouldSavePreferences() {
-        User completeUser = mockUser(testUserId, true);
-        when(userRepository.findById(testUserId)).thenReturn(Optional.of(completeUser));
-
-        // Scenario: No existing preferences, so new one will be created and saved
-        when(matchingPreferencesRepository.findByUserId(testUserId)).thenReturn(Optional.empty());
-        when(matchingPreferencesRepository.save(any(MatchingPreferences.class))).thenAnswer(invocation -> {
-            MatchingPreferences prefsToSave = invocation.getArgument(0);
-            // Simulate saving by setting an ID or just return the object
-            // In a real save, the ID would be set by the DB. For mock, this is enough.
-            return prefsToSave;
-        });
-
-        assertDoesNotThrow(() -> {
-            matchingService.saveMatchingPreferences(preferencesDto, testUserId);
-        });
-
-        verify(userRepository).findById(testUserId);
-        verify(matchingPreferencesRepository).findByUserId(testUserId);
-        verify(matchingPreferencesRepository).save(any(MatchingPreferences.class));
-    }
-
-    @Test
-    void testSaveMatchingPreferences_whenUserProfileComplete_shouldUpdateExistingPreferences() {
-        User completeUser = mockUser(testUserId, true);
-        when(userRepository.findById(testUserId)).thenReturn(Optional.of(completeUser));
-
-        MatchingPreferences existingPreferences = new MatchingPreferences();
-        existingPreferences.setUser(completeUser);
-        existingPreferences.setId(1L);
-        existingPreferences.setMaxDistance(5.0);
-        existingPreferences.setMinAge(20);
-
-
-        when(matchingPreferencesRepository.findByUserId(testUserId)).thenReturn(Optional.of(existingPreferences));
-        when(matchingPreferencesRepository.save(any(MatchingPreferences.class))).thenAnswer(invocation -> invocation.getArgument(0));
-
-        assertDoesNotThrow(() -> {
-            matchingService.saveMatchingPreferences(preferencesDto, testUserId);
-        });
-
-        verify(userRepository).findById(testUserId);
-        verify(matchingPreferencesRepository).findByUserId(testUserId);
-        verify(matchingPreferencesRepository).save(existingPreferences); 
-        
-        assertEquals(preferencesDto.getMaxDistance(), existingPreferences.getMaxDistance());
-        assertEquals(preferencesDto.getAgeRange()[0], existingPreferences.getMinAge());
-        assertEquals(preferencesDto.getAgeRange()[1], existingPreferences.getMaxAge());
-        assertEquals(preferencesDto.getGender(), existingPreferences.getPreferredGender());
-        assertEquals(preferencesDto.getInterests(), existingPreferences.getPreferredInterests());
     }
 }

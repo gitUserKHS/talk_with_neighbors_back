@@ -148,7 +148,11 @@ class AuthControllerTest {
         // when & then
         mockMvc.perform(post("/api/auth/logout")
                 .header("X-Session-Id", sessionId))
-                .andExpect(status().isOk());
+                .andExpect(status().isNoContent())
+                .andExpect(header().string("Set-Cookie",
+                        org.hamcrest.Matchers.containsString("TWN_SESSION=;")))
+                .andExpect(header().string("Set-Cookie",
+                        org.hamcrest.Matchers.containsString("Max-Age=0")));
     }
 
     @Test
@@ -285,4 +289,4 @@ class AuthControllerTest {
                 .content(objectMapper.writeValueAsString(userDto)))
                 .andExpect(status().isUnauthorized());
     }
-} 
+}

@@ -1,81 +1,79 @@
 package com.talkwithneighbors.controller;
 
 import com.talkwithneighbors.service.OfflineNotificationService;
-import com.talkwithneighbors.service.UserOnlineStatusListener;
+import com.talkwithneighbors.service.NotificationInboxService;
+import com.talkwithneighbors.dto.notification.NotificationInboxDto;
+import com.talkwithneighbors.security.RequireLogin;
+import com.talkwithneighbors.security.UserSession;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.*;
+import java.util.Map;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.http.ResponseEntity;
 import org.springframework.messaging.handler.annotation.MessageMapping;
-import java.security.Principal;
 import org.springframework.stereotype.Controller;
-import org.springframework.web.bind.annotation.*;
+
+import java.security.Principal;
 
 @Controller
-@RequestMapping("/api/notifications")
 @RequiredArgsConstructor
 @Slf4j
 public class NotificationController {
-    
     private final OfflineNotificationService offlineNotificationService;
-    private final UserOnlineStatusListener userOnlineStatusListener;
-    
-    /**
-     * 수동으로 오프라인 알림을 전송하는 테스트 API
-     */
-    @PostMapping("/test/send-pending/{userId}")
-    @ResponseBody
-    public ResponseEntity<String> testSendPendingNotifications(@PathVariable Long userId) {
-        log.info("=== Manual test: sending pending notifications for userId: {} ===", userId);
-        
-        try {
-            // UserOnlineStatusListener를 통해 오프라인 알림 전송
-            userOnlineStatusListener.onUserOnline(userId);
-            
-            return ResponseEntity.ok("오프라인 알림 전송 테스트 완료");
-        } catch (Exception e) {
-            log.error("Error in manual notification test for userId: {}", userId, e);
-            return ResponseEntity.badRequest().body("오프라인 알림 전송 테스트 실패: " + e.getMessage());
+    private final NotificationInboxService notificationInboxService;
+
+    @MessageMapping("/client/ready")
+    public void handleClientReady(Principal principal) {
+        if (principal == null || principal.getName() == null) {
+            log.warn("Client ready signal received without an authenticated principal.");
+            return;
         }
-    }
-    
-    /**
-     * 직접 OfflineNotificationService를 호출하는 테스트 API
-     */
-    @PostMapping("/test/send-direct/{userId}")
-    @ResponseBody
-    public ResponseEntity<String> testDirectSendNotifications(@PathVariable Long userId) {
-        log.info("=== Direct test: sending pending notifications for userId: {} ===", userId);
-        
+
         try {
-            // OfflineNotificationService를 직접 호출
+            Long userId = Long.parseLong(principal.getName());
+            log.info("Client subscriptions are ready for user {}. Delivering pending notifications.", userId);
             offlineNotificationService.sendPendingNotifications(userId);
-            
-            return ResponseEntity.ok("직접 오프라인 알림 전송 테스트 완료");
-        } catch (Exception e) {
-            log.error("Error in direct notification test for userId: {}", userId, e);
-            return ResponseEntity.badRequest().body("직접 오프라인 알림 전송 테스트 실패: " + e.getMessage());
+        } catch (NumberFormatException exception) {
+            log.error("Invalid user id in client ready signal: {}", principal.getName(), exception);
         }
     }
 
-    /**
-     * 클라이언트가 STOMP 구독 완료 후 준비되었음을 알리는 메시지를 처리합니다.
-     * @param principal 현재 인증된 사용자 정보
-     */
-    @MessageMapping("/client/ready")
-    public void handleClientReady(Principal principal) {
-        if (principal != null && principal.getName() != null) {
-            String userIdString = principal.getName();
-            log.info("=== [NotificationController] Client ready signal received for userId: {} ===", userIdString);
-            try {
-                Long userId = Long.parseLong(userIdString);
-                offlineNotificationService.sendPendingNotifications(userId);
-            } catch (NumberFormatException e) {
-                log.error("[NotificationController] Invalid userId from Principal in client ready signal: {}", userIdString, e);
-            } catch (Exception e) {
-                log.error("[NotificationController] Error processing client ready signal for userId {}: {}", userIdString, e.getMessage(), e);
-            }
-        } else {
-            log.warn("[NotificationController] Client ready signal received with no principal or userId.");
-        }
+    @GetMapping("/api/notifications")
+    @RequireLogin
+    public ResponseEntity<Page<NotificationInboxDto>> getNotifications(
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size,
+            UserSession session) {
+        return ResponseEntity.ok(notificationInboxService.getNotifications(session.getUserId(),
+                PageRequest.of(Math.max(0, page), Math.min(50, Math.max(1, size)))));
     }
-} 
+
+    @GetMapping("/api/notifications/unread-count")
+    @RequireLogin
+    public ResponseEntity<Map<String, Long>> unreadCount(UserSession session) {
+        return ResponseEntity.ok(Map.of("count", notificationInboxService.unreadCount(session.getUserId())));
+    }
+
+    @PatchMapping("/api/notifications/{id}/read")
+    @RequireLogin
+    public ResponseEntity<Void> markRead(@PathVariable Long id, UserSession session) {
+        notificationInboxService.markRead(session.getUserId(), id);
+        return ResponseEntity.noContent().build();
+    }
+
+    @PatchMapping("/api/notifications/read-all")
+    @RequireLogin
+    public ResponseEntity<Void> markAllRead(UserSession session) {
+        notificationInboxService.markAllRead(session.getUserId());
+        return ResponseEntity.noContent().build();
+    }
+
+    @DeleteMapping("/api/notifications/{id}")
+    @RequireLogin
+    public ResponseEntity<Void> delete(@PathVariable Long id, UserSession session) {
+        notificationInboxService.delete(session.getUserId(), id);
+        return ResponseEntity.noContent().build();
+    }
+}
