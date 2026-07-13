@@ -56,6 +56,8 @@ jobs:
 
           parameters_file="$(mktemp)"
           trap 'rm -f -- "$parameters_file"' EXIT
+          # Expanded later by AWS-RunShellScript on the EC2 node, not on the runner.
+          # shellcheck disable=SC2016
           diagnostic_script='set -eu
           namespace=talk-with-neighbors
           output=/tmp/twn-k3s-diagnostics.txt
