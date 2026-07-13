@@ -4,6 +4,7 @@ import com.talkwithneighbors.dto.ChatMessageDto;
 import com.talkwithneighbors.dto.ChatRoomDto;
 import com.talkwithneighbors.dto.MessageDto;
 import com.talkwithneighbors.dto.UpdateChatRoomRequest;
+import com.talkwithneighbors.domain.event.ChatMessageCommittedEvent;
 import com.talkwithneighbors.entity.ChatRoom;
 import com.talkwithneighbors.entity.ChatRoomType;
 import com.talkwithneighbors.entity.Message;
@@ -22,6 +23,7 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -47,6 +49,7 @@ public class ChatServiceImpl implements ChatService {
     private final SimpMessagingTemplate messagingTemplate;
     private final NotificationService notificationService;
     private final UserBlockRepository userBlockRepository;
+    private final ApplicationEventPublisher applicationEventPublisher;
 
     @Override
     @Transactional
@@ -204,7 +207,8 @@ public class ChatServiceImpl implements ChatService {
             throw new ChatException("Message content is too long.", HttpStatus.BAD_REQUEST);
         }
 
-        ChatRoom room = chatRoomRepository.findById(roomId)
+        // Serialize updates to the shared latest-message row for this room.
+        ChatRoom room = chatRoomRepository.findByIdForUpdate(roomId)
                 .orElseThrow(() -> {
                     log.error("[SendMessage] Chat room not found with id: {}", roomId);
                     return new ChatException("Chat room not found: " + roomId, HttpStatus.NOT_FOUND);
@@ -263,32 +267,14 @@ public class ChatServiceImpl implements ChatService {
         MessageDto messageDto = MessageDto.fromEntity(savedMessage, sender.getId());
         log.info("[SendMessage] Created MessageDto: ID={}, Content='{}', SenderId={}", messageDto.getId(), messageDto.getContent(), messageDto.getSenderId());
 
-        // === 실시간 WebSocket 전송 개선 ===
-        
-        // 1. 채팅방 내 다른 참여자에게만 실시간 메시지 전송 (송신자 제외)
-        String topicDestinationBase = "/queue/chat/room/"; // 사용자별 큐로 변경
-        for (User participant : room.getParticipants()) {
-            if (!participant.getId().equals(senderId)) { // 송신자 제외
-                try {
-                    String userSpecificDestination = topicDestinationBase + roomId; // 목적지는 동일하게 유지하되, convertAndSendToUser 사용
-                    messagingTemplate.convertAndSendToUser(participant.getId().toString(), userSpecificDestination, messageDto);
-                    log.info("[SendMessage] Successfully sent message to participant {} via WebSocket. Destination: '{}', MessageID: '{}'", 
-                             participant.getId(), userSpecificDestination, messageDto.getId());
-                } catch (Exception e) {
-                    log.error("[SendMessage] Failed to send message to participant {} via WebSocket. Destination: '{}', MessageID: '{}'", 
-                              participant.getId(), topicDestinationBase + roomId, messageDto.getId(), e);
-                }
-            }
-        }
-        
-        // 2. 채팅방 밖에 있는 참여자들에게 새 메시지 알림 전송 (채팅방 목록용)
-        try {
-            notificationService.sendNewMessageNotification(savedMessage, room, senderId);
-            log.info("[SendMessage] Successfully sent new message notification for messageID: '{}'", savedMessage.getId());
-        } catch (Exception e) {
-            log.error("[SendMessage] Failed to send new message notification for messageID: '{}': {}", savedMessage.getId(), e.getMessage(), e);
-        }
-        
+        // Delivery happens only after the database transaction commits.
+        applicationEventPublisher.publishEvent(
+                new ChatMessageCommittedEvent(
+                        messageDto,
+                        room.getId(),
+                        senderId,
+                        room.getParticipants().stream().map(User::getId).toList()));
+
         return messageDto;
     }
 

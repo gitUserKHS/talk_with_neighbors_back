@@ -14,6 +14,8 @@ import com.talkwithneighbors.exception.ChatException;
 import com.talkwithneighbors.repository.ChatRoomRepository;
 import com.talkwithneighbors.repository.MessageRepository;
 import com.talkwithneighbors.repository.UserRepository;
+import com.talkwithneighbors.repository.UserBlockRepository;
+import com.talkwithneighbors.domain.event.ChatMessageCommittedEvent;
 import com.talkwithneighbors.service.impl.ChatServiceImpl;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -23,6 +25,7 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.Page;
 import org.springframework.http.HttpStatus;
 
@@ -52,6 +55,12 @@ class ChatServiceTest {
 
     @Mock
     private NotificationService notificationService;
+
+    @Mock
+    private UserBlockRepository userBlockRepository;
+
+    @Mock
+    private ApplicationEventPublisher applicationEventPublisher;
 
     @InjectMocks
     private ChatServiceImpl chatService;
@@ -166,7 +175,7 @@ class ChatServiceTest {
         messageDto.setSenderId(testUser.getId());
         messageDto.setContent("Test message");
         
-        when(chatRoomRepository.findById(anyString())).thenReturn(Optional.of(testChatRoom));
+        when(chatRoomRepository.findByIdForUpdate(anyString())).thenReturn(Optional.of(testChatRoom));
         when(userRepository.findById(anyLong())).thenReturn(Optional.of(testUser));
         when(messageRepository.save(any())).thenReturn(testMessage);
 
@@ -178,6 +187,8 @@ class ChatServiceTest {
         assertNotNull(savedDto);
         assertEquals(testMessage.getContent(), savedDto.getContent());
         assertEquals(testUser.getId().toString(), savedDto.getSenderId());
+        verify(applicationEventPublisher).publishEvent(any(ChatMessageCommittedEvent.class));
+        verifyNoInteractions(messagingTemplate, notificationService);
     }
 
     @Test
@@ -189,7 +200,7 @@ class ChatServiceTest {
         messageDto.setSenderId(testUser.getId());
         messageDto.setContent("Test message");
         
-        when(chatRoomRepository.findById(anyString())).thenReturn(Optional.empty());
+        when(chatRoomRepository.findByIdForUpdate(anyString())).thenReturn(Optional.empty());
 
         // when & then
         assertThrows(RuntimeException.class, () -> chatService.sendMessage(

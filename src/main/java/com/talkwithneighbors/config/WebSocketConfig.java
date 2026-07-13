@@ -37,7 +37,10 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
     @Override
     public void configureMessageBroker(MessageBrokerRegistry config) {
         // 메시지 브로커 설정
-        config.enableSimpleBroker("/topic", "/queue", "/user")
+        // /user is a logical user-destination prefix. Registering it with the
+        // simple broker as well causes duplicate subscription handling and can
+        // drop session-specific deliveries under concurrent connections.
+        config.enableSimpleBroker("/topic", "/queue")
               .setHeartbeatValue(new long[]{10000, 10000}) // 10초 하트비트
               .setTaskScheduler(taskScheduler()); // 명시적 태스크 스케줄러 설정
         // 클라이언트에서 서버로 메시지를 보낼 때의 prefix
