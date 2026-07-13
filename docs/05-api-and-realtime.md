@@ -5,7 +5,7 @@
 - 개발 기준 API 주소: `http://localhost:8080/api`
 - Docker 프론트 기준: 같은 출처의 `/api`를 Nginx가 백엔드로 전달
 - 인증 헤더: `X-Session-Id: {sessionId}`
-- 본문 형식: JSON
+- 본문 형식: 기본 JSON, 프로필·게시글·채팅 파일 첨부는 `multipart/form-data`
 - 페이지 응답: Spring Data `Page<T>` 형태
 - 인증 필요 API는 `@RequireLogin`과 사용자 세션 해석기를 사용한다.
 
@@ -19,6 +19,8 @@
 | GET | `/api/auth/me` | 헤더 필요 | 현재 사용자 조회 |
 | GET | `/api/auth/profile` | 필요 | 프로필 조회 |
 | PUT | `/api/auth/profile` | 필요 | 프로필 수정 |
+| POST | `/api/auth/profile/image` | 필요 | `file` 이미지 파트를 WebP로 최적화해 프로필 사진 교체 |
+| DELETE | `/api/auth/profile/image` | 필요 | 프로필 사진과 로컬 파일 삭제 |
 | GET | `/api/auth/check-duplicates` | 없음 | `email`, `username` 중복 확인 |
 
 ## 피드 API
@@ -26,11 +28,13 @@
 | 메서드 | 경로 | 목적 |
 |---|---|---|
 | GET | `/api/feed?page=0&size=20` | 피드 조회 |
-| POST | `/api/feed` | 게시물 생성 |
+| POST | `/api/feed` | 게시물 생성; JSON은 기존 URL 호환, multipart는 `post` JSON 파트와 `files` 최대 10개 |
 | POST | `/api/feed/{postId}/likes` | 좋아요 |
 | DELETE | `/api/feed/{postId}/likes` | 좋아요 취소 |
 | GET | `/api/feed/{postId}/comments` | 댓글 조회 |
 | POST | `/api/feed/{postId}/comments` | 댓글 작성 |
+
+multipart 업로드 지원 형식은 JPG, PNG, GIF, WebP, MP4, WebM, MOV다. 사진은 파일당 10MB, 동영상은 파일당 100MB, 요청 전체는 200MB로 제한한다. 정적 이미지는 WebP, 영상은 MP4(H.264/AAC)로 변환한다. 응답의 `media[]`에는 `url`, `thumbnailUrl`, `type`, `contentType`, `sizeBytes`, `width`, `height`, `durationSeconds`, `sortOrder`가 포함되며 `/uploads/**`는 Nginx를 거쳐 제공된다.
 
 ## 매칭 API
 
@@ -72,11 +76,13 @@
 | POST | `/api/chat/rooms/{roomId}/leave` | 퇴장 |
 | DELETE | `/api/chat/rooms/{roomId}` | 방 삭제 |
 | GET | `/api/chat/rooms/{roomId}/messages` | 메시지 페이지 |
-| POST | `/api/chat/rooms/{roomId}/messages` | 메시지 저장 |
+| POST | `/api/chat/rooms/{roomId}/messages` | JSON 텍스트 또는 `message` JSON 파트 + `files` 최대 5개 multipart 저장 |
 | POST | `/api/chat/rooms/{roomId}/messages/read` | 방 전체 읽음 |
 | POST | `/api/chat/rooms/{roomId}/messages/{messageId}/read` | 메시지 하나 읽음 |
 | GET | `/api/chat/rooms/{roomId}/unread-count` | 방의 미읽음 수 |
 | GET | `/api/chat/unread-counts` | 모든 방의 미읽음 수 |
+
+채팅 첨부는 이미지·영상 외에 PDF, ZIP, Office 문서, TXT, CSV, JSON, Markdown을 지원한다. 이미지 10MB, 영상 100MB, 문서 25MB, 한 메시지 전체 120MB가 상한이다. 메시지 DTO의 `attachments[]`는 URL·썸네일·원래 파일명·MIME·크기·해상도·재생시간·순서를 포함하며 REST 저장 응답과 STOMP 실시간 이벤트의 계약이 같다.
 
 ## 안전 API
 

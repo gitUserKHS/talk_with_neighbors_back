@@ -25,6 +25,7 @@ public interface ChatRoomRepository extends JpaRepository<ChatRoom, String> {
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("SELECT cr FROM ChatRoom cr WHERE cr.id = :id")
     Optional<ChatRoom> findByIdForUpdate(@Param("id") String id);
+
     /**
      * 특정 사용자가 참여한 모든 채팅방 목록을 조회합니다. (페이징 처리)
      * 

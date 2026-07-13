@@ -26,10 +26,17 @@ sequenceDiagram
 
 ```mermaid
 flowchart LR
-    A["인증 사용자"] --> B["POST /api/feed"]
-    B --> C["FeedService"]
+    A["인증 사용자"] --> B["multipart POST /api/feed"]
+    B --> V["개수·크기·파일 시그니처 검증"]
+    V --> P["FFmpeg: WebP 또는 H.264/AAC MP4"]
+    P --> T["WebP 썸네일 + FFprobe 메타데이터"]
+    T --> S[("uploads_data 볼륨")]
+    V --> C["FeedService"]
     C --> D[("feed_posts")]
+    C --> M[("feed_post_media + 표시 순서")]
     C --> E[("feed_post_interest_tags")]
+    X["게시물 삭제 커밋"] --> Y["FeedPostDeletedEvent"]
+    Y --> Z["로컬 미디어와 썸네일 삭제"]
     A --> F["좋아요/댓글 요청"]
     F --> G[("post_likes / post_comments")]
     G --> H["갱신된 DTO 반환"]
@@ -95,6 +102,10 @@ sequenceDiagram
 ```
 
 REST `POST /api/chat/rooms/{roomId}/messages`도 메시지를 저장할 수 있다. 두 전송 경로의 중복 호출을 피하도록 프론트 전송 정책을 하나로 고정해야 한다.
+
+파일이 있는 메시지는 프론트가 `message` JSON 파트와 `files` 배열을 multipart로 보낸다. 서버는 DB 트랜잭션을 열기 전에 파일을 검증·변환하고, 메시지와 `message_attachments`를 같은 트랜잭션에 저장한다. 커밋된 DTO만 `ChatMessageCommittedEvent`로 참가자에게 전달한다. 저장이 실패하면 새 파일을 즉시 지우고, 방 삭제 시에는 첨부 행과 메시지를 지운 뒤 커밋 후 실제 원본·썸네일을 정리한다.
+
+프로필 사진도 같은 파이프라인을 사용한다. 새 WebP 생성에 성공한 뒤 사용자 레코드를 갱신하며, 트랜잭션 커밋 이후 이전 로컬 사진을 삭제한다.
 
 ## 오프라인 알림
 

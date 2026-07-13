@@ -1,12 +1,14 @@
 package com.talkwithneighbors.dto.feed;
 
 import com.talkwithneighbors.entity.FeedPost;
+import com.talkwithneighbors.entity.FeedMediaType;
 import com.talkwithneighbors.entity.User;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
 
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.List;
 
 @Getter
@@ -18,6 +20,7 @@ public class FeedPostDto {
     private String authorUsername;
     private String authorProfileImage;
     private String imageUrl;
+    private List<FeedMediaDto> media;
     private String caption;
     private List<String> interestTags;
     private LocalDateTime createdAt;
@@ -43,6 +46,16 @@ public class FeedPostDto {
         dto.setAuthorUsername(author != null ? author.getUsername() : null);
         dto.setAuthorProfileImage(author != null ? author.getProfileImage() : null);
         dto.setImageUrl(post.getImageUrl());
+        List<FeedMediaDto> media = new ArrayList<>();
+        if (post.getMedia() != null) {
+            for (int index = 0; index < post.getMedia().size(); index++) {
+                media.add(FeedMediaDto.fromEntity(post.getMedia().get(index), index));
+            }
+        }
+        if (media.isEmpty() && post.getImageUrl() != null && !post.getImageUrl().isBlank()) {
+            media.add(new FeedMediaDto(post.getImageUrl(), FeedMediaType.IMAGE, 0));
+        }
+        dto.setMedia(List.copyOf(media));
         dto.setCaption(post.getCaption());
         dto.setInterestTags(post.getInterestTags() != null ? List.copyOf(post.getInterestTags()) : List.of());
         dto.setCreatedAt(post.getCreatedAt());

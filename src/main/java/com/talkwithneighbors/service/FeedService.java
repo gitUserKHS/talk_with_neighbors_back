@@ -4,7 +4,10 @@ import com.talkwithneighbors.dto.feed.CreateCommentRequest;
 import com.talkwithneighbors.dto.feed.CreateFeedPostRequest;
 import com.talkwithneighbors.dto.feed.FeedPostDto;
 import com.talkwithneighbors.dto.feed.PostCommentDto;
+import com.talkwithneighbors.domain.event.FeedPostDeletedEvent;
+import com.talkwithneighbors.entity.FeedMediaType;
 import com.talkwithneighbors.entity.FeedPost;
+import com.talkwithneighbors.entity.FeedPostMedia;
 import com.talkwithneighbors.entity.PostComment;
 import com.talkwithneighbors.entity.PostLike;
 import com.talkwithneighbors.entity.User;
@@ -18,6 +21,7 @@ import com.talkwithneighbors.repository.HiddenContentRepository;
 import com.talkwithneighbors.entity.SafetyTargetType;
 import com.talkwithneighbors.dto.mypage.MyCommentActivityDto;
 import lombok.RequiredArgsConstructor;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.Pageable;
@@ -42,6 +46,7 @@ public class FeedService {
     private final CompatibilityScoreService compatibilityScoreService;
     private final UserBlockRepository userBlockRepository;
     private final HiddenContentRepository hiddenContentRepository;
+    private final ApplicationEventPublisher applicationEventPublisher;
 
     @Transactional(readOnly = true)
     public Page<FeedPostDto> getFeed(Long currentUserId, Pageable pageable) {
@@ -72,6 +77,38 @@ public class FeedService {
         FeedPost post = new FeedPost();
         post.setAuthor(author);
         post.setImageUrl(request.getImageUrl().trim());
+        post.setMedia(new java.util.ArrayList<>(List.of(
+                new FeedPostMedia(request.getImageUrl().trim(), FeedMediaType.IMAGE)
+        )));
+        post.setCaption(request.getCaption() != null ? request.getCaption().trim() : "");
+        post.setInterestTags(cleanTags(request.getInterestTags()));
+
+        return toDto(feedPostRepository.save(post), author);
+    }
+
+    @Transactional
+    public FeedPostDto createPost(
+            Long currentUserId,
+            CreateFeedPostRequest request,
+            List<FeedPostMedia> media
+    ) {
+        if (request == null) {
+            throw new MatchingException("게시글 내용을 확인해 주세요.", HttpStatus.BAD_REQUEST);
+        }
+        if (media == null || media.isEmpty()) {
+            throw new MatchingException("사진 또는 동영상을 한 개 이상 선택해 주세요.", HttpStatus.BAD_REQUEST);
+        }
+
+        User author = getUser(currentUserId);
+        FeedPost post = new FeedPost();
+        post.setAuthor(author);
+        String previewUrl = media.stream()
+                .filter(item -> item.getType() == FeedMediaType.IMAGE)
+                .map(FeedPostMedia::getUrl)
+                .findFirst()
+                .orElse(media.get(0).getUrl());
+        post.setImageUrl(previewUrl);
+        post.setMedia(new java.util.ArrayList<>(media));
         post.setCaption(request.getCaption() != null ? request.getCaption().trim() : "");
         post.setInterestTags(cleanTags(request.getInterestTags()));
 
@@ -161,7 +198,19 @@ public class FeedService {
         }
         postLikeRepository.deleteByPost_Id(postId);
         postCommentRepository.deleteByPost_Id(postId);
+        List<String> mediaUrls = post.getMedia() == null
+                ? List.of()
+                : post.getMedia().stream()
+                        .flatMap(media -> java.util.stream.Stream.of(media.getUrl(), media.getThumbnailUrl()))
+                        .filter(Objects::nonNull)
+                        .filter(url -> !url.isBlank())
+                        .distinct()
+                        .toList();
+        if (mediaUrls.isEmpty() && post.getImageUrl() != null) {
+            mediaUrls = List.of(post.getImageUrl());
+        }
         feedPostRepository.delete(post);
+        applicationEventPublisher.publishEvent(new FeedPostDeletedEvent(postId, mediaUrls));
     }
 
     @Transactional

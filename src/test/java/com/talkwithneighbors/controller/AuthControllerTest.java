@@ -12,6 +12,7 @@ import com.talkwithneighbors.exception.AuthException;
 import com.talkwithneighbors.security.AuthInterceptor;
 import com.talkwithneighbors.security.UserSession;
 import com.talkwithneighbors.service.AuthService;
+import com.talkwithneighbors.service.MediaStorageService;
 import com.talkwithneighbors.service.RedisSessionService;
 import com.talkwithneighbors.service.SessionValidationService;
 import org.junit.jupiter.api.BeforeEach;
@@ -60,6 +61,9 @@ class AuthControllerTest {
 
     @MockBean
     private AuthService authService;
+
+    @MockBean
+    private MediaStorageService mediaStorageService;
     
     @MockBean
     private SessionValidationService sessionValidationService;

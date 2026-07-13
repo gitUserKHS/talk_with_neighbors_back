@@ -5,9 +5,12 @@ import com.talkwithneighbors.dto.ChatRoomDto;
 import com.talkwithneighbors.dto.MessageDto;
 import com.talkwithneighbors.dto.UpdateChatRoomRequest;
 import com.talkwithneighbors.domain.event.ChatMessageCommittedEvent;
+import com.talkwithneighbors.domain.event.MediaFilesDeletedEvent;
 import com.talkwithneighbors.entity.ChatRoom;
 import com.talkwithneighbors.entity.ChatRoomType;
+import com.talkwithneighbors.entity.ChatAttachmentType;
 import com.talkwithneighbors.entity.Message;
+import com.talkwithneighbors.entity.MessageAttachment;
 import com.talkwithneighbors.entity.Message.MessageType;
 import com.talkwithneighbors.entity.User;
 import com.talkwithneighbors.exception.ChatException;
@@ -198,13 +201,29 @@ public class ChatServiceImpl implements ChatService {
     @Override
     @Transactional
     public MessageDto sendMessage(String roomId, Long senderId, String content) {
+        return sendMessage(roomId, senderId, content, List.of());
+    }
+
+    @Override
+    @Transactional
+    public MessageDto sendMessage(
+            String roomId,
+            Long senderId,
+            String content,
+            List<MessageAttachment> attachments
+    ) {
         log.info("[SendMessage] Attempting to send message. RoomId: {}, SenderId: {}, Content: '{}'", roomId, senderId, content);
 
-        if (content == null || content.trim().isEmpty()) {
-            throw new ChatException("Message content cannot be empty.", HttpStatus.BAD_REQUEST);
+        List<MessageAttachment> safeAttachments = attachments == null ? List.of() : List.copyOf(attachments);
+        String normalizedContent = content == null ? "" : content.trim();
+        if (normalizedContent.isEmpty() && safeAttachments.isEmpty()) {
+            throw new ChatException("메시지 내용 또는 첨부 파일이 필요합니다.", HttpStatus.BAD_REQUEST);
         }
-        if (content.trim().length() > 2000) {
-            throw new ChatException("Message content is too long.", HttpStatus.BAD_REQUEST);
+        if (normalizedContent.length() > 2000) {
+            throw new ChatException("메시지는 2,000자까지 입력할 수 있습니다.", HttpStatus.BAD_REQUEST);
+        }
+        if (safeAttachments.size() > 5) {
+            throw new ChatException("첨부 파일은 메시지당 최대 5개입니다.", HttpStatus.BAD_REQUEST);
         }
 
         // Serialize updates to the shared latest-message row for this room.
@@ -238,8 +257,9 @@ public class ChatServiceImpl implements ChatService {
         message.setId(UUID.randomUUID().toString());
         message.setChatRoom(room);
         message.setSender(sender);
-        message.setContent(content.trim());
-        message.setType(MessageType.TEXT);
+        message.setContent(normalizedContent);
+        message.setAttachments(new ArrayList<>(safeAttachments));
+        message.setType(resolveMessageType(normalizedContent, safeAttachments));
         message.setCreatedAt(LocalDateTime.now());
         message.getReadByUsers().add(sender.getId()); // 발신자는 항상 읽음 처리
         log.info("[SendMessage] Prepared message object: ID={}, ChatRoomID={}, SenderID={}, Content='{}', CreatedAt={}", 
@@ -255,7 +275,7 @@ public class ChatServiceImpl implements ChatService {
         }
         
         try {
-            room.setLastMessage(savedMessage.getContent());
+            room.setLastMessage(lastMessagePreview(savedMessage));
             room.setLastMessageTime(savedMessage.getCreatedAt());
             chatRoomRepository.save(room);
             log.info("[SendMessage] Updated chat room's last message: RoomID={}, LastMessage='{}'", room.getId(), savedMessage.getContent());
@@ -276,6 +296,36 @@ public class ChatServiceImpl implements ChatService {
                         room.getParticipants().stream().map(User::getId).toList()));
 
         return messageDto;
+    }
+
+    private MessageType resolveMessageType(String content, List<MessageAttachment> attachments) {
+        if (content != null && !content.isBlank()) {
+            return MessageType.TEXT;
+        }
+        ChatAttachmentType type = attachments.get(0).getType();
+        return switch (type) {
+            case IMAGE -> MessageType.IMAGE;
+            case VIDEO -> MessageType.VIDEO;
+            case FILE -> MessageType.FILE;
+        };
+    }
+
+    private String lastMessagePreview(Message message) {
+        if (message.getContent() != null && !message.getContent().isBlank()) {
+            return message.getContent();
+        }
+        List<MessageAttachment> attachments = message.getAttachments();
+        if (attachments == null || attachments.isEmpty()) {
+            return "새 메시지";
+        }
+        if (attachments.size() > 1) {
+            return "첨부 파일 " + attachments.size() + "개";
+        }
+        return switch (attachments.get(0).getType()) {
+            case IMAGE -> "사진";
+            case VIDEO -> "동영상";
+            case FILE -> "파일: " + attachments.get(0).getOriginalName();
+        };
     }
 
     @Override
@@ -381,6 +431,14 @@ public class ChatServiceImpl implements ChatService {
             List<Long> participantIds = chatRoom.getParticipants().stream()
                     .map(User::getId)
                     .collect(Collectors.toList());
+            List<String> attachmentUrls = messageRepository.findAllWithAttachmentsByChatRoomId(roomId).stream()
+                    .flatMap(message -> message.getAttachments().stream())
+                    .flatMap(attachment -> java.util.stream.Stream.of(
+                            attachment.getUrl(), attachment.getThumbnailUrl()))
+                    .filter(java.util.Objects::nonNull)
+                    .filter(url -> !url.isBlank())
+                    .distinct()
+                    .toList();
             
             log.info("[deleteRoom] Notifying {} participants before deletion", participantIds.size());
             
@@ -395,6 +453,14 @@ public class ChatServiceImpl implements ChatService {
             
             // 2. 그 다음 메시지 삭제
             try {
+                messageRepository.deleteAttachmentsByChatRoomId(roomId);
+                log.info("[deleteRoom] Successfully deleted message attachments for roomId: {}", roomId);
+            } catch (Exception e) {
+                log.error("[deleteRoom] Failed to delete message attachments for roomId: {} - {}", roomId, e.getMessage());
+                throw new ChatException("메시지 첨부 정보 삭제 중 오류가 발생했습니다.", HttpStatus.INTERNAL_SERVER_ERROR);
+            }
+
+            try {
                 messageRepository.deleteByChatRoomId(roomId);
                 log.info("[deleteRoom] Successfully deleted messages for roomId: {}", roomId);
             } catch (Exception e) {
@@ -405,6 +471,9 @@ public class ChatServiceImpl implements ChatService {
             // 3. 마지막으로 채팅방 삭제
             chatRoomRepository.delete(chatRoom);
             log.info("[deleteRoom] Successfully deleted chat room: {}", roomId);
+            if (!attachmentUrls.isEmpty()) {
+                applicationEventPublisher.publishEvent(new MediaFilesDeletedEvent(attachmentUrls));
+            }
             
             // 참여자들에게 WebSocket 알림 전송
             for (Long participantId : participantIds) {
@@ -657,4 +726,4 @@ public class ChatServiceImpl implements ChatService {
         log.info("[getUsersWithOneOnOneChatRooms] Found {} users with existing 1:1 chat rooms for userId: {}", otherUserIds.size(), userId);
         return otherUserIds;
     }
-} 
+}

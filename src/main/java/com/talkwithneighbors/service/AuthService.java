@@ -3,6 +3,7 @@ package com.talkwithneighbors.service;
 import com.talkwithneighbors.dto.UserDto;
 import com.talkwithneighbors.dto.auth.LoginRequestDto;
 import com.talkwithneighbors.dto.auth.RegisterRequestDto;
+import com.talkwithneighbors.domain.event.MediaFilesDeletedEvent;
 import com.talkwithneighbors.entity.User;
 import com.talkwithneighbors.exception.AuthException;
 import com.talkwithneighbors.repository.UserRepository;
@@ -11,6 +12,7 @@ import jakarta.servlet.http.HttpSession;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -30,6 +32,7 @@ public class AuthService {
     private final PasswordEncoder passwordEncoder;
     private final RedisSessionService redisSessionService;
     private final OfflineNotificationService offlineNotificationService;
+    private final ApplicationEventPublisher applicationEventPublisher;
 
     @Transactional(rollbackFor = Exception.class)
     public AuthResponse register(RegisterRequestDto request) {
@@ -170,13 +173,35 @@ public class AuthService {
         user.setAge(request.getAge());
         user.setGender(request.getGender());
         user.setBio(request.getBio());
-        user.setProfileImage(request.getProfileImage());
+        // Profile images are changed only through the validated multipart upload endpoint.
         user.setLatitude(request.getLatitude());
         user.setLongitude(request.getLongitude());
         user.setAddress(request.getAddress());
         user.setInterests(request.getInterests());
 
         User updatedUser = userRepository.save(user);
+        return UserDto.fromEntity(updatedUser);
+    }
+
+    @Transactional(rollbackFor = Exception.class)
+    public UserDto updateProfileImage(String sessionId, String profileImageUrl) {
+        UserSession userSession = redisSessionService.getSession(sessionId);
+        if (userSession == null) {
+            throw new AuthException("세션을 찾을 수 없습니다.", HttpStatus.NOT_FOUND);
+        }
+        User user = userRepository.findById(userSession.getUserId())
+                .orElseThrow(() -> new AuthException("사용자를 찾을 수 없습니다.", HttpStatus.NOT_FOUND));
+
+        String previousImageUrl = user.getProfileImage();
+        user.setProfileImage(profileImageUrl);
+        User updatedUser = userRepository.save(user);
+
+        if (previousImageUrl != null
+                && !previousImageUrl.isBlank()
+                && !previousImageUrl.equals(profileImageUrl)) {
+            applicationEventPublisher.publishEvent(
+                    new MediaFilesDeletedEvent(java.util.List.of(previousImageUrl)));
+        }
         return UserDto.fromEntity(updatedUser);
     }
 

@@ -9,6 +9,8 @@ import com.talkwithneighbors.entity.ChatRoom;
 import com.talkwithneighbors.entity.ChatRoomType;
 import com.talkwithneighbors.entity.ChatRoomStatus;
 import com.talkwithneighbors.entity.Message;
+import com.talkwithneighbors.entity.MessageAttachment;
+import com.talkwithneighbors.entity.ChatAttachmentType;
 import com.talkwithneighbors.entity.User;
 import com.talkwithneighbors.exception.ChatException;
 import com.talkwithneighbors.repository.ChatRoomRepository;
@@ -189,6 +191,34 @@ class ChatServiceTest {
         assertEquals(testUser.getId().toString(), savedDto.getSenderId());
         verify(applicationEventPublisher).publishEvent(any(ChatMessageCommittedEvent.class));
         verifyNoInteractions(messagingTemplate, notificationService);
+    }
+
+    @Test
+    @DisplayName("첨부 파일만 있는 메시지도 저장하고 커밋 이벤트에 메타데이터를 포함한다")
+    void sendAttachmentOnlyMessageSuccess() {
+        MessageAttachment attachment = new MessageAttachment(
+                "/uploads/chat/video.mp4",
+                "/uploads/chat/video-thumbnail.webp",
+                ChatAttachmentType.VIDEO,
+                "video/mp4",
+                "동영상.mp4",
+                1024L,
+                640,
+                360,
+                1.0
+        );
+        when(chatRoomRepository.findByIdForUpdate(anyString())).thenReturn(Optional.of(testChatRoom));
+        when(userRepository.findById(anyLong())).thenReturn(Optional.of(testUser));
+        when(messageRepository.save(any(Message.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        MessageDto saved = chatService.sendMessage(
+                testChatRoom.getId(), testUser.getId(), "", List.of(attachment));
+
+        assertEquals(Message.MessageType.VIDEO, saved.getType());
+        assertEquals(1, saved.getAttachments().size());
+        assertEquals("video/mp4", saved.getAttachments().get(0).contentType());
+        assertEquals("동영상", testChatRoom.getLastMessage());
+        verify(applicationEventPublisher).publishEvent(any(ChatMessageCommittedEvent.class));
     }
 
     @Test

@@ -6,7 +6,9 @@ import lombok.Setter;
 import lombok.NoArgsConstructor;
 import lombok.AllArgsConstructor;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 
@@ -63,6 +65,14 @@ public class Message {
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
     private MessageType type;
+
+    @ElementCollection(fetch = FetchType.LAZY)
+    @CollectionTable(
+        name = "message_attachments",
+        joinColumns = @JoinColumn(name = "message_id", referencedColumnName = "id")
+    )
+    @OrderColumn(name = "sort_order")
+    private List<MessageAttachment> attachments = new ArrayList<>();
     
     /**
      * 메시지 수정 시간
@@ -118,6 +128,7 @@ public class Message {
         LEAVE,      // 퇴장
         TEXT,       // 일반 메시지
         IMAGE,      // 이미지
+        VIDEO,      // 동영상
         FILE,       // 파일
         SYSTEM      // 시스템 메시지
     }
