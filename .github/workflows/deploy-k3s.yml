@@ -521,7 +521,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          read -r redirect_status redirect_url < <(curl --show-error --silent --output /dev/null --max-redirs 0 --write-out '%{http_code} %{redirect_url}' "http://${PUBLIC_HOST}/healthz")
+          redirect_result="$(curl --show-error --silent --output /dev/null --max-redirs 0 --write-out '%{http_code} %{redirect_url}' "http://${PUBLIC_HOST}/healthz")"
+          read -r redirect_status redirect_url <<<"$redirect_result"
           [[ "$redirect_status" == "301" || "$redirect_status" == "308" ]] || { echo "HTTP did not return a permanent HTTPS redirect" >&2; exit 1; }
           [[ "$redirect_url" == "$PUBLIC_ORIGIN/healthz" ]] || { echo "HTTP redirect target was not the canonical HTTPS origin" >&2; exit 1; }
           health_status="$(curl --fail --show-error --silent --retry 12 --retry-all-errors --retry-delay 5 --output "$RUNNER_TEMP/healthz.txt" --write-out '%{http_code}' "$PUBLIC_ORIGIN/healthz")"

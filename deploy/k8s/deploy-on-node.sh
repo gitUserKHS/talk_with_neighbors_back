@@ -54,7 +54,7 @@ wait_for_traefik_https_config() {
       ($container.args // []) as $args |
       ($args | index("--certificatesresolvers.letsencrypt.acme.storage=/data/acme.json")) != null and
       ($args | index("--certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web")) != null and
-      ($args | index("--entrypoints.web.http.redirections.entrypoint.to=websecure")) != null and
+      ($args | index("--entrypoints.web.http.redirections.entrypoint.to=:443")) != null and
       ($args | index("--entrypoints.web.http.redirections.entrypoint.scheme=https")) != null and
       (.spec.template.spec.securityContext.fsGroup == 65532)
     ' <<<"$deployment_json" >/dev/null; then
