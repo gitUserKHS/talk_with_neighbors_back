@@ -47,6 +47,73 @@ grep -Fq 'The previous migration advanced beyond the safe pre-destructive retry 
 if grep -Fq 'rollout status deployment/backend --timeout=3m' "$SCRIPT_DIR/reinitialize-k3s-network.sh"; then
   fail "A scaled-to-zero backend must not use rollout status because stale ProgressDeadlineExceeded conditions fail immediately"
 fi
+grep -Fq 'k3s_wait_for_single_node_registration' "$SCRIPT_DIR/reinitialize-k3s-network.sh" || \
+  fail "The reset must wait for a node object after the k3s API becomes ready"
+grep -Fq 'if (.items | length) == 1 then .items[0].metadata.name else empty end' "$SCRIPT_DIR/k3s-network-common.sh" || \
+  fail "The node-registration wait must require exactly one node"
+if grep -Fq 'kubectl wait --for=condition=Ready node --all' "$SCRIPT_DIR/reinitialize-k3s-network.sh"; then
+  fail "kubectl wait --all fails when the API is ready before the first node object registers"
+fi
+node_registration_line="$(grep -nF -m1 'new_node_name="$(k3s_wait_for_single_node_registration 120)"' "$SCRIPT_DIR/reinitialize-k3s-network.sh" | cut -d: -f1)"
+node_ready_line="$(grep -nF -m1 'kubectl wait --for=condition=Ready "node/$new_node_name"' "$SCRIPT_DIR/reinitialize-k3s-network.sh" | cut -d: -f1)"
+[[ "$node_registration_line" =~ ^[0-9]+$ && "$node_ready_line" =~ ^[0-9]+$ && "$node_registration_line" -lt "$node_ready_line" ]] || \
+  fail "The reset must observe node registration before waiting for node readiness"
+
+temporary="$(mktemp -d)"
+cleanup() {
+  rm -rf -- "$temporary"
+}
+trap cleanup EXIT
+
+node_probe_count_file="$temporary/node-probe-count"
+k3s() {
+  [[ "$*" == "kubectl get nodes -o json" ]] || return 2
+  local probe_count
+  probe_count="$(< "$node_probe_count_file")"
+  probe_count=$((probe_count + 1))
+  printf '%s\n' "$probe_count" > "$node_probe_count_file"
+  case "$K3S_NODE_TEST_SCENARIO" in
+    delayed)
+      if (( probe_count < 3 )); then
+        printf '{"items":[]}\n'
+      else
+        printf '{"items":[{"metadata":{"name":"node-a"}}]}\n'
+      fi
+      ;;
+    empty)
+      printf '{"items":[]}\n'
+      ;;
+    multiple)
+      printf '{"items":[{"metadata":{"name":"node-a"}},{"metadata":{"name":"node-b"}}]}\n'
+      ;;
+    *)
+      return 2
+      ;;
+  esac
+}
+sleep() {
+  :
+}
+
+printf '0\n' > "$node_probe_count_file"
+K3S_NODE_TEST_SCENARIO=delayed
+[[ "$(k3s_wait_for_single_node_registration 3)" == "node-a" ]] || \
+  fail "The node-registration wait did not tolerate an API-ready registration delay"
+
+printf '0\n' > "$node_probe_count_file"
+K3S_NODE_TEST_SCENARIO=empty
+if k3s_wait_for_single_node_registration 2 >/dev/null; then
+  fail "The node-registration wait accepted an empty node list"
+fi
+
+printf '0\n' > "$node_probe_count_file"
+K3S_NODE_TEST_SCENARIO=multiple
+if k3s_wait_for_single_node_registration 2 >/dev/null; then
+  fail "The single-node migration accepted multiple registered nodes"
+fi
+unset -f k3s sleep
+unset K3S_NODE_TEST_SCENARIO node_probe_count_file
+
 deploy_lock_line="$(grep -nF -m1 'exec 8>/run/lock/talk-with-neighbors-deploy.lock' "$SCRIPT_DIR/deploy-via-ssm.sh" | cut -d: -f1)"
 release_dir_line="$(grep -nF -m1 'release_dir=/var/lib/talk-with-neighbors/release' "$SCRIPT_DIR/deploy-via-ssm.sh" | cut -d: -f1)"
 [[ "$deploy_lock_line" =~ ^[0-9]+$ && "$release_dir_line" =~ ^[0-9]+$ && "$deploy_lock_line" -lt "$release_dir_line" ]] || \
@@ -58,12 +125,6 @@ restore_call_line="$(grep -n '^  restore_pending_mysql_dump$' "$SCRIPT_DIR/deplo
 full_apply_line="$(grep -n 'apply -k "$RELEASE_DIR/base"' "$SCRIPT_DIR/deploy-on-node.sh" | cut -d: -f1)"
 [[ "$restore_call_line" =~ ^[0-9]+$ && "$full_apply_line" =~ ^[0-9]+$ && "$restore_call_line" -lt "$full_apply_line" ]] || \
   fail "MySQL restore must complete before the full application kustomization"
-
-temporary="$(mktemp -d)"
-cleanup() {
-  rm -rf -- "$temporary"
-}
-trap cleanup EXIT
 
 PUBLIC_ORIGIN=http://127.0.0.1 \
 AWS_REGION=ap-northeast-2 \

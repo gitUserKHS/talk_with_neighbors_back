@@ -472,7 +472,8 @@ cluster_stopped=false
 
 write_phase "verifying-new-cluster"
 wait_for_k3s_api 180 || die "The reinitialized k3s API did not become ready"
-k3s kubectl wait --for=condition=Ready node --all --timeout=5m
+new_node_name="$(k3s_wait_for_single_node_registration 120)" || die "The reinitialized k3s node did not register"
+k3s kubectl wait --for=condition=Ready "node/$new_node_name" --timeout=5m
 node_count="$(k3s kubectl get nodes -o json | jq -er '.items | length')"
 [[ "$node_count" == "1" ]] || die "The reinitialized cluster does not contain exactly one node"
 new_pod_cidr="$(k3s kubectl get nodes -o json | jq -er '.items[0].spec.podCIDR')"
