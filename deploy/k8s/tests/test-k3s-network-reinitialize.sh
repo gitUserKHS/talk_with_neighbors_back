@@ -155,6 +155,8 @@ done
 tar -xOzf "$temporary/bundle.tgz" ./traefik-config.yaml > "$temporary/traefik-with-email.yaml"
 grep -Fq -- '--certificatesresolvers.letsencrypt.acme.email=portfolio-owner@example.com' \
   "$temporary/traefik-with-email.yaml" || fail "Configured ACME email was not rendered"
+grep -Fq -- '--entrypoints.web.http.redirections.entrypoint.to=:443' \
+  "$temporary/traefik-with-email.yaml" || fail "HTTP redirect does not target the canonical external HTTPS port"
 ! grep -Fq 'REPLACE_ACME_EMAIL_ARGUMENT' "$temporary/traefik-with-email.yaml" || \
   fail "The ACME email placeholder leaked into the rendered bundle"
 
