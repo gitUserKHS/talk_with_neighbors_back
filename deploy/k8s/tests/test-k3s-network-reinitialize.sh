@@ -54,7 +54,10 @@ grep -Fq 'if (.items | length) == 1 then .items[0].metadata.name else empty end'
 if grep -Fq 'kubectl wait --for=condition=Ready node --all' "$SCRIPT_DIR/reinitialize-k3s-network.sh"; then
   fail "kubectl wait --all fails when the API is ready before the first node object registers"
 fi
+# These are intentional literal source-code patterns.
+# shellcheck disable=SC2016
 node_registration_line="$(grep -nF -m1 'new_node_name="$(k3s_wait_for_single_node_registration 120)"' "$SCRIPT_DIR/reinitialize-k3s-network.sh" | cut -d: -f1)"
+# shellcheck disable=SC2016
 node_ready_line="$(grep -nF -m1 'kubectl wait --for=condition=Ready "node/$new_node_name"' "$SCRIPT_DIR/reinitialize-k3s-network.sh" | cut -d: -f1)"
 [[ "$node_registration_line" =~ ^[0-9]+$ && "$node_ready_line" =~ ^[0-9]+$ && "$node_registration_line" -lt "$node_ready_line" ]] || \
   fail "The reset must observe node registration before waiting for node readiness"
@@ -66,6 +69,8 @@ cleanup() {
 trap cleanup EXIT
 
 node_probe_count_file="$temporary/node-probe-count"
+# Invoked indirectly by k3s_wait_for_single_node_registration.
+# shellcheck disable=SC2329
 k3s() {
   [[ "$*" == "kubectl get nodes -o json" ]] || return 2
   local probe_count
@@ -91,6 +96,8 @@ k3s() {
       ;;
   esac
 }
+# Invoked indirectly by k3s_wait_for_single_node_registration.
+# shellcheck disable=SC2329
 sleep() {
   :
 }
