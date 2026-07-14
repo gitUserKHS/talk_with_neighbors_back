@@ -29,6 +29,15 @@ run "secure_low_cost_defaults" {
   }
 
   assert {
+    condition = (
+      strcontains(aws_instance.app.user_data, "cluster-cidr: \"10.244.0.0/16\"") &&
+      strcontains(aws_instance.app.user_data, "service-cidr: \"10.96.0.0/16\"") &&
+      strcontains(aws_instance.app.user_data, "cluster-dns: \"10.96.0.10\"")
+    )
+    error_message = "The node bootstrap must render explicit, non-overlapping k3s network ranges."
+  }
+
+  assert {
     condition     = aws_instance.app.user_data_replace_on_change == false
     error_message = "Bootstrap edits must not replace the stateful single-node instance."
   }
@@ -95,4 +104,105 @@ run "budget_email_opt_in" {
     condition     = length(aws_budgets_budget.monthly) == 1
     error_message = "Supplying a budget email must create one monthly cost budget."
   }
+}
+
+run "reject_equal_vpc_and_cluster_cidrs" {
+  command = plan
+
+  variables {
+    k3s_cluster_cidr = "10.42.0.0/16"
+  }
+
+  expect_failures = [aws_vpc.app]
+}
+
+run "reject_cluster_cidr_nested_in_vpc" {
+  command = plan
+
+  variables {
+    k3s_cluster_cidr = "10.42.128.0/17"
+  }
+
+  expect_failures = [aws_vpc.app]
+}
+
+run "reject_vpc_nested_in_cluster_cidr" {
+  command = plan
+
+  variables {
+    k3s_cluster_cidr = "10.32.0.0/12"
+  }
+
+  expect_failures = [aws_vpc.app]
+}
+
+run "reject_service_cidr_nested_in_vpc" {
+  command = plan
+
+  variables {
+    k3s_service_cidr = "10.42.128.0/17"
+    k3s_cluster_dns  = "10.42.128.10"
+  }
+
+  expect_failures = [aws_vpc.app]
+}
+
+run "reject_service_cidr_nested_in_cluster_cidr" {
+  command = plan
+
+  variables {
+    k3s_service_cidr = "10.244.128.0/17"
+    k3s_cluster_dns  = "10.244.128.10"
+  }
+
+  expect_failures = [aws_vpc.app]
+}
+
+run "reject_subnet_outside_vpc" {
+  command = plan
+
+  variables {
+    public_subnet_cidr = "10.41.1.0/24"
+  }
+
+  expect_failures = [aws_vpc.app]
+}
+
+run "reject_dns_outside_service_cidr" {
+  command = plan
+
+  variables {
+    k3s_cluster_dns = "10.97.0.10"
+  }
+
+  expect_failures = [aws_vpc.app]
+}
+
+run "allow_adjacent_k3s_cidrs" {
+  command = plan
+
+  variables {
+    k3s_cluster_cidr = "10.244.0.0/17"
+    k3s_service_cidr = "10.244.128.0/17"
+    k3s_cluster_dns  = "10.244.128.10"
+  }
+
+  assert {
+    condition = (
+      strcontains(aws_instance.app.user_data, "cluster-cidr: \"${var.k3s_cluster_cidr}\"") &&
+      strcontains(aws_instance.app.user_data, "service-cidr: \"${var.k3s_service_cidr}\"") &&
+      strcontains(aws_instance.app.user_data, "cluster-dns: \"${var.k3s_cluster_dns}\"")
+    )
+    error_message = "Validated adjacent k3s network ranges must be rendered into first-boot config."
+  }
+}
+
+run "reject_ipv6_cluster_cidr" {
+  command = plan
+
+  variables {
+    k3s_cluster_cidr = "fd00::/64"
+  }
+
+  expect_failures = [var.k3s_cluster_cidr]
 }

@@ -91,7 +91,9 @@ PR과 `main`, `codex/**` 푸시에서 다음을 실행한다.
 
 백엔드 저장소의 `infra/aws-ec2/`는 서울 리전 EC2, VPC, S3, SSM, 비용 알림과 GitHub OIDC 배포 역할을 관리한다. `deploy/k8s/base/`는 단일 노드 k3s의 MySQL, Redis, 백엔드, 프론트엔드와 Traefik Ingress를 관리하며 미디어 원본과 변환 결과는 비공개 S3 버킷에 저장한다.
 
-`infra-ci.yml`은 Terraform 형식·스키마, Kustomize 렌더링, Kubernetes 스키마, GitHub Actions 문법을 검증하지만 비용이 발생하는 `terraform apply`는 실행하지 않는다. `deploy-k3s.yml`은 승인된 `production` Environment에서 고정된 GHCR digest만 받아 임시 S3 번들과 SSM Run Command로 배포하고 rollout·readiness·외부 API를 확인한다. SSH 22는 열지 않는다. 자세한 생성·비용 관리·롤백·삭제 절차는 [AWS EC2 + S3 + k3s 배포 가이드](deployment/aws-k3s.md)를 따른다.
+2026-07-14 현재 Terraform 적용을 완료해 `t4g.small` EC2와 EBS·S3 리소스가 실제로 존재하며 비용이 발생할 수 있다. 최초 배포에서 VPC와 k3s 기본 Pod CIDR이 `10.42.0.0/16`으로 겹치는 문제를 확인해, Pod `10.244.0.0/16`, Service `10.96.0.0/16`, DNS `10.96.0.10`으로 보호된 1회 재초기화 후 재검증하는 중이다. Terraform은 기존 EC2의 `user_data` 변경을 무시하므로 Terraform 재적용만으로 현재 노드가 복구되지는 않는다.
+
+`infra-ci.yml`은 Terraform 형식·스키마와 VPC·Pod·Service CIDR 비중첩, Kustomize 렌더링, Kubernetes 스키마, GitHub Actions 문법을 검증하지만 비용이 발생하는 `terraform apply`는 실행하지 않는다. `deploy-k3s.yml`은 승인된 `production` Environment에서 고정된 GHCR digest만 받아 임시 S3 번들과 SSM Run Command로 배포하고 rollout·readiness·외부 API를 확인한다. 네트워크 재초기화는 `main`, `production`, Environment 토글, boolean 입력, 인스턴스별 확인 문구를 모두 요구하며 성공 후 다시 비활성화한다. SSH 22는 열지 않는다. 자세한 생성·1회 복구·비용 관리·롤백·삭제 절차는 [AWS EC2 + S3 + k3s 배포 가이드](deployment/aws-k3s.md)를 따른다.
 
 ## 참고용 운영 Compose
 

@@ -16,6 +16,94 @@ locals {
     try(aws_iam_openid_connect_provider.github[0].arn, null)
   )
 
+  # Terraform core has no cidrcontains function. Normalize each IPv4 CIDR to
+  # an integer range so plans can fail before an AWS VPC and k3s receive
+  # overlapping address space. Invalid values fall back safely while their
+  # variable validation reports the primary error.
+  ipv4_cidr_inputs = {
+    vpc           = var.vpc_cidr
+    public_subnet = var.public_subnet_cidr
+    k3s_cluster   = var.k3s_cluster_cidr
+    k3s_service   = var.k3s_service_cidr
+    k3s_dns       = "${var.k3s_cluster_dns}/32"
+  }
+
+  ipv4_cidr_valid = {
+    for name, cidr in local.ipv4_cidr_inputs :
+    name => can(cidrnetmask(cidr))
+  }
+
+  normalized_ipv4_cidrs = {
+    for name, cidr in local.ipv4_cidr_inputs :
+    name => try(
+      format(
+        "%s/%d",
+        cidrhost(cidr, 0),
+        tonumber(split("/", cidr)[1])
+      ),
+      "0.0.0.0/32"
+    )
+  }
+
+  ipv4_network_numbers = {
+    for name, cidr in local.normalized_ipv4_cidrs :
+    name => sum([
+      for index, octet in split(".", cidrhost(cidr, 0)) :
+      tonumber(octet) * pow(256, 3 - index)
+    ])
+  }
+
+  ipv4_ranges = {
+    for name, cidr in local.normalized_ipv4_cidrs :
+    name => {
+      first = local.ipv4_network_numbers[name]
+      last = (
+        local.ipv4_network_numbers[name] +
+        pow(2, 32 - tonumber(split("/", cidr)[1])) -
+        1
+      )
+    }
+  }
+
+  disjoint_cidr_pairs = [
+    { left = "vpc", right = "k3s_cluster" },
+    { left = "vpc", right = "k3s_service" },
+    { left = "k3s_cluster", right = "k3s_service" }
+  ]
+
+  overlapping_cidr_pairs = [
+    for pair in local.disjoint_cidr_pairs :
+    format(
+      "%s (%s) overlaps %s (%s)",
+      pair.left,
+      local.ipv4_cidr_inputs[pair.left],
+      pair.right,
+      local.ipv4_cidr_inputs[pair.right]
+    )
+    if(
+      local.ipv4_cidr_valid[pair.left] &&
+      local.ipv4_cidr_valid[pair.right] &&
+      local.ipv4_ranges[pair.left].first <= local.ipv4_ranges[pair.right].last &&
+      local.ipv4_ranges[pair.right].first <= local.ipv4_ranges[pair.left].last
+    )
+  ]
+
+  public_subnet_within_vpc = (
+    !local.ipv4_cidr_valid.vpc ||
+    !local.ipv4_cidr_valid.public_subnet
+    ) ? true : (
+    local.ipv4_ranges.public_subnet.first >= local.ipv4_ranges.vpc.first &&
+    local.ipv4_ranges.public_subnet.last <= local.ipv4_ranges.vpc.last
+  )
+
+  k3s_dns_within_service_cidr = (
+    !local.ipv4_cidr_valid.k3s_dns ||
+    !local.ipv4_cidr_valid.k3s_service
+    ) ? true : (
+    local.ipv4_ranges.k3s_dns.first >= local.ipv4_ranges.k3s_service.first &&
+    local.ipv4_ranges.k3s_dns.last <= local.ipv4_ranges.k3s_service.last
+  )
+
   k3s_user_data = <<-USER_DATA
     #!/usr/bin/env bash
     set -Eeuo pipefail
@@ -76,6 +164,9 @@ locals {
     cat > /etc/rancher/k3s/config.yaml <<'K3S_CONFIG'
     write-kubeconfig-mode: "0640"
     secrets-encryption: true
+    cluster-cidr: "${var.k3s_cluster_cidr}"
+    service-cidr: "${var.k3s_service_cidr}"
+    cluster-dns: "${var.k3s_cluster_dns}"
     kubelet-arg:
       - "fail-swap-on=false"
     K3S_CONFIG
@@ -133,6 +224,23 @@ resource "aws_vpc" "app" {
   tags = {
     Name      = "${var.project_name}-vpc"
     Component = "network"
+  }
+
+  lifecycle {
+    precondition {
+      condition     = length(local.overlapping_cidr_pairs) == 0
+      error_message = "AWS and k3s CIDRs must be disjoint: ${join("; ", local.overlapping_cidr_pairs)}."
+    }
+
+    precondition {
+      condition     = local.public_subnet_within_vpc
+      error_message = "public_subnet_cidr must be completely contained by vpc_cidr."
+    }
+
+    precondition {
+      condition     = local.k3s_dns_within_service_cidr
+      error_message = "k3s_cluster_dns must be contained by k3s_service_cidr."
+    }
   }
 }
 

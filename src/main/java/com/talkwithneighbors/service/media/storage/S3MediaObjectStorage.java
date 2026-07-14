@@ -19,6 +19,7 @@ import software.amazon.awssdk.services.s3.model.S3Exception;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.Arrays;
 
 @Component
@@ -26,6 +27,8 @@ import java.util.Arrays;
 public class S3MediaObjectStorage implements MediaObjectStorage {
 
     private static final String OBJECT_CACHE_CONTROL = "public, max-age=2592000, immutable";
+    private static final Duration HEALTH_API_CALL_TIMEOUT = Duration.ofSeconds(3);
+    private static final Duration HEALTH_ATTEMPT_TIMEOUT = Duration.ofSeconds(2);
 
     private final S3Client s3Client;
     private final String bucket;
@@ -75,8 +78,14 @@ public class S3MediaObjectStorage implements MediaObjectStorage {
 
     @Override
     public void checkHealth() {
+        HeadBucketRequest request = HeadBucketRequest.builder()
+                .bucket(bucket)
+                .overrideConfiguration(configuration -> configuration
+                        .apiCallTimeout(HEALTH_API_CALL_TIMEOUT)
+                        .apiCallAttemptTimeout(HEALTH_ATTEMPT_TIMEOUT))
+                .build();
         try {
-            s3Client.headBucket(HeadBucketRequest.builder().bucket(bucket).build());
+            s3Client.headBucket(request);
         } catch (RuntimeException exception) {
             throw new MediaObjectStorageException("S3 media storage is unavailable", exception);
         }

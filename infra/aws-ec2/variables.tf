@@ -43,6 +43,39 @@ variable "public_subnet_cidr" {
   }
 }
 
+variable "k3s_cluster_cidr" {
+  description = "IPv4 CIDR used for k3s pod addresses. It must not overlap the VPC or service CIDR."
+  type        = string
+  default     = "10.244.0.0/16"
+
+  validation {
+    condition     = can(cidrnetmask(var.k3s_cluster_cidr))
+    error_message = "k3s_cluster_cidr must be a valid IPv4 CIDR."
+  }
+}
+
+variable "k3s_service_cidr" {
+  description = "IPv4 CIDR used for Kubernetes service addresses. It must not overlap the VPC or pod CIDR."
+  type        = string
+  default     = "10.96.0.0/16"
+
+  validation {
+    condition     = can(cidrnetmask(var.k3s_service_cidr))
+    error_message = "k3s_service_cidr must be a valid IPv4 CIDR."
+  }
+}
+
+variable "k3s_cluster_dns" {
+  description = "Plain IPv4 address assigned to CoreDNS inside k3s_service_cidr."
+  type        = string
+  default     = "10.96.0.10"
+
+  validation {
+    condition     = can(cidrnetmask("${var.k3s_cluster_dns}/32"))
+    error_message = "k3s_cluster_dns must be an IPv4 address without a prefix."
+  }
+}
+
 variable "instance_type" {
   description = "ARM64 EC2 type. t4g.small is the default low-cost choice and may be eligible for new-account AWS Free Tier credits; verify the account's billing offer."
   type        = string

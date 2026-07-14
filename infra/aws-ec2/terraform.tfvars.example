@@ -2,6 +2,12 @@
 aws_region        = "ap-northeast-2"
 availability_zone = "ap-northeast-2a"
 
+# These ranges must be mutually disjoint. In particular, never reuse the VPC
+# 10.42.0.0/16 for k3s pods: 10.42.0.2 is the AWS VPC DNS resolver address.
+k3s_cluster_cidr = "10.244.0.0/16"
+k3s_service_cidr = "10.96.0.0/16"
+k3s_cluster_dns  = "10.96.0.10"
+
 # ARM64 only. t4g.small is the low-cost 2 GiB portfolio default.
 instance_type              = "t4g.small"
 root_volume_size_gib       = 30

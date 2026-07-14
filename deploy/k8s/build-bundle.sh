@@ -35,7 +35,12 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 cp -R "$SCRIPT_DIR/base" "$bundle/base"
-cp "$SCRIPT_DIR/deploy-on-node.sh" "$bundle/deploy-on-node.sh"
+cp \
+  "$SCRIPT_DIR/deploy-on-node.sh" \
+  "$SCRIPT_DIR/k3s-network-common.sh" \
+  "$SCRIPT_DIR/k3s-server-config.yaml" \
+  "$SCRIPT_DIR/reinitialize-k3s-network.sh" \
+  "$bundle/"
 
 jq -n \
   --arg origin "$PUBLIC_ORIGIN" \

@@ -27,6 +27,7 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.time.Instant;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -71,7 +72,7 @@ class S3MediaObjectStorageTest {
     }
 
     @Test
-    void deletesOwnedObjectAndChecksBucketHealth() {
+    void deletesOwnedObjectAndChecksBucketHealthWithBoundedTimeouts() {
         when(s3Client.deleteObject(any(DeleteObjectRequest.class)))
                 .thenReturn(DeleteObjectResponse.builder().build());
         when(s3Client.headBucket(any(HeadBucketRequest.class)))
@@ -83,7 +84,15 @@ class S3MediaObjectStorageTest {
         ArgumentCaptor<DeleteObjectRequest> delete = ArgumentCaptor.forClass(DeleteObjectRequest.class);
         verify(s3Client).deleteObject(delete.capture());
         assertThat(delete.getValue().key()).isEqualTo("neighbors/media/chat/file.pdf");
-        verify(s3Client).headBucket(HeadBucketRequest.builder().bucket("private-media-bucket").build());
+        assertThat(delete.getValue().overrideConfiguration()).isEmpty();
+
+        ArgumentCaptor<HeadBucketRequest> health = ArgumentCaptor.forClass(HeadBucketRequest.class);
+        verify(s3Client).headBucket(health.capture());
+        assertThat(health.getValue().bucket()).isEqualTo("private-media-bucket");
+        assertThat(health.getValue().overrideConfiguration()).hasValueSatisfying(configuration -> {
+            assertThat(configuration.apiCallTimeout()).contains(Duration.ofSeconds(3));
+            assertThat(configuration.apiCallAttemptTimeout()).contains(Duration.ofSeconds(2));
+        });
     }
 
     @Test
