@@ -75,6 +75,26 @@ jobs:
           encoded=/tmp/twn-k3s-diagnostics.b64
           {
             date --iso-8601=seconds
+            echo "=== migration journal metadata ==="
+            for marker in \
+              /var/lib/talk-with-neighbors/migrations/k3s-network-v1.in-progress.json \
+              /var/lib/talk-with-neighbors/migrations/k3s-network-v1.done.json \
+              /var/lib/talk-with-neighbors/migrations/mysql-restore-v1.pending.json \
+              /var/lib/talk-with-neighbors/migrations/mysql-restore-v1.done.json; do
+              marker_name="$(basename "$marker")"
+              if [ -f "$marker" ] && [ ! -L "$marker" ]; then
+                marker_phase="$(jq -r ".phase // \"n/a\"" "$marker" 2>/dev/null || echo invalid)"
+                marker_release="$(jq -r ".release_id // \"n/a\"" "$marker" 2>/dev/null || echo invalid)"
+                printf "%s owner=%s mode=%s phase=%s release=%s\n" \
+                  "$marker_name" "$(stat -c "%u" "$marker")" "$(stat -c "%a" "$marker")" \
+                  "$marker_phase" "$marker_release"
+              else
+                printf "%s missing-or-unsafe\n" "$marker_name"
+              fi
+            done
+            echo "backup-directories:"
+            find /var/lib/talk-with-neighbors/backups -mindepth 1 -maxdepth 1 -type d \
+              -name "k3s-network-v1-*" -printf "%f\n" 2>/dev/null | sort || true
             k3s kubectl get nodes -o wide
             k3s kubectl -n "$namespace" get pods,deployments,statefulsets,services,ingress -o wide
             k3s kubectl -n kube-system get pods,services -o wide
