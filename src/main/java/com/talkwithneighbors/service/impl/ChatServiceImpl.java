@@ -6,6 +6,7 @@ import com.talkwithneighbors.dto.MessageDto;
 import com.talkwithneighbors.dto.UpdateChatRoomRequest;
 import com.talkwithneighbors.domain.event.ChatMessageCommittedEvent;
 import com.talkwithneighbors.domain.event.ChatMessageChangedEvent;
+import com.talkwithneighbors.domain.event.ChatRoomDeletedEvent;
 import com.talkwithneighbors.domain.event.MediaFilesDeletedEvent;
 import com.talkwithneighbors.entity.ChatRoom;
 import com.talkwithneighbors.entity.ChatRoomType;
@@ -16,11 +17,13 @@ import com.talkwithneighbors.entity.Message.MessageType;
 import com.talkwithneighbors.entity.User;
 import com.talkwithneighbors.exception.ChatException;
 import com.talkwithneighbors.repository.ChatRoomRepository;
+import com.talkwithneighbors.repository.ChatRoomDeletionRepository;
 import com.talkwithneighbors.repository.MessageRepository;
 import com.talkwithneighbors.repository.UserRepository;
 import com.talkwithneighbors.repository.UserBlockRepository;
 import com.talkwithneighbors.service.ChatService;
 import com.talkwithneighbors.service.NotificationService;
+import com.talkwithneighbors.outbox.DomainEventPublisher;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
@@ -29,16 +32,13 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
 import org.springframework.context.ApplicationEventPublisher;
-import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
-import java.util.Map;
 import java.util.UUID;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -52,10 +52,11 @@ public class ChatServiceImpl implements ChatService {
     private final ChatRoomRepository chatRoomRepository;
     private final MessageRepository messageRepository;
     private final UserRepository userRepository;
-    private final SimpMessagingTemplate messagingTemplate;
     private final NotificationService notificationService;
     private final UserBlockRepository userBlockRepository;
     private final ApplicationEventPublisher applicationEventPublisher;
+    private final ChatRoomDeletionRepository chatRoomDeletionRepository;
+    private final DomainEventPublisher domainEventPublisher;
 
     @Override
     @Transactional
@@ -153,9 +154,10 @@ public class ChatServiceImpl implements ChatService {
     public ChatRoomDto getRoomById(String roomId, String userIdString) {
         Long userId = Long.parseLong(userIdString);
         User currentUser = userRepository.findById(userId)
-            .orElseThrow(() -> new RuntimeException("User not found with id: " + userId));
+            .orElseThrow(() -> new ChatException("User not found with id: " + userId, HttpStatus.NOT_FOUND));
         ChatRoom chatRoom = chatRoomRepository.findByIdAndParticipantsContaining(roomId, currentUser)
-                .orElseThrow(() -> new RuntimeException("Chat room not found or user not a participant"));
+                .orElseThrow(() -> new ChatException(
+                        "Chat room not found or user not a participant", HttpStatus.NOT_FOUND));
         return ChatRoomDto.fromEntity(chatRoom, currentUser, messageRepository);
     }
 
@@ -550,97 +552,50 @@ public class ChatServiceImpl implements ChatService {
     @Transactional
     public void deleteRoom(String roomId) {
         log.info("[deleteRoom] Starting deletion process for roomId: {}", roomId);
-        
+
         try {
-            ChatRoom chatRoom = chatRoomRepository.findById(roomId)
-                    .orElseThrow(() -> new ChatException("Chat room not found: " + roomId, HttpStatus.NOT_FOUND));
-            
-            log.info("[deleteRoom] Found chat room: {} with {} participants", roomId, chatRoom.getParticipants().size());
-            
-            // 참여자들에게 알림 보내기 (삭제 전에)
+            ChatRoom chatRoom = chatRoomRepository.findByIdForUpdate(roomId)
+                    .orElseThrow(() -> new ChatException(
+                            "Chat room not found: " + roomId, HttpStatus.NOT_FOUND));
+
             List<Long> participantIds = chatRoom.getParticipants().stream()
                     .map(User::getId)
-                    .collect(Collectors.toList());
-            List<String> attachmentUrls = messageRepository.findAllWithAttachmentsByChatRoomId(roomId).stream()
-                    .flatMap(message -> message.getAttachments().stream())
-                    .flatMap(attachment -> java.util.stream.Stream.of(
-                            attachment.getUrl(), attachment.getThumbnailUrl()))
                     .filter(java.util.Objects::nonNull)
-                    .filter(url -> !url.isBlank())
                     .distinct()
                     .toList();
-            
-            log.info("[deleteRoom] Notifying {} participants before deletion", participantIds.size());
-            
-            // 1. 먼저 메시지 읽음 상태 삭제
-            try {
-                messageRepository.deleteReadStatusByChatRoomId(roomId);
-                log.info("[deleteRoom] Successfully deleted message read statuses for roomId: {}", roomId);
-            } catch (Exception e) {
-                log.warn("[deleteRoom] Failed to delete message read statuses for roomId: {} - {}", roomId, e.getMessage());
-                // 읽음 상태 삭제 실패 시에도 계속 진행 (메시지 삭제 시 함께 삭제될 수 있음)
-            }
-            
-            // 2. 그 다음 메시지 삭제
-            try {
-                messageRepository.deleteAttachmentsByChatRoomId(roomId);
-                log.info("[deleteRoom] Successfully deleted message attachments for roomId: {}", roomId);
-            } catch (Exception e) {
-                log.error("[deleteRoom] Failed to delete message attachments for roomId: {} - {}", roomId, e.getMessage());
-                throw new ChatException("메시지 첨부 정보 삭제 중 오류가 발생했습니다.", HttpStatus.INTERNAL_SERVER_ERROR);
+            List<String> attachmentUrls =
+                    chatRoomDeletionRepository.findMediaUrlsByRoomId(roomId);
+
+            ChatRoomDeletionRepository.ChatRoomDeletionResult result =
+                    chatRoomDeletionRepository.deleteByRoomId(roomId);
+            if (result.rooms() != 1) {
+                throw new IllegalStateException(
+                        "Expected to delete one chat room but deleted " + result.rooms());
             }
 
-            try {
-                messageRepository.deleteByChatRoomId(roomId);
-                log.info("[deleteRoom] Successfully deleted messages for roomId: {}", roomId);
-            } catch (Exception e) {
-                log.error("[deleteRoom] Failed to delete messages for roomId: {} - {}", roomId, e.getMessage());
-                throw new ChatException("메시지 삭제 중 오류가 발생했습니다: " + e.getMessage(), HttpStatus.INTERNAL_SERVER_ERROR);
-            }
-            
-            // 3. 마지막으로 채팅방 삭제
-            chatRoomRepository.delete(chatRoom);
-            log.info("[deleteRoom] Successfully deleted chat room: {}", roomId);
             if (!attachmentUrls.isEmpty()) {
-                applicationEventPublisher.publishEvent(new MediaFilesDeletedEvent(attachmentUrls));
+                applicationEventPublisher.publishEvent(
+                        new MediaFilesDeletedEvent(attachmentUrls));
             }
-            
-            // 참여자들에게 WebSocket 알림 전송
-            for (Long participantId : participantIds) {
-                try {
-                    Map<String, Object> deleteNotification = Map.of(
-                        "type", "ROOM_DELETED",
-                        "roomId", roomId,
-                        "message", "채팅방이 삭제되었습니다."
-                    );
-                    
-                    String destination = "/queue/chat-notifications";
-                    messagingTemplate.convertAndSendToUser(
-                        participantId.toString(), 
-                        destination, 
-                        deleteNotification
-                    );
-                    log.info("[deleteRoom] Sent room deletion notification to user: {}", participantId);
-                    
-                    // 대안적 메시지 전송도 시도
-                    String alternativeDestination = "/topic/chat-event-" + participantId;
-                    messagingTemplate.convertAndSend(alternativeDestination, deleteNotification);
-                    log.info("[deleteRoom] Sent alternative room deletion notification to: {}", alternativeDestination);
-                    
-                } catch (Exception e) {
-                    log.warn("[deleteRoom] Failed to send deletion notification to user {}: {}", participantId, e.getMessage());
-                    // 알림 전송 실패는 전체 삭제 과정을 실패시키지 않음
-                }
-            }
-            
-            log.info("[deleteRoom] Successfully completed deletion process for roomId: {} (including read statuses)", roomId);
-            
-        } catch (ChatException e) {
-            log.error("[deleteRoom] ChatException during deletion of roomId {}: {}", roomId, e.getMessage());
-            throw e;
-        } catch (Exception e) {
-            log.error("[deleteRoom] Unexpected error during deletion of roomId {}: {}", roomId, e.getMessage(), e);
-            throw new ChatException("채팅방 삭제 중 오류가 발생했습니다: " + e.getMessage(), HttpStatus.INTERNAL_SERVER_ERROR);
+            domainEventPublisher.publish(
+                    ChatRoomDeletedEvent.create(roomId, participantIds));
+
+            log.info(
+                    "[deleteRoom] Deleted room graph. roomId={}, messages={}, attachments={}, "
+                            + "readStatuses={}, participants={}, waitlistEntries={}",
+                    roomId,
+                    result.messages(),
+                    result.attachments(),
+                    result.readStatuses(),
+                    result.participants(),
+                    result.waitlistEntries()
+            );
+        } catch (ChatException exception) {
+            throw exception;
+        } catch (Exception exception) {
+            log.error("[deleteRoom] Failed to delete roomId={}", roomId, exception);
+            throw new ChatException(
+                    "Failed to delete chat room.", HttpStatus.INTERNAL_SERVER_ERROR);
         }
     }
 

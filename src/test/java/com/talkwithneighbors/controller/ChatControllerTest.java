@@ -42,6 +42,8 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -288,6 +290,19 @@ class ChatControllerTest {
         mockMvc.perform(delete("/api/chat/rooms/{roomId}", "room-1")
                         .header(SESSION_HEADER, SESSION_ID))
                 .andExpect(status().isOk());
+    }
+
+    @Test
+    void deleteMissingRoomReturnsNotFound() throws Exception {
+        when(chatService.getRoomById(eq("missing-room"), anyString()))
+                .thenThrow(new ChatException("Chat room not found", HttpStatus.NOT_FOUND));
+
+        mockMvc.perform(delete("/api/chat/rooms/{roomId}", "missing-room")
+                        .header(SESSION_HEADER, SESSION_ID))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.success").value(false));
+
+        verify(chatService, never()).deleteRoom(anyString());
     }
 
     @Test

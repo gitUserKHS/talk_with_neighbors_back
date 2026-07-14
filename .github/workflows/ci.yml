@@ -48,7 +48,12 @@ jobs:
           cache: gradle
       - uses: gradle/actions/setup-gradle@3f131e8634966bd73d06cc69884922b02e6faf92 # v6
       - run: chmod +x gradlew
-      - run: ./gradlew clean test bootJar --no-daemon
+      - name: Run unit tests, MySQL integration tests, and package
+        env:
+          MYSQL_IT_URL: jdbc:mysql://127.0.0.1:3306/talk_with_neighbors?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC
+          MYSQL_IT_USERNAME: twn
+          MYSQL_IT_PASSWORD: ci-password
+        run: ./gradlew clean test mysqlIntegrationTest bootJar --no-daemon
       - name: Validate production compose
         env:
           MYSQL_PASSWORD: ci-password
@@ -105,6 +110,6 @@ jobs:
         if: always()
         with:
           name: backend-test-report
-          path: build/reports/tests/test
+          path: build/reports/tests/**
           if-no-files-found: ignore
           retention-days: 7
