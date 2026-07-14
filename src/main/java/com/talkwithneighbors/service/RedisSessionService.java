@@ -9,6 +9,7 @@ import com.talkwithneighbors.security.UserSession;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -57,6 +58,13 @@ public class RedisSessionService implements ApplicationListener<SessionDisconnec
     private static final long ONLINE_EXPIRATION = 5 * 60; // 5분
     private static final long CURRENT_ROOM_EXPIRATION = 30 * 60; // 30분 (채팅방 입장 상태 만료)
     private static final long SESSION_TIMEOUT_MINUTES = 30;
+    private static final DefaultRedisScript<Long> CLEAR_CURRENT_ROOM_IF_MATCHES =
+            new DefaultRedisScript<>("""
+                    if redis.call('get', KEYS[1]) == ARGV[1] then
+                        return redis.call('del', KEYS[1])
+                    end
+                    return 0
+                    """, Long.class);
 
     @Transactional
     public void saveSession(String sessionId, UserSession userSession) {
@@ -591,6 +599,25 @@ public class RedisSessionService implements ApplicationListener<SessionDisconnec
             log.info("[RedisSessionService] User {} left current room", userId);
         } catch (Exception e) {
             log.error("[RedisSessionService] Error clearing user current room for userId: {}", userId, e);
+        }
+    }
+
+    /**
+     * Clears presence for a deleted room without racing a user who has already
+     * moved to another room.
+     */
+    public void clearUserCurrentRoomIfMatches(String userId, String expectedRoomId) {
+        try {
+            String key = USER_CURRENT_ROOM_PREFIX + userId;
+            redisTemplate.execute(
+                    CLEAR_CURRENT_ROOM_IF_MATCHES,
+                    List.of(key),
+                    expectedRoomId
+            );
+        } catch (Exception exception) {
+            // Presence is ephemeral. A Redis failure must not fail durable outbox delivery.
+            log.warn("[RedisSessionService] Failed to clear deleted current room. userId={}, roomId={}",
+                    userId, expectedRoomId, exception);
         }
     }
     

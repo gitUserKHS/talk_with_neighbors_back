@@ -5,7 +5,11 @@ import com.talkwithneighbors.entity.ChatRoom;
 import com.talkwithneighbors.entity.Message;
 import com.talkwithneighbors.entity.User;
 import com.talkwithneighbors.entity.ChatRoomType;
+import com.talkwithneighbors.domain.event.ChatRoomDeletedEvent;
+import com.talkwithneighbors.domain.event.MediaFilesDeletedEvent;
 import com.talkwithneighbors.exception.ChatException;
+import com.talkwithneighbors.outbox.DomainEventPublisher;
+import com.talkwithneighbors.repository.ChatRoomDeletionRepository;
 import com.talkwithneighbors.repository.ChatRoomRepository;
 import com.talkwithneighbors.repository.MessageRepository;
 import com.talkwithneighbors.repository.UserRepository;
@@ -18,7 +22,7 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
-import org.springframework.messaging.simp.SimpMessagingTemplate; // Though not directly used by getMessagesByRoomId
+import org.springframework.context.ApplicationEventPublisher;
 import org.mockito.ArgumentCaptor;
 
 import java.time.LocalDateTime;
@@ -48,7 +52,13 @@ class ChatServiceImplTest {
     private UserRepository userRepository;
 
     @Mock
-    private SimpMessagingTemplate messagingTemplate; // Dependency of ChatServiceImpl
+    private ApplicationEventPublisher applicationEventPublisher;
+
+    @Mock
+    private ChatRoomDeletionRepository chatRoomDeletionRepository;
+
+    @Mock
+    private DomainEventPublisher domainEventPublisher;
 
     @InjectMocks
     private ChatServiceImpl chatService;
@@ -242,5 +252,65 @@ class ChatServiceImplTest {
         verify(messageRepository).save(messageCaptor.capture());
         Message savedMessage = messageCaptor.getValue();
         assertTrue(savedMessage.getReadByUsers().contains(testUser.getId()));
+    }
+
+    @Test
+    void deleteRoomDeletesTheCompleteGraphAndPublishesAfterCommitEvents() {
+        String roomId = room.getId();
+        List<String> mediaUrls = List.of(
+                "/api/media/chat/image.webp",
+                "/api/media/chat/image-thumbnail.webp"
+        );
+        ChatRoomDeletionRepository.ChatRoomDeletionResult deletionResult =
+                new ChatRoomDeletionRepository.ChatRoomDeletionResult(0, 2, 1, 1, 0, 2, 1);
+
+        when(chatRoomRepository.findByIdForUpdate(roomId)).thenReturn(Optional.of(room));
+        when(chatRoomDeletionRepository.findMediaUrlsByRoomId(roomId)).thenReturn(mediaUrls);
+        when(chatRoomDeletionRepository.deleteByRoomId(roomId)).thenReturn(deletionResult);
+
+        chatService.deleteRoom(roomId);
+
+        verify(chatRoomDeletionRepository).deleteByRoomId(roomId);
+        ArgumentCaptor<MediaFilesDeletedEvent> mediaEvent =
+                ArgumentCaptor.forClass(MediaFilesDeletedEvent.class);
+        verify(applicationEventPublisher).publishEvent(mediaEvent.capture());
+        assertEquals(mediaUrls, mediaEvent.getValue().mediaUrls());
+
+        ArgumentCaptor<ChatRoomDeletedEvent> roomEvent =
+                ArgumentCaptor.forClass(ChatRoomDeletedEvent.class);
+        verify(domainEventPublisher).publish(roomEvent.capture());
+        assertEquals(roomId, roomEvent.getValue().roomId());
+        assertEquals(Set.of(creator.getId(), participant.getId()),
+                Set.copyOf(roomEvent.getValue().participantIds()));
+    }
+
+    @Test
+    void deleteRoomMissingRoomReturnsNotFoundWithoutDeletingAnything() {
+        when(chatRoomRepository.findByIdForUpdate(testRoomId)).thenReturn(Optional.empty());
+
+        ChatException exception = assertThrows(
+                ChatException.class,
+                () -> chatService.deleteRoom(testRoomId)
+        );
+
+        assertEquals(HttpStatus.NOT_FOUND, exception.getStatus());
+        verifyNoInteractions(chatRoomDeletionRepository, applicationEventPublisher, domainEventPublisher);
+    }
+
+    @Test
+    void deleteRoomDatabaseFailureDoesNotPublishDeletionEvents() {
+        String roomId = room.getId();
+        when(chatRoomRepository.findByIdForUpdate(roomId)).thenReturn(Optional.of(room));
+        when(chatRoomDeletionRepository.findMediaUrlsByRoomId(roomId)).thenReturn(List.of());
+        when(chatRoomDeletionRepository.deleteByRoomId(roomId))
+                .thenThrow(new IllegalStateException("constraint failure"));
+
+        ChatException exception = assertThrows(
+                ChatException.class,
+                () -> chatService.deleteRoom(roomId)
+        );
+
+        assertEquals(HttpStatus.INTERNAL_SERVER_ERROR, exception.getStatus());
+        verifyNoInteractions(applicationEventPublisher, domainEventPublisher);
     }
 }

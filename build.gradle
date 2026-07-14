@@ -48,8 +48,24 @@ dependencies {
 }
 
 tasks.named('test') {
-	useJUnitPlatform()
+	useJUnitPlatform {
+		excludeTags 'mysql'
+	}
 	systemProperty 'spring.profiles.active', 'test'
+	jvmArgs '-Dfile.encoding=UTF-8'
+}
+
+tasks.register('mysqlIntegrationTest', Test) {
+	group = 'verification'
+	description = 'Runs commit-level persistence tests against MySQL.'
+	testClassesDirs = sourceSets.test.output.classesDirs
+	classpath = sourceSets.test.runtimeClasspath
+	useJUnitPlatform {
+		includeTags 'mysql'
+	}
+	systemProperty 'spring.profiles.active', 'mysql-it'
+	maxParallelForks = 1
+	shouldRunAfter tasks.test
 	jvmArgs '-Dfile.encoding=UTF-8'
 }
 

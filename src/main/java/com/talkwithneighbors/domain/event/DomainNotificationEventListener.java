@@ -82,6 +82,44 @@ public class DomainNotificationEventListener {
         );
     }
 
+    @EventListener
+    public void onChatRoomDeleted(ChatRoomDeletedEvent event) {
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("eventId", event.eventId());
+        data.put("chatRoomId", event.roomId());
+
+        WebSocketNotification<Map<String, Object>> notification = new WebSocketNotification<>(
+                "ROOM_DELETED",
+                data,
+                "채팅방이 삭제되었어.",
+                "/chat"
+        );
+
+        event.participantIds().forEach(participantId -> {
+            redisSessionService.clearUserCurrentRoomIfMatches(
+                    participantId.toString(), event.roomId());
+            deliver(
+                    participantId,
+                    "/queue/chat-notifications",
+                    notification,
+                    OfflineNotification.NotificationType.ROOM_DELETED,
+                    8
+            );
+
+            // The notification queue shows the toast; the updates queue removes
+            // the room from an already-open chat list.
+            try {
+                if (redisSessionService.isUserOnline(participantId.toString())) {
+                    messagingTemplate.convertAndSendToUser(
+                            participantId.toString(), "/queue/chat-updates", notification);
+                }
+            } catch (Exception exception) {
+                log.warn("Failed to dispatch chat-room removal update. roomId={}, userId={}",
+                        event.roomId(), participantId, exception);
+            }
+        });
+    }
+
     private void deliver(
             Long userId,
             String destination,
@@ -103,7 +141,18 @@ public class DomainNotificationEventListener {
                     priority
             );
             if (redisSessionService.isUserOnline(userId.toString())) {
-                messagingTemplate.convertAndSendToUser(userId.toString(), destination, notification);
+                try {
+                    messagingTemplate.convertAndSendToUser(
+                            userId.toString(), destination, notification);
+                } catch (Exception exception) {
+                    // The durable notification stays pending and can be delivered when
+                    // the user reconnects; a transient socket failure must not retry
+                    // the whole outbox event and duplicate earlier recipients.
+                    log.warn("WebSocket delivery failed; offline notification remains pending. "
+                                    + "userId={}, destination={}",
+                            userId, destination, exception);
+                    return;
+                }
                 if (saved != null) {
                     offlineNotificationService.markAsDelivered(saved.getId());
                 }

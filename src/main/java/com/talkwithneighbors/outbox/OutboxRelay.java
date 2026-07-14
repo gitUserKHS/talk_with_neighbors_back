@@ -17,7 +17,14 @@ public class OutboxRelay {
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void deliverAfterCommit(OutboxEventStored event) {
-        outboxEventProcessor.process(event.eventId());
+        try {
+            outboxEventProcessor.process(event.eventId());
+        } catch (Exception exception) {
+            // The originating database transaction has already committed. Never turn
+            // a successful HTTP mutation into a false 500; the scheduler will retry.
+            log.warn("Immediate outbox delivery failed; scheduled retry will continue. eventId={}",
+                    event.eventId(), exception);
+        }
     }
 
     @Scheduled(fixedDelayString = "${app.outbox.retry-interval-ms:5000}")

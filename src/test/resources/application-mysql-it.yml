@@ -1,0 +1,28 @@
+spring:
+  application:
+    name: talkWithNeighbors-mysql-it
+  datasource:
+    url: ${MYSQL_IT_URL}
+    username: ${MYSQL_IT_USERNAME}
+    password: ${MYSQL_IT_PASSWORD}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    hikari:
+      minimum-idle: 0
+      maximum-pool-size: 4
+  jpa:
+    database: mysql
+    database-platform: org.hibernate.dialect.MySQLDialect
+    hibernate:
+      ddl-auto: create-drop
+    open-in-view: false
+    show-sql: false
+  session:
+    store-type: none
+  data:
+    redis:
+      repositories:
+        enabled: false
+
+app:
+  media:
+    storage-directory: ${java.io.tmpdir}/talk-with-neighbors-mysql-it-uploads
