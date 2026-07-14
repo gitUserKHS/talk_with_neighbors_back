@@ -5,6 +5,9 @@ import com.talkwithneighbors.dto.auth.LoginRequestDto;
 import com.talkwithneighbors.dto.auth.RegisterRequestDto;
 import com.talkwithneighbors.domain.event.MediaFilesDeletedEvent;
 import com.talkwithneighbors.entity.User;
+import com.talkwithneighbors.entity.UserAccountType;
+import com.talkwithneighbors.auth.email.EmailVerificationService;
+import com.talkwithneighbors.auth.session.SessionIssuer;
 import com.talkwithneighbors.exception.AuthException;
 import com.talkwithneighbors.repository.UserRepository;
 import com.talkwithneighbors.security.UserSession;
@@ -16,7 +19,7 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import java.util.UUID;
+import java.util.Locale;
 import lombok.Getter;
 import lombok.Setter;
 import lombok.AllArgsConstructor;
@@ -33,12 +36,23 @@ public class AuthService {
     private final RedisSessionService redisSessionService;
     private final OfflineNotificationService offlineNotificationService;
     private final ApplicationEventPublisher applicationEventPublisher;
+    private final EmailVerificationService emailVerificationService;
+    private final SessionIssuer sessionIssuer;
 
     @Transactional(rollbackFor = Exception.class)
-    public AuthResponse register(RegisterRequestDto request) {
+    public AuthResponse register(RegisterRequestDto request, String emailProof) {
         try {
+            String normalizedEmail = request.getEmail().trim().toLowerCase(Locale.ROOT);
+            if (emailVerificationService.registrationRequired()
+                    && !emailVerificationService.availability().enabled()) {
+                throw new AuthException("Email registration is temporarily unavailable.", HttpStatus.SERVICE_UNAVAILABLE);
+            }
+            if (emailVerificationService.registrationRequired()
+                    || emailVerificationService.availability().enabled()) {
+                emailVerificationService.consumeProof(normalizedEmail, emailProof);
+            }
             // 이메일과 사용자명 중복 체크
-            boolean emailExists = userRepository.existsByEmail(request.getEmail());
+            boolean emailExists = userRepository.existsByEmail(normalizedEmail);
             boolean usernameExists = userRepository.existsByUsername(request.getUsername());
             
             if (emailExists || usernameExists) {
@@ -52,9 +66,11 @@ public class AuthService {
             }
 
             User user = new User();
-            user.setEmail(request.getEmail());
+            user.setEmail(normalizedEmail);
             user.setUsername(request.getUsername());
             user.setPassword(passwordEncoder.encode(request.getPassword()));
+            user.setAccountType(UserAccountType.MEMBER);
+            user.setPasswordLoginEnabled(true);
             
             // 기본값 설정
             user.setAge(0);  // 임시 값
@@ -67,16 +83,7 @@ public class AuthService {
             log.info("User registered successfully: {}", savedUser.getId());
             
             // 새로운 세션 ID 생성
-            String sessionId = UUID.randomUUID().toString();
-            
-            // Redis에 세션 저장 (새로운 세션이므로 직접 저장)
-            UserSession userSession = UserSession.of(
-                savedUser.getId(),
-                savedUser.getUsername(),
-                savedUser.getEmail(),
-                savedUser.getUsername()  // nickname은 username과 동일하게 설정
-            );
-            redisSessionService.saveSession(sessionId, userSession);
+            String sessionId = sessionIssuer.issue(savedUser);
             
             // 회원가입 후 바로 오프라인 알림 전송 (선택적, 필요하다면 추가)
             // offlineNotificationService.sendPendingNotifications(savedUser.getId());
@@ -91,24 +98,18 @@ public class AuthService {
     @Transactional(rollbackFor = Exception.class)
     public AuthResponse login(LoginRequestDto request) {
         try {
-            User user = userRepository.findByEmail(request.getEmail())
+            String normalizedEmail = request.getEmail().trim().toLowerCase(Locale.ROOT);
+            User user = userRepository.findByEmail(normalizedEmail)
                     .orElseThrow(() -> new AuthException("이메일 또는 비밀번호가 올바르지 않습니다.", HttpStatus.UNAUTHORIZED));
 
-            if (!passwordEncoder.matches(request.getPassword(), user.getPassword())) {
+            if (user.getAccountType() == UserAccountType.SYSTEM
+                    || Boolean.FALSE.equals(user.getPasswordLoginEnabled())
+                    || !passwordEncoder.matches(request.getPassword(), user.getPassword())) {
                 throw new AuthException("이메일 또는 비밀번호가 올바르지 않습니다.", HttpStatus.UNAUTHORIZED);
             }
 
             // 새로운 세션 ID 생성
-            String sessionId = UUID.randomUUID().toString();
-            
-            // Redis에 세션 저장 (새로운 세션이므로 직접 저장)
-            UserSession userSession = UserSession.of(
-                user.getId(),
-                user.getUsername(),
-                user.getEmail(),
-                user.getUsername()  // nickname은 username과 동일하게 설정
-            );
-            redisSessionService.saveSession(sessionId, userSession);
+            String sessionId = sessionIssuer.issue(user);
             
             // 로그인 성공 후 오프라인 알림 전송 -> SessionConnectedEvent 리스너에서 처리하도록 변경
             // try {
@@ -200,7 +201,9 @@ public class AuthService {
      * @return 중복 여부를 담은 객체
      */
     public DuplicateCheckResponse checkDuplicates(String email, String username) {
-        boolean emailExists = userRepository.existsByEmail(email);
+        // Kept only for legacy clients. New registration checks username here
+        // and verifies email through the challenge flow to avoid enumeration.
+        boolean emailExists = false;
         boolean usernameExists = userRepository.existsByUsername(username);
         
         return new DuplicateCheckResponse(emailExists, usernameExists);

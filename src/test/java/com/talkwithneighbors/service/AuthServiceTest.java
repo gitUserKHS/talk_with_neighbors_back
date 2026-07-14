@@ -4,9 +4,12 @@ import com.talkwithneighbors.dto.UserDto;
 import com.talkwithneighbors.dto.auth.LoginRequestDto;
 import com.talkwithneighbors.dto.auth.RegisterRequestDto;
 import com.talkwithneighbors.entity.User;
+import com.talkwithneighbors.entity.UserAccountType;
 import com.talkwithneighbors.exception.AuthException;
 import com.talkwithneighbors.repository.UserRepository;
 import com.talkwithneighbors.security.UserSession;
+import com.talkwithneighbors.auth.email.EmailVerificationService;
+import com.talkwithneighbors.auth.session.SessionIssuer;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -34,6 +37,12 @@ class AuthServiceTest {
     @Mock
     private RedisSessionService redisSessionService;
 
+    @Mock
+    private EmailVerificationService emailVerificationService;
+
+    @Mock
+    private SessionIssuer sessionIssuer;
+
     @InjectMocks
     private AuthService authService;
 
@@ -57,6 +66,8 @@ class AuthServiceTest {
         testUser.setEmail("test@example.com");
         testUser.setUsername("testuser");
         testUser.setPassword("encodedPassword");
+        lenient().when(emailVerificationService.availability())
+                .thenReturn(new EmailVerificationService.Availability(false, "disabled"));
     }
 
     @Test
@@ -67,10 +78,10 @@ class AuthServiceTest {
         when(userRepository.existsByUsername(anyString())).thenReturn(false);
         when(passwordEncoder.encode(anyString())).thenReturn("encodedPassword");
         when(userRepository.save(any(User.class))).thenReturn(testUser);
-        doNothing().when(redisSessionService).saveSession(anyString(), any());
+        when(sessionIssuer.issue(any(User.class))).thenReturn("test-session-id");
 
         // when
-        AuthService.AuthResponse response = authService.register(registerRequestDto);
+        AuthService.AuthResponse response = authService.register(registerRequestDto, null);
 
         // then
         assertNotNull(response);
@@ -87,7 +98,7 @@ class AuthServiceTest {
         when(userRepository.existsByUsername(anyString())).thenReturn(false);
 
         // when & then
-        assertThrows(AuthException.class, () -> authService.register(registerRequestDto));
+        assertThrows(AuthException.class, () -> authService.register(registerRequestDto, null));
     }
 
     @Test
@@ -96,7 +107,7 @@ class AuthServiceTest {
         // given
         when(userRepository.findByEmail(anyString())).thenReturn(Optional.of(testUser));
         when(passwordEncoder.matches(anyString(), anyString())).thenReturn(true);
-        doNothing().when(redisSessionService).saveSession(anyString(), any());
+        when(sessionIssuer.issue(any(User.class))).thenReturn("test-session-id");
 
         // when
         AuthService.AuthResponse response = authService.login(loginRequestDto);
@@ -117,6 +128,17 @@ class AuthServiceTest {
 
         // when & then
         assertThrows(AuthException.class, () -> authService.login(loginRequestDto));
+    }
+
+    @Test
+    void systemAccountsCannotLogInEvenWithAMatchingPassword() {
+        testUser.setAccountType(UserAccountType.SYSTEM);
+        when(userRepository.findByEmail(anyString())).thenReturn(Optional.of(testUser));
+
+        assertThrows(AuthException.class, () -> authService.login(loginRequestDto));
+
+        verifyNoInteractions(passwordEncoder);
+        verifyNoInteractions(redisSessionService);
     }
 
     @Test
@@ -169,4 +191,4 @@ class AuthServiceTest {
         // when & then
         assertThrows(AuthException.class, () -> authService.getCurrentUser(sessionId));
     }
-} 
+}

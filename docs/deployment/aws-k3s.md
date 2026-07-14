@@ -305,6 +305,7 @@ Terraform 출력값을 Environment variables로 등록한다.
 | `PUBLIC_ORIGIN` | 선택. 기본값은 `https://talk-with-neighbors.duckdns.org`; 다른 환경에서만 경로 없는 HTTPS origin으로 덮어쓴다. |
 | `ACME_EMAIL` | 선택. 설정하면 Let's Encrypt 계정 연락처로 사용하고, 비우면 이메일 없이 등록한다. |
 | `K3S_NETWORK_REINITIALIZE_ALLOWED` | 평소 `false` 또는 미설정. 승인된 1회 CIDR 복구 창에만 잠시 `true` |
+| `AUTH_EMAIL_REQUIRED` | 기본 `false`. 아래 SES 준비·Terraform 적용·Secret 등록을 모두 끝낸 뒤에만 `true` |
 
 Environment secrets는 다음과 같다.
 
@@ -314,10 +315,39 @@ Environment secrets는 다음과 같다.
 | `MYSQL_ROOT_PASSWORD` | MySQL root 비밀번호, 서로 다른 난수 16자 이상 |
 | `GHCR_USERNAME` | private GHCR 이미지를 읽을 사용자. 패키지가 public이면 비워도 된다. |
 | `GHCR_TOKEN` | 위 사용자의 최소 `read:packages` 토큰. `GHCR_USERNAME`과 함께 설정하거나 둘 다 비운다. |
+| `EMAIL_VERIFICATION_HMAC_SECRET` | 이메일 코드·가입 proof HMAC용 난수 32자 이상. `AUTH_EMAIL_REQUIRED=true`일 때 필수 |
+| `EMAIL_VERIFICATION_FROM` | 서울 리전 SES에서 검증한 발신 이메일 주소. `AUTH_EMAIL_REQUIRED=true`일 때 필수 |
+| `GOOGLE_OAUTH_CLIENT_ID` | 선택. Google Web OAuth client ID. Secret과 둘 다 있어야 공급자가 활성화된다. |
+| `GOOGLE_OAUTH_CLIENT_SECRET` | 선택. Google Web OAuth client secret. ID와 한 쌍으로만 등록한다. |
+| `KAKAO_OAUTH_CLIENT_ID` | 선택. Kakao Login에 사용하는 REST API key/client ID. Secret과 둘 다 있어야 활성화된다. |
+| `KAKAO_OAUTH_CLIENT_SECRET` | 선택. Kakao Login client secret. ID와 한 쌍으로만 등록한다. |
 
 AWS access key와 secret key는 GitHub에 저장하지 않는다. GitHub Actions는 `id-token: write`로 OIDC 토큰을 받아 1시간 이하의 임시 AWS 자격 증명으로 교환한다. 신뢰 정책은 지정 저장소의 `production` Environment subject만 허용한다. 자세한 원리는 [AWS IAM OIDC](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_providers_oidc.html)와 [GitHub AWS OIDC 가이드](https://docs.github.com/en/actions/how-tos/secure-your-work/security-harden-deployments/oidc-in-aws)를 참고한다.
 
 애플리케이션 secret은 실행 시 private 배포 버킷을 거쳐 Kubernetes Secret으로 적용된다. runner와 노드의 평문 임시 파일은 성공·실패와 관계없이 정리하고, 배포 버킷 lifecycle이 하루 뒤 잔여 객체를 정리한다. k3s secrets encryption도 켜져 있지만 클러스터 관리자와 EC2 root는 Secret을 읽을 수 있으므로 이들을 신뢰 경계로 본다.
+
+### 7.1 이메일 인증과 소셜 로그인 활성화 순서
+
+이메일 인증은 준비가 덜 된 운영 환경의 회원가입을 막지 않도록 기본적으로 꺼져 있다. 다음 순서를 바꾸지 않는다.
+
+1. Amazon SES `ap-northeast-2`에서 발신 이메일 또는 도메인 identity를 검증하고, 외부 수신자에게 보낼 서비스라면 production access 승인까지 확인한다.
+2. `terraform.tfvars`에 아래처럼 **실제 검증된 identity ARN**을 넣고 `terraform plan`을 검토한 뒤 수동 `terraform apply`한다. 이 단계가 EC2 instance role에 해당 identity 한정 `ses:SendEmail`을 추가한다.
+
+   ```hcl
+   ses_sender_identity_arn = "arn:aws:ses:ap-northeast-2:123456789012:identity/verified-sender@example.com"
+   ```
+
+3. GitHub `production` Environment에 `EMAIL_VERIFICATION_HMAC_SECRET`과 `EMAIL_VERIFICATION_FROM`을 등록한다. 먼저 `AUTH_EMAIL_REQUIRED=false`로 배포하여 `/api/public/auth/providers`가 이메일 인증을 비활성으로 보고하고 기존 가입이 유지되는지 확인한다.
+4. SES 실제 발송 점검을 마친 뒤에만 `AUTH_EMAIL_REQUIRED=true`로 바꾸고 다시 배포한다. 이때 sender 설정이나 Secret이 빠지면 워크플로가 실패하며, 실행 중 sender가 불가하면 가입은 503으로 닫힌다.
+
+Google과 Kakao는 각 client ID/secret 쌍이 모두 있을 때만 노출된다. 공급자 콘솔에는 아래 HTTPS callback을 정확히 등록한다.
+
+```text
+https://talk-with-neighbors.duckdns.org/api/login/oauth2/code/google
+https://talk-with-neighbors.duckdns.org/api/login/oauth2/code/kakao
+```
+
+도메인을 바꾸면 `PUBLIC_ORIGIN`과 두 callback도 함께 바꾼다. Kakao는 Kakao Login과 OpenID Connect를 켜고 REST API key 및 client secret을 사용한다. 지도 JavaScript key와 로그인 REST API key는 서로 다른 용도다. 소셜 공급자 access/refresh token은 저장하지 않으며 callback이 끝나면 이웃톡의 HttpOnly 세션만 발급한다. 같은 이메일의 기존 로컬 계정은 자동으로 합치지 않고 명시적 계정 연결 흐름이 마련될 때까지 `ACCOUNT_LINK_REQUIRED`로 거절한다.
 
 ## 8. 이미지 게시와 배포
 
@@ -414,7 +444,7 @@ REINITIALIZE_K3S_NETWORK:<EC2_INSTANCE_ID>:pods=10.244.0.0/16:services=10.96.0.0
 ```powershell
 $Origin = "http://<현재-공인-IP>"
 curl.exe --fail --show-error "$Origin/healthz"
-curl.exe --fail --show-error "$Origin/api/auth/check-duplicates?email=smoke%40example.invalid&username=smoke"
+curl.exe --fail --show-error "$Origin/api/auth/check-duplicates?username=smoke"
 ```
 
 추가 수동 시나리오는 최소 다음을 포함한다.

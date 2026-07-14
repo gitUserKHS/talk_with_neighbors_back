@@ -12,6 +12,7 @@ import com.talkwithneighbors.entity.MatchStatus;
 import com.talkwithneighbors.entity.MatchingPreferences;
 import com.talkwithneighbors.entity.OfflineNotification;
 import com.talkwithneighbors.entity.User;
+import com.talkwithneighbors.entity.UserAccountType;
 import com.talkwithneighbors.exception.MatchingException;
 import com.talkwithneighbors.repository.MatchRepository;
 import com.talkwithneighbors.repository.MatchingPreferencesRepository;
@@ -168,6 +169,10 @@ public class MatchingService {
     public MatchProfileDto requestMatch(Long requesterId, Long targetUserId) {
         User requester = getUserById(requesterId);
         User target = getUserById(targetUserId);
+        if (requester.getAccountType() == UserAccountType.SYSTEM
+                || target.getAccountType() == UserAccountType.SYSTEM) {
+            throw new MatchingException("Member not found.", HttpStatus.NOT_FOUND);
+        }
         requireNotBlocked(requesterId, targetUserId);
         requireCompleteProfile(requester, "프로필을 먼저 완성해야 매칭 요청을 보낼 수 있어요.");
 
@@ -282,6 +287,7 @@ public class MatchingService {
         Set<Long> excludedUserIds = new HashSet<>(userBlockRepository.findExcludedUserIds(userId));
         return userRepository.findNearbyUsers(latitude, longitude, radius).stream()
                 .filter(user -> !user.getId().equals(userId))
+                .filter(user -> user.getAccountType() != UserAccountType.SYSTEM)
                 .filter(user -> !Boolean.FALSE.equals(user.getProfileDiscoverable()))
                 .filter(user -> !excludedUserIds.contains(user.getId()))
                 .map(user -> {
@@ -312,6 +318,7 @@ public class MatchingService {
         Set<Long> excludedUserIds = new HashSet<>(userBlockRepository.findExcludedUserIds(currentUser.getId()));
 
         return nearbyUsers.stream()
+                .filter(candidate -> candidate.getAccountType() != UserAccountType.SYSTEM)
                 .filter(candidate -> !Boolean.FALSE.equals(candidate.getProfileDiscoverable()))
                 .map(candidate -> new ScoredUser(candidate, compatibilityScoreService.calculateDistance(currentUser, candidate)))
                 .filter(candidate -> compatibilityScoreService.isEligible(currentUser, candidate.user(), preferences, candidate.distance()))

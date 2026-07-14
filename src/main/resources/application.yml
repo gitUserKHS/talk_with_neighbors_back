@@ -52,11 +52,6 @@ spring:
     redis:
       namespace: spring:session
       flush-mode: on-save
-    cookie:
-      http-only: true
-      secure: false
-      max-age: 86400 # 24시간
-      same-site: lax
   data:
     redis:
       host: localhost
@@ -89,7 +84,7 @@ server:
       cookie:
         name: SESSIONID
         http-only: true
-        secure: false
+        secure: ${APP_SESSION_COOKIE_SECURE:false}
         same-site: lax
         path: /
         max-age: 86400
@@ -130,8 +125,33 @@ logging:
     ROOT: WARN  # 다른 로그 노이즈 줄이기
 
 app:
-  portfolio-demo:
-    enabled: ${APP_PORTFOLIO_DEMO_ENABLED:false}
+  auth:
+    oauth:
+      public-base-url: ${APP_PUBLIC_BASE_URL:http://localhost:8080}
+      frontend-base-url: ${APP_FRONTEND_BASE_URL:http://localhost:3000}
+      google:
+        client-id: ${APP_AUTH_OAUTH_GOOGLE_CLIENT_ID:}
+        client-secret: ${APP_AUTH_OAUTH_GOOGLE_CLIENT_SECRET:}
+      kakao:
+        client-id: ${APP_AUTH_OAUTH_KAKAO_CLIENT_ID:}
+        client-secret: ${APP_AUTH_OAUTH_KAKAO_CLIENT_SECRET:}
+    email:
+      enabled: ${APP_AUTH_EMAIL_ENABLED:false}
+      required: ${APP_AUTH_EMAIL_REQUIRED:false}
+      sender: ${APP_AUTH_EMAIL_SENDER:disabled}
+      hmac-secret: ${APP_AUTH_EMAIL_HMAC_SECRET:}
+      from: ${APP_AUTH_EMAIL_FROM:}
+      ses-region: ${APP_AUTH_EMAIL_SES_REGION:ap-northeast-2}
+      code-ttl: ${APP_AUTH_EMAIL_CODE_TTL:PT10M}
+      proof-ttl: ${APP_AUTH_EMAIL_PROOF_TTL:PT10M}
+      resend-cooldown: ${APP_AUTH_EMAIL_RESEND_COOLDOWN:PT1M}
+      max-attempts: ${APP_AUTH_EMAIL_MAX_ATTEMPTS:5}
+      proof-cookie-name: TWN_EMAIL_PROOF
+      proof-cookie-secure: ${APP_AUTH_EMAIL_PROOF_COOKIE_SECURE:true}
+      request-limit-per-window: ${APP_AUTH_EMAIL_REQUEST_LIMIT:5}
+      request-window: ${APP_AUTH_EMAIL_REQUEST_WINDOW:PT10M}
+  official-content:
+    enabled: ${APP_OFFICIAL_CONTENT_ENABLED:false}
   media:
     storage-type: ${APP_MEDIA_STORAGE_TYPE:local}
     storage-directory: ${APP_MEDIA_STORAGE_DIRECTORY:./uploads}

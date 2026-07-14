@@ -72,7 +72,8 @@ class PublicContentControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.content[0].id").value("post-1"))
                 .andExpect(jsonPath("$.content[0].authorDisplayName").value("이웃"))
-                .andExpect(jsonPath("$.content[0].demo").value(false))
+                .andExpect(jsonPath("$.content[0].official").value(false))
+                .andExpect(jsonPath("$.content[0].demo").doesNotExist())
                 .andExpect(jsonPath("$.content[0].authorProfileImage").doesNotExist())
                 .andExpect(jsonPath("$.content[0].authorId").doesNotExist())
                 .andExpect(jsonPath("$.content[0].likedByCurrentUser").doesNotExist())
@@ -106,6 +107,11 @@ class PublicContentControllerTest {
                 OffsetDateTime.of(2026, 8, 1, 10, 0, 0, 0, ZoneOffset.UTC),
                 120,
                 OffsetDateTime.of(2026, 7, 30, 23, 59, 0, 0, ZoneOffset.UTC),
+                null,
+                null,
+                null,
+                null,
+                null,
                 false
         );
         when(publicContentService.getMeetups(eq("book"), eq("books"), any(Pageable.class)))
@@ -116,7 +122,8 @@ class PublicContentControllerTest {
                         .param("interest", "books"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.content[0].id").value("meetup-1"))
-                .andExpect(jsonPath("$.content[0].demo").value(false))
+                .andExpect(jsonPath("$.content[0].official").value(false))
+                .andExpect(jsonPath("$.content[0].demo").doesNotExist())
                 .andExpect(jsonPath("$.content[0].scheduledAt").value("2026-08-01T10:00:00Z"))
                 .andExpect(jsonPath("$.content[0].registrationDeadline").value("2026-07-30T23:59:00Z"))
                 .andExpect(jsonPath("$.content[0].location").doesNotExist())

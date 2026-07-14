@@ -10,12 +10,24 @@ import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.multipart.MaxUploadSizeExceededException;
 import org.springframework.web.multipart.MultipartException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
+import org.springframework.web.bind.MethodArgumentNotValidException;
+import java.util.Map;
+import java.util.LinkedHashMap;
 
 import java.io.FileNotFoundException;
 
 @Slf4j
 @RestControllerAdvice
 public class GlobalExceptionHandler {
+
+    @ExceptionHandler(MethodArgumentNotValidException.class)
+    public ResponseEntity<ValidationErrorResponse> handleValidation(MethodArgumentNotValidException exception) {
+        Map<String, String> fields = new LinkedHashMap<>();
+        exception.getBindingResult().getFieldErrors().forEach(error ->
+                fields.putIfAbsent(error.getField(), error.getDefaultMessage()));
+        return ResponseEntity.badRequest()
+                .body(new ValidationErrorResponse("validation_failed", "Request validation failed.", fields));
+    }
 
     @ExceptionHandler(MatchingException.class)
     public ResponseEntity<ErrorResponse> handleMatchingException(MatchingException e) {
@@ -86,4 +98,5 @@ public class GlobalExceptionHandler {
     }
 
     record ErrorResponse(String message) {}
+    record ValidationErrorResponse(String code, String message, Map<String, String> fields) {}
 } 

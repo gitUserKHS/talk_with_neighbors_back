@@ -88,7 +88,7 @@ jobs:
             -e SPRING_DATA_REDIS_HOST=127.0.0.1 \
             -e SPRING_DATA_REDIS_PORT=6379 \
             -e APP_SESSION_COOKIE_SECURE=false \
-            -e APP_PORTFOLIO_DEMO_ENABLED=true \
+            -e APP_OFFICIAL_CONTENT_ENABLED=true \
             -e CORS_ALLOWED_ORIGINS=http://127.0.0.1:3000 \
             -e JAVA_OPTS='-Dfile.encoding=UTF-8 -Xms128m -Xmx512m -Duser.timezone=UTC' \
             talk-with-neighbors-backend:ci
@@ -96,17 +96,17 @@ jobs:
           for _ in {1..90}; do
             if curl --fail --silent --show-error http://127.0.0.1:8080/actuator/health/readiness | grep --quiet '"status":"UP"'; then
               curl --fail --silent --show-error \
-                'http://127.0.0.1:8080/api/auth/check-duplicates?email=ci%40example.invalid&username=ci-smoke' >/dev/null
+                'http://127.0.0.1:8080/api/auth/check-duplicates?username=ci-smoke' >/dev/null
               public_feed_status="$(curl --fail --silent --show-error \
                 --output /tmp/public-feed-ci.json --write-out '%{http_code}' \
-                'http://127.0.0.1:8080/api/public/feed?size=1')"
+                'http://127.0.0.1:8080/api/public/feed?size=50')"
               [[ "$public_feed_status" == "200" ]] || { echo "Public feed returned HTTP $public_feed_status" >&2; exit 1; }
               public_meetups_status="$(curl --fail --silent --show-error \
                 --output /tmp/public-meetups-ci.json --write-out '%{http_code}' \
-                'http://127.0.0.1:8080/api/public/meetups?size=1')"
+                'http://127.0.0.1:8080/api/public/meetups?size=50')"
               [[ "$public_meetups_status" == "200" ]] || { echo "Public meetups returned HTTP $public_meetups_status" >&2; exit 1; }
-              jq -e 'type == "object" and (.content | type == "array") and (.content | length > 0) and (.content | all(.[]; (.demo | type) == "boolean"))' /tmp/public-feed-ci.json >/dev/null
-              jq -e 'type == "object" and (.content | type == "array") and (.content | length > 0) and (.content | all(.[]; (.demo | type) == "boolean"))' /tmp/public-meetups-ci.json >/dev/null
+              jq -e 'type == "object" and (.content | type == "array") and (.content | any(.[]; .official == true and (.id | type == "string" and length == 36) and (.media | type == "array" and length > 0) and (has("demo") | not)))' /tmp/public-feed-ci.json >/dev/null
+              jq -e 'type == "object" and (.content | type == "array") and (.content | any(.[]; .official == true and (.id | type == "string" and length == 36) and (.location | type == "string" and length > 0) and (.latitude | type == "number") and (.longitude | type == "number") and (has("demo") | not)))' /tmp/public-meetups-ci.json >/dev/null
               protected_write_status="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
                 --request POST --header 'Content-Type: application/json' --data '{}' \
                 'http://127.0.0.1:8080/api/feed')"

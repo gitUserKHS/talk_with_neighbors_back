@@ -25,6 +25,10 @@ github_environment = "production"
 # Set this when the AWS account already has the GitHub Actions OIDC provider.
 # github_oidc_provider_arn = "arn:aws:iam::123456789012:oidc-provider/token.actions.githubusercontent.com"
 
+# Optional. Set only after this SES identity is verified. This adds one
+# least-privilege ses:SendEmail permission to the existing EC2 role.
+# ses_sender_identity_arn = "arn:aws:ses:ap-northeast-2:123456789012:identity/you@example.com"
+
 # Optional. When set, Terraform creates a $10/month budget with email alerts.
 # budget_alert_email = "you@example.com"
 monthly_budget_usd = 10

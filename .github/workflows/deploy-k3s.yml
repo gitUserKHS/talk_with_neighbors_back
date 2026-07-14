@@ -416,6 +416,13 @@ jobs:
         env:
           MYSQL_PASSWORD: ${{ secrets.MYSQL_PASSWORD }}
           MYSQL_ROOT_PASSWORD: ${{ secrets.MYSQL_ROOT_PASSWORD }}
+          EMAIL_VERIFICATION_HMAC_SECRET: ${{ secrets.EMAIL_VERIFICATION_HMAC_SECRET }}
+          EMAIL_VERIFICATION_FROM: ${{ secrets.EMAIL_VERIFICATION_FROM }}
+          AUTH_EMAIL_REQUIRED: ${{ vars.AUTH_EMAIL_REQUIRED || 'false' }}
+          GOOGLE_OAUTH_CLIENT_ID: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
+          GOOGLE_OAUTH_CLIENT_SECRET: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
+          KAKAO_OAUTH_CLIENT_ID: ${{ secrets.KAKAO_OAUTH_CLIENT_ID }}
+          KAKAO_OAUTH_CLIENT_SECRET: ${{ secrets.KAKAO_OAUTH_CLIENT_SECRET }}
           GHCR_USERNAME: ${{ secrets.GHCR_USERNAME }}
           GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
         shell: bash
@@ -427,6 +434,13 @@ jobs:
           [[ -n "$AWS_ROLE_ARN" && -n "$DEPLOY_BUCKET" && -n "$MEDIA_BUCKET" ]] || { echo "AWS role and S3 bucket variables are required" >&2; exit 1; }
           (( ${#MYSQL_PASSWORD} >= 16 )) || { echo "MYSQL_PASSWORD must contain at least 16 characters" >&2; exit 1; }
           (( ${#MYSQL_ROOT_PASSWORD} >= 16 )) || { echo "MYSQL_ROOT_PASSWORD must contain at least 16 characters" >&2; exit 1; }
+          [[ "$AUTH_EMAIL_REQUIRED" == "true" || "$AUTH_EMAIL_REQUIRED" == "false" ]] || { echo "AUTH_EMAIL_REQUIRED must be true or false" >&2; exit 1; }
+          if [[ "$AUTH_EMAIL_REQUIRED" == "true" ]]; then
+            (( ${#EMAIL_VERIFICATION_HMAC_SECRET} >= 32 )) || { echo "EMAIL_VERIFICATION_HMAC_SECRET must contain at least 32 characters" >&2; exit 1; }
+            [[ "$EMAIL_VERIFICATION_FROM" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,63}$ ]] || { echo "EMAIL_VERIFICATION_FROM must be a valid address" >&2; exit 1; }
+          fi
+          [[ -z "$GOOGLE_OAUTH_CLIENT_ID" && -z "$GOOGLE_OAUTH_CLIENT_SECRET" || -n "$GOOGLE_OAUTH_CLIENT_ID" && -n "$GOOGLE_OAUTH_CLIENT_SECRET" ]] || { echo "Set both Google OAuth secrets or neither" >&2; exit 1; }
+          [[ -z "$KAKAO_OAUTH_CLIENT_ID" && -z "$KAKAO_OAUTH_CLIENT_SECRET" || -n "$KAKAO_OAUTH_CLIENT_ID" && -n "$KAKAO_OAUTH_CLIENT_SECRET" ]] || { echo "Set both Kakao OAuth secrets or neither" >&2; exit 1; }
           [[ -z "$GHCR_USERNAME" && -z "$GHCR_TOKEN" || -n "$GHCR_USERNAME" && -n "$GHCR_TOKEN" ]] || { echo "Set both GHCR credentials or neither" >&2; exit 1; }
           expected_confirmation="REINITIALIZE_K3S_NETWORK:${INSTANCE_ID}:pods=10.244.0.0/16:services=10.96.0.0/16:dns=10.96.0.10"
           if [[ "$REINITIALIZE_K3S_NETWORK" == "true" ]]; then
@@ -495,6 +509,13 @@ jobs:
           ACME_EMAIL: ${{ env.ACME_EMAIL }}
           MYSQL_PASSWORD: ${{ secrets.MYSQL_PASSWORD }}
           MYSQL_ROOT_PASSWORD: ${{ secrets.MYSQL_ROOT_PASSWORD }}
+          EMAIL_VERIFICATION_HMAC_SECRET: ${{ secrets.EMAIL_VERIFICATION_HMAC_SECRET }}
+          EMAIL_VERIFICATION_FROM: ${{ secrets.EMAIL_VERIFICATION_FROM }}
+          AUTH_EMAIL_REQUIRED: ${{ vars.AUTH_EMAIL_REQUIRED || 'false' }}
+          GOOGLE_OAUTH_CLIENT_ID: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
+          GOOGLE_OAUTH_CLIENT_SECRET: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
+          KAKAO_OAUTH_CLIENT_ID: ${{ secrets.KAKAO_OAUTH_CLIENT_ID }}
+          KAKAO_OAUTH_CLIENT_SECRET: ${{ secrets.KAKAO_OAUTH_CLIENT_SECRET }}
           GHCR_USERNAME: ${{ secrets.GHCR_USERNAME }}
           GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
         shell: bash
@@ -528,15 +549,15 @@ jobs:
           health_status="$(curl --fail --show-error --silent --retry 12 --retry-all-errors --retry-delay 5 --output "$RUNNER_TEMP/healthz.txt" --write-out '%{http_code}' "$PUBLIC_ORIGIN/healthz")"
           [[ "$health_status" == "200" ]] || { echo "healthz returned HTTP $health_status" >&2; exit 1; }
           [[ "$(tr -d '\r\n' < "$RUNNER_TEMP/healthz.txt")" == "ok" ]] || { echo "healthz returned an unexpected body" >&2; exit 1; }
-          api_status="$(curl --fail --show-error --silent --retry 12 --retry-all-errors --retry-delay 5 --output "$RUNNER_TEMP/api-smoke.json" --write-out '%{http_code}' "$PUBLIC_ORIGIN/api/auth/check-duplicates?email=deploy-smoke%40example.invalid&username=deploy-smoke")"
+          api_status="$(curl --fail --show-error --silent --retry 12 --retry-all-errors --retry-delay 5 --output "$RUNNER_TEMP/api-smoke.json" --write-out '%{http_code}' "$PUBLIC_ORIGIN/api/auth/check-duplicates?username=deploy-smoke")"
           [[ "$api_status" == "200" ]] || { echo "API smoke test returned HTTP $api_status" >&2; exit 1; }
           jq -e 'type == "object" and ((.emailExists | type) == "boolean") and ((.usernameExists | type) == "boolean")' "$RUNNER_TEMP/api-smoke.json" >/dev/null
-          public_feed_status="$(curl --fail --show-error --silent --retry 12 --retry-all-errors --retry-delay 5 --output "$RUNNER_TEMP/public-feed.json" --write-out '%{http_code}' "$PUBLIC_ORIGIN/api/public/feed?size=1")"
+          public_feed_status="$(curl --fail --show-error --silent --retry 12 --retry-all-errors --retry-delay 5 --output "$RUNNER_TEMP/public-feed.json" --write-out '%{http_code}' "$PUBLIC_ORIGIN/api/public/feed?size=50")"
           [[ "$public_feed_status" == "200" ]] || { echo "Public feed returned HTTP $public_feed_status" >&2; exit 1; }
-          jq -e 'type == "object" and (.content | type == "array") and (.content | length > 0) and (.content | all(.[]; (.demo | type) == "boolean"))' "$RUNNER_TEMP/public-feed.json" >/dev/null
-          public_meetups_status="$(curl --fail --show-error --silent --retry 12 --retry-all-errors --retry-delay 5 --output "$RUNNER_TEMP/public-meetups.json" --write-out '%{http_code}' "$PUBLIC_ORIGIN/api/public/meetups?size=1")"
+          jq -e 'type == "object" and (.content | type == "array") and (.content | any(.[]; .official == true and (.id | type == "string" and length == 36) and (.media | type == "array" and length > 0) and (has("demo") | not)))' "$RUNNER_TEMP/public-feed.json" >/dev/null
+          public_meetups_status="$(curl --fail --show-error --silent --retry 12 --retry-all-errors --retry-delay 5 --output "$RUNNER_TEMP/public-meetups.json" --write-out '%{http_code}' "$PUBLIC_ORIGIN/api/public/meetups?size=50")"
           [[ "$public_meetups_status" == "200" ]] || { echo "Public meetups returned HTTP $public_meetups_status" >&2; exit 1; }
-          jq -e 'type == "object" and (.content | type == "array") and (.content | length > 0) and (.content | all(.[]; (.demo | type) == "boolean"))' "$RUNNER_TEMP/public-meetups.json" >/dev/null
+          jq -e 'type == "object" and (.content | type == "array") and (.content | any(.[]; .official == true and (.id | type == "string" and length == 36) and (.location | type == "string" and length > 0) and (.latitude | type == "number") and (.longitude | type == "number") and (has("demo") | not)))' "$RUNNER_TEMP/public-meetups.json" >/dev/null
           protected_write_status="$(curl --show-error --silent --output /dev/null --write-out '%{http_code}' --request POST --header 'Content-Type: application/json' --data '{}' "$PUBLIC_ORIGIN/api/feed")"
           [[ "$protected_write_status" == "401" ]] || { echo "Anonymous feed write returned HTTP $protected_write_status instead of 401" >&2; exit 1; }
 

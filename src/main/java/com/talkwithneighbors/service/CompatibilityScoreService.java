@@ -3,6 +3,7 @@ package com.talkwithneighbors.service;
 import com.talkwithneighbors.dto.matching.MatchingPreferencesDto;
 import com.talkwithneighbors.entity.MatchingPreferences;
 import com.talkwithneighbors.entity.User;
+import com.talkwithneighbors.entity.UserAccountType;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
@@ -53,6 +54,10 @@ public class CompatibilityScoreService {
 
     public boolean isEligible(User currentUser, User candidate, MatchingPreferencesDto preferences, Double distanceKm) {
         if (currentUser == null || candidate == null || candidate.getId() == null) {
+            return false;
+        }
+        if (currentUser.getAccountType() == UserAccountType.SYSTEM
+                || candidate.getAccountType() == UserAccountType.SYSTEM) {
             return false;
         }
         if (candidate.getId().equals(currentUser.getId())) {

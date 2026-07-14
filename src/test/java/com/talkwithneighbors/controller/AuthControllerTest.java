@@ -12,6 +12,9 @@ import com.talkwithneighbors.service.AuthService;
 import com.talkwithneighbors.service.MediaStorageService;
 import com.talkwithneighbors.service.RedisSessionService;
 import com.talkwithneighbors.service.SessionValidationService;
+import com.talkwithneighbors.auth.email.EmailVerificationCookieFactory;
+import com.talkwithneighbors.auth.session.SessionCookieFactory;
+import com.talkwithneighbors.auth.email.EmailVerificationProperties;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -24,6 +27,7 @@ import org.springframework.context.annotation.FilterType;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseCookie;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
@@ -68,6 +72,15 @@ class AuthControllerTest {
     
     @MockBean
     private RedisSessionService redisSessionService;
+
+    @MockBean
+    private SessionCookieFactory sessionCookieFactory;
+
+    @MockBean
+    private EmailVerificationCookieFactory emailVerificationCookieFactory;
+
+    @MockBean
+    private EmailVerificationProperties emailVerificationProperties;
     
     private RegisterRequestDto registerRequestDto;
     private LoginRequestDto loginRequestDto;
@@ -87,6 +100,12 @@ class AuthControllerTest {
         userDto = new UserDto();
         userDto.setEmail("test@example.com");
         userDto.setUsername("testuser");
+        when(sessionCookieFactory.create(anyString())).thenAnswer(invocation ->
+                ResponseCookie.from("TWN_SESSION", invocation.getArgument(0)).httpOnly(true).sameSite("Lax").build());
+        when(sessionCookieFactory.expire()).thenReturn(
+                ResponseCookie.from("TWN_SESSION", "").maxAge(0).build());
+        when(emailVerificationCookieFactory.expiredProof()).thenReturn(
+                ResponseCookie.from("TWN_EMAIL_PROOF", "").maxAge(0).build());
         
     }
 
@@ -99,7 +118,7 @@ class AuthControllerTest {
                 .user(userDto)
                 .build();
                 
-        when(authService.register(any(RegisterRequestDto.class))).thenReturn(authResponse);
+        when(authService.register(any(RegisterRequestDto.class), any())).thenReturn(authResponse);
 
         // when & then
         mockMvc.perform(post("/api/auth/register")
@@ -190,7 +209,7 @@ class AuthControllerTest {
     @DisplayName("회원가입 실패 - 이메일 중복")
     void registerFailDuplicateEmail() throws Exception {
         // given
-        when(authService.register(any(RegisterRequestDto.class)))
+        when(authService.register(any(RegisterRequestDto.class), any()))
                 .thenThrow(new AuthException("이미 사용 중인 이메일입니다.", HttpStatus.CONFLICT));
 
         // when & then
@@ -260,6 +279,32 @@ class AuthControllerTest {
                 .content(objectMapper.writeValueAsString(userDto)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.email").value(userDto.getEmail()));
+    }
+
+    @Test
+    void invalidLoginReturnsBadRequest() throws Exception {
+        loginRequestDto.setEmail("not-an-email");
+        loginRequestDto.setPassword("");
+
+        mockMvc.perform(post("/api/auth/login")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(loginRequestDto)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("validation_failed"))
+                .andExpect(jsonPath("$.fields.email").exists())
+                .andExpect(jsonPath("$.fields.password").exists());
+    }
+
+    @Test
+    void shortRegistrationPasswordReturnsBadRequest() throws Exception {
+        registerRequestDto.setPassword("short");
+
+        mockMvc.perform(post("/api/auth/register")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(registerRequestDto)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("validation_failed"))
+                .andExpect(jsonPath("$.fields.password").exists());
     }
 
 }

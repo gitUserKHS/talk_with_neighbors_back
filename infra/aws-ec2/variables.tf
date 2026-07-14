@@ -244,3 +244,15 @@ variable "github_oidc_provider_arn" {
     error_message = "github_oidc_provider_arn must be null or the ARN of the token.actions.githubusercontent.com provider."
   }
 }
+
+variable "ses_sender_identity_arn" {
+  description = "Verified Amazon SES email/domain identity ARN allowed to send verification mail. Leave null to keep email sending disabled."
+  type        = string
+  default     = null
+  nullable    = true
+
+  validation {
+    condition     = var.ses_sender_identity_arn == null || can(regex("^arn:[^:]+:ses:[a-z0-9-]+:[0-9]{12}:identity/.+$", var.ses_sender_identity_arn))
+    error_message = "ses_sender_identity_arn must be null or a verified Amazon SES identity ARN."
+  }
+}

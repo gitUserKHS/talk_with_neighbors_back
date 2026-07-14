@@ -101,6 +101,11 @@ run "secure_low_cost_defaults" {
     condition     = length(aws_budgets_budget.monthly) == 0
     error_message = "The optional budget must not block deployments when no alert email is supplied."
   }
+
+  assert {
+    condition     = length(aws_iam_role_policy.instance_ses) == 0
+    error_message = "The EC2 role must not receive SES permissions until a verified identity is explicitly supplied."
+  }
 }
 
 run "budget_email_opt_in" {
@@ -113,6 +118,19 @@ run "budget_email_opt_in" {
   assert {
     condition     = length(aws_budgets_budget.monthly) == 1
     error_message = "Supplying a budget email must create one monthly cost budget."
+  }
+}
+
+run "ses_sender_identity_opt_in" {
+  command = plan
+
+  variables {
+    ses_sender_identity_arn = "arn:aws:ses:ap-northeast-2:123456789012:identity/portfolio-owner@example.com"
+  }
+
+  assert {
+    condition     = length(aws_iam_role_policy.instance_ses) == 1
+    error_message = "Supplying a verified SES identity must add exactly one least-privilege EC2 role policy."
   }
 }
 
