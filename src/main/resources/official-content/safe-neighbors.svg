@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="800" viewBox="0 0 1200 800" role="img" aria-labelledby="title desc">
+  <title id="title">안전하게 이웃 만나기</title>
+  <desc id="desc">밝은 공원에서 인사하는 이웃과 보호 방패를 그린 이웃톡 공식 일러스트</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#dceaf2"/>
+      <stop offset="1" stop-color="#f8ead5"/>
+    </linearGradient>
+  </defs>
+  <rect width="1200" height="800" fill="url(#bg)"/>
+  <circle cx="170" cy="165" r="85" fill="#f6c875"/>
+  <path d="M0 550 C190 485 370 535 540 485 C730 430 930 455 1200 390 L1200 800 L0 800 Z" fill="#86a978"/>
+  <g transform="translate(805 180)">
+    <path d="M0 0 C80 55 140 48 180 48 V180 C180 310 95 390 0 430 C-95 390 -180 310 -180 180 V48 C-140 48 -80 55 0 0 Z" fill="#fffaf0" stroke="#52785d" stroke-width="18"/>
+    <path d="M-70 190 L-18 242 L88 125" fill="none" stroke="#e47470" stroke-width="30" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+  <g transform="translate(350 370)">
+    <circle cx="0" cy="0" r="46" fill="#664b3d"/>
+    <path d="M-58 62 Q0 25 58 62 L42 225 L-42 225 Z" fill="#f5e3cb"/>
+    <path d="M-25 225 L-32 330 M26 225 L35 330" stroke="#343434" stroke-width="25" stroke-linecap="round"/>
+    <path d="M48 78 L120 130" stroke="#f5e3cb" stroke-width="28" stroke-linecap="round"/>
+  </g>
+  <g transform="translate(530 390)">
+    <circle cx="0" cy="0" r="46" fill="#3f352f"/>
+    <path d="M-58 62 Q0 25 58 62 L42 225 L-42 225 Z" fill="#496985"/>
+    <path d="M-25 225 L-32 330 M26 225 L35 330" stroke="#343434" stroke-width="25" stroke-linecap="round"/>
+    <path d="M-48 82 L-118 127" stroke="#496985" stroke-width="28" stroke-linecap="round"/>
+  </g>
+  <rect x="55" y="55" width="550" height="146" rx="36" fill="#fffaf2" opacity="0.96"/>
+  <text x="98" y="113" font-family="sans-serif" font-size="29" font-weight="700" fill="#b65555">서로를 배려하는 첫 만남</text>
+  <text x="98" y="166" font-family="sans-serif" font-size="44" font-weight="800" fill="#334b3d">안전한 장소에서 만나요</text>
+</svg>

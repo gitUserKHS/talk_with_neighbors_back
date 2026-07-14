@@ -7,6 +7,7 @@ import com.talkwithneighbors.entity.ChatRoom;
 import com.talkwithneighbors.entity.ChatRoomType;
 import com.talkwithneighbors.entity.MeetupTimeBasis;
 import com.talkwithneighbors.entity.User;
+import com.talkwithneighbors.entity.UserAccountType;
 import com.talkwithneighbors.exception.ChatException;
 import com.talkwithneighbors.repository.ChatRoomRepository;
 import com.talkwithneighbors.repository.UserRepository;
@@ -144,12 +145,15 @@ public class HobbyMeetupService {
             }
             room.getParticipants().add(user);
             chatRoomRepository.save(room);
-            domainEventPublisher.publish(MeetupJoinedEvent.create(
-                    room.getId(),
-                    room.getName(),
-                    user.getId(),
-                    room.getCreator().getId()
-            ));
+            if (room.getCreator() == null
+                    || room.getCreator().getAccountType() != UserAccountType.SYSTEM) {
+                domainEventPublisher.publish(MeetupJoinedEvent.create(
+                        room.getId(),
+                        room.getName(),
+                        user.getId(),
+                        room.getCreator() != null ? room.getCreator().getId() : null
+                ));
+            }
         }
         return toDto(room, user);
     }

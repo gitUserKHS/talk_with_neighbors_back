@@ -89,8 +89,72 @@ spec:
                 configMapKeyRef:
                   name: runtime-config
                   key: cookie-secure
-            # Curated DTOs are returned only while the public datasets are empty.
-            - name: APP_PORTFOLIO_DEMO_ENABLED
+            - name: APP_PUBLIC_BASE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: runtime-config
+                  key: public-origin
+            - name: APP_FRONTEND_BASE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: runtime-config
+                  key: public-origin
+            - name: APP_AUTH_EMAIL_ENABLED
+              valueFrom:
+                configMapKeyRef:
+                  name: runtime-config
+                  key: auth-email-enabled
+            - name: APP_AUTH_EMAIL_REQUIRED
+              valueFrom:
+                configMapKeyRef:
+                  name: runtime-config
+                  key: auth-email-required
+            - name: APP_AUTH_EMAIL_SENDER
+              valueFrom:
+                configMapKeyRef:
+                  name: runtime-config
+                  key: auth-email-sender
+            - name: APP_AUTH_EMAIL_SES_REGION
+              valueFrom:
+                configMapKeyRef:
+                  name: runtime-config
+                  key: media-s3-region
+            - name: APP_AUTH_EMAIL_HMAC_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: app-secrets
+                  key: email-verification-hmac-secret
+            - name: APP_AUTH_EMAIL_FROM
+              valueFrom:
+                secretKeyRef:
+                  name: app-secrets
+                  key: email-verification-from
+            - name: APP_AUTH_OAUTH_GOOGLE_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: app-secrets
+                  key: google-oauth-client-id
+                  optional: true
+            - name: APP_AUTH_OAUTH_GOOGLE_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: app-secrets
+                  key: google-oauth-client-secret
+                  optional: true
+            - name: APP_AUTH_OAUTH_KAKAO_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: app-secrets
+                  key: kakao-oauth-client-id
+                  optional: true
+            - name: APP_AUTH_OAUTH_KAKAO_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: app-secrets
+                  key: kakao-oauth-client-secret
+                  optional: true
+            # Persist transparent first-party posts and meetups with stable IDs.
+            - name: APP_OFFICIAL_CONTENT_ENABLED
               value: "true"
             - name: APP_MEDIA_STORAGE_TYPE
               valueFrom:

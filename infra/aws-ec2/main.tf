@@ -646,6 +646,23 @@ resource "aws_iam_role_policy" "instance_s3" {
   policy = data.aws_iam_policy_document.instance_s3.json
 }
 
+data "aws_iam_policy_document" "instance_ses" {
+  count = var.ses_sender_identity_arn == null ? 0 : 1
+
+  statement {
+    sid       = "SendVerificationEmail"
+    actions   = ["ses:SendEmail"]
+    resources = [var.ses_sender_identity_arn]
+  }
+}
+
+resource "aws_iam_role_policy" "instance_ses" {
+  count  = var.ses_sender_identity_arn == null ? 0 : 1
+  name   = "ses-verification-email"
+  role   = aws_iam_role.instance.id
+  policy = data.aws_iam_policy_document.instance_ses[0].json
+}
+
 resource "aws_iam_instance_profile" "app" {
   name = "${var.project_name}-ec2"
   role = aws_iam_role.instance.name

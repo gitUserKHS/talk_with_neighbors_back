@@ -10,6 +10,9 @@ readonly AWS_REGION="${AWS_REGION:?AWS_REGION is required}"
 readonly MEDIA_BUCKET="${MEDIA_BUCKET:?MEDIA_BUCKET is required}"
 readonly MYSQL_PASSWORD="${MYSQL_PASSWORD:?MYSQL_PASSWORD is required}"
 readonly MYSQL_ROOT_PASSWORD="${MYSQL_ROOT_PASSWORD:?MYSQL_ROOT_PASSWORD is required}"
+readonly AUTH_EMAIL_REQUIRED="${AUTH_EMAIL_REQUIRED:-false}"
+readonly EMAIL_VERIFICATION_HMAC_SECRET="${EMAIL_VERIFICATION_HMAC_SECRET:-}"
+readonly EMAIL_VERIFICATION_FROM="${EMAIL_VERIFICATION_FROM:-}"
 
 [[ "$PUBLIC_ORIGIN" =~ ^https://([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]] || { echo "PUBLIC_ORIGIN must be a lowercase HTTPS DNS origin without a port or path" >&2; exit 1; }
 [[ -z "$ACME_EMAIL" || "$ACME_EMAIL" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,63}$ ]] || { echo "ACME_EMAIL must be empty or a valid ACME contact address" >&2; exit 1; }
@@ -17,6 +20,13 @@ readonly MYSQL_ROOT_PASSWORD="${MYSQL_ROOT_PASSWORD:?MYSQL_ROOT_PASSWORD is requ
 [[ "$MEDIA_BUCKET" =~ ^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$ ]] || { echo "Invalid S3 bucket name" >&2; exit 1; }
 (( ${#MYSQL_PASSWORD} >= 16 )) || { echo "MYSQL_PASSWORD must contain at least 16 characters" >&2; exit 1; }
 (( ${#MYSQL_ROOT_PASSWORD} >= 16 )) || { echo "MYSQL_ROOT_PASSWORD must contain at least 16 characters" >&2; exit 1; }
+[[ "$AUTH_EMAIL_REQUIRED" == "true" || "$AUTH_EMAIL_REQUIRED" == "false" ]] || { echo "AUTH_EMAIL_REQUIRED must be true or false" >&2; exit 1; }
+if [[ "$AUTH_EMAIL_REQUIRED" == "true" ]]; then
+  (( ${#EMAIL_VERIFICATION_HMAC_SECRET} >= 32 )) || { echo "EMAIL_VERIFICATION_HMAC_SECRET must contain at least 32 characters" >&2; exit 1; }
+  [[ "$EMAIL_VERIFICATION_FROM" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,63}$ ]] || { echo "EMAIL_VERIFICATION_FROM must be a valid verified SES address" >&2; exit 1; }
+fi
+[[ -z "${GOOGLE_OAUTH_CLIENT_ID:-}" && -z "${GOOGLE_OAUTH_CLIENT_SECRET:-}" || -n "${GOOGLE_OAUTH_CLIENT_ID:-}" && -n "${GOOGLE_OAUTH_CLIENT_SECRET:-}" ]] || { echo "Set both Google OAuth credentials or neither" >&2; exit 1; }
+[[ -z "${KAKAO_OAUTH_CLIENT_ID:-}" && -z "${KAKAO_OAUTH_CLIENT_SECRET:-}" || -n "${KAKAO_OAUTH_CLIENT_ID:-}" && -n "${KAKAO_OAUTH_CLIENT_SECRET:-}" ]] || { echo "Set both Kakao OAuth credentials or neither" >&2; exit 1; }
 
 umask 077
 bundle="$(mktemp -d "${RUNNER_TEMP:-/tmp}/twn-bundle.XXXXXX")"
@@ -63,12 +73,19 @@ jq -n \
   --arg origin "$PUBLIC_ORIGIN" \
   --arg region "$AWS_REGION" \
   --arg bucket "$MEDIA_BUCKET" \
-  '{apiVersion:"v1",kind:"ConfigMap",metadata:{name:"runtime-config",namespace:"talk-with-neighbors"},data:{"public-origin":$origin,"cookie-secure":"true","media-storage-type":"s3","media-s3-region":$region,"media-s3-bucket":$bucket,"media-s3-prefix":"media"}}' \
+  --arg emailRequired "$AUTH_EMAIL_REQUIRED" \
+  '{apiVersion:"v1",kind:"ConfigMap",metadata:{name:"runtime-config",namespace:"talk-with-neighbors"},data:{"public-origin":$origin,"cookie-secure":"true","auth-email-enabled":$emailRequired,"auth-email-required":$emailRequired,"auth-email-sender":(if $emailRequired == "true" then "ses" else "disabled" end),"media-storage-type":"s3","media-s3-region":$region,"media-s3-bucket":$bucket,"media-s3-prefix":"media"}}' \
   > "$bundle/runtime-config.json"
 jq -n \
   --arg mysql "$MYSQL_PASSWORD" \
   --arg root "$MYSQL_ROOT_PASSWORD" \
-  '{apiVersion:"v1",kind:"Secret",metadata:{name:"app-secrets",namespace:"talk-with-neighbors"},type:"Opaque",stringData:{"mysql-password":$mysql,"mysql-root-password":$root}}' \
+  --arg emailHmac "$EMAIL_VERIFICATION_HMAC_SECRET" \
+  --arg emailFrom "$EMAIL_VERIFICATION_FROM" \
+  --arg googleId "${GOOGLE_OAUTH_CLIENT_ID:-}" \
+  --arg googleSecret "${GOOGLE_OAUTH_CLIENT_SECRET:-}" \
+  --arg kakaoId "${KAKAO_OAUTH_CLIENT_ID:-}" \
+  --arg kakaoSecret "${KAKAO_OAUTH_CLIENT_SECRET:-}" \
+  '{apiVersion:"v1",kind:"Secret",metadata:{name:"app-secrets",namespace:"talk-with-neighbors"},type:"Opaque",stringData:{"mysql-password":$mysql,"mysql-root-password":$root,"email-verification-hmac-secret":$emailHmac,"email-verification-from":$emailFrom,"google-oauth-client-id":$googleId,"google-oauth-client-secret":$googleSecret,"kakao-oauth-client-id":$kakaoId,"kakao-oauth-client-secret":$kakaoSecret}}' \
   > "$bundle/app-secrets.json"
 
 if [[ -n "${GHCR_TOKEN:-}" && -n "${GHCR_USERNAME:-}" ]]; then

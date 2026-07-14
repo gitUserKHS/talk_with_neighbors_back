@@ -2,6 +2,7 @@ package com.talkwithneighbors.service.impl;
 
 import com.talkwithneighbors.dto.MatchProfileDto;
 import com.talkwithneighbors.entity.User;
+import com.talkwithneighbors.entity.UserAccountType;
 import com.talkwithneighbors.repository.UserRepository;
 import com.talkwithneighbors.service.UserService;
 import lombok.RequiredArgsConstructor;
@@ -100,6 +101,7 @@ public class UserServiceImpl implements UserService, UserDetailsService {
     public List<MatchProfileDto> findNearbyUsers(double latitude, double longitude, double radiusInKm) {
         return userRepository.findNearbyUsers(latitude, longitude, radiusInKm)
                 .stream()
+                .filter(user -> user.getAccountType() != UserAccountType.SYSTEM)
                 .map(this::convertToMatchProfileDto)
                 .collect(Collectors.toList());
     }
@@ -143,4 +145,4 @@ public class UserServiceImpl implements UserService, UserDetailsService {
                 authorities
         );
     }
-} 
+}

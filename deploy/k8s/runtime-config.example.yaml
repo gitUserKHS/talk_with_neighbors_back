@@ -7,6 +7,10 @@ data:
   # Use the exact browser origin. Switch cookie-secure to true with HTTPS.
   public-origin: https://talk-with-neighbors.duckdns.org
   cookie-secure: "true"
+  # Flip all three only after SES identity/IAM and GitHub secrets are ready.
+  auth-email-enabled: "false"
+  auth-email-required: "false"
+  auth-email-sender: disabled
   # The EC2 instance role supplies short-lived credentials; never put AWS keys here.
   media-storage-type: s3
   media-s3-region: ap-northeast-2

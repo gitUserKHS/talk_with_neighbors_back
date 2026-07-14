@@ -2,6 +2,8 @@ package com.talkwithneighbors.dto.publiccontent;
 
 import com.talkwithneighbors.entity.FeedMediaType;
 import com.talkwithneighbors.entity.FeedPost;
+import com.talkwithneighbors.entity.User;
+import com.talkwithneighbors.entity.UserAccountType;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -18,9 +20,10 @@ public record PublicFeedPostDto(
         LocalDateTime updatedAt,
         long likeCount,
         long commentCount,
-        boolean demo
+        boolean official
 ) {
     private static final String ANONYMOUS_AUTHOR = "이웃";
+    private static final String OFFICIAL_AUTHOR = "이웃톡 운영팀";
 
     public static PublicFeedPostDto fromEntity(FeedPost post, long likeCount, long commentCount) {
         if (!post.isPublicPreview()) {
@@ -36,9 +39,12 @@ public record PublicFeedPostDto(
             media.add(new PublicFeedMediaDto(post.getImageUrl(), FeedMediaType.IMAGE, 0));
         }
 
+        User author = post.getAuthor();
+        boolean official = author != null && author.getAccountType() == UserAccountType.SYSTEM;
+
         return new PublicFeedPostDto(
                 post.getId(),
-                ANONYMOUS_AUTHOR,
+                official ? OFFICIAL_AUTHOR : ANONYMOUS_AUTHOR,
                 post.getImageUrl(),
                 List.copyOf(media),
                 post.getCaption(),
@@ -47,7 +53,7 @@ public record PublicFeedPostDto(
                 post.getUpdatedAt(),
                 likeCount,
                 commentCount,
-                false
+                official
         );
     }
 }

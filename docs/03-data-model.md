@@ -18,6 +18,7 @@ erDiagram
     CHAT_ROOM ||--o{ MESSAGE : contains
     USER ||--o{ MESSAGE : sends
     USER ||--o{ SESSION : owns
+    USER ||--o{ USER_IDENTITY : authenticates
 ```
 
 `OFFLINE_NOTIFICATION`은 외래키 객체 대신 `user_id` 값을 직접 보관한다.
@@ -26,7 +27,9 @@ erDiagram
 
 | 테이블 | 식별자 | 주요 데이터 |
 |---|---|---|
-| `users` | 증가형 `Long` | 이메일, 사용자명, 비밀번호 해시, 프로필, 위치, 온라인 상태 |
+| `users` | 증가형 `Long` | 이메일, 사용자명, 비밀번호 해시, 비밀번호 로그인 허용 여부, `MEMBER`/`SYSTEM`, 프로필, 위치, 온라인 상태 |
+| `user_identities` | 증가형 `Long` | 공급자·불변 subject·사용자 FK·검증 이메일·마지막 로그인; 공급자 token은 저장하지 않음 |
+| `email_verification_challenges` | 무작위 UUID | 정규화 이메일, 코드/proof HMAC 해시, 만료·쿨다운·실패 횟수·확인·1회 소비 시각 |
 | `user_interests` | 사용자 FK + 값 | 사용자 관심사 목록 |
 | `matching_preferences` | 증가형 `Long` | 거리·나이·성별 조건, 사용자 1:1 관계 |
 | `matching_preferences_interests` | 선호 FK + 값 | 선호 관심사 목록 |

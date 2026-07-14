@@ -10,10 +10,6 @@ spring:
     properties:
       hibernate:
         format_sql: false
-  session:
-    cookie:
-      secure: ${APP_SESSION_COOKIE_SECURE:false}
-
 server:
   forward-headers-strategy: framework
   servlet:

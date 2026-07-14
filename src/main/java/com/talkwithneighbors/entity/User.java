@@ -55,6 +55,21 @@ public class User {
     private String password;
 
     /**
+     * SYSTEM identities own transparent first-party content but can never log in
+     * or participate in member matching. The database default keeps legacy rows
+     * as normal members when Hibernate adds this column in place.
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "account_type", nullable = false, columnDefinition = "varchar(20) default 'MEMBER'")
+    @Builder.Default
+    private UserAccountType accountType = UserAccountType.MEMBER;
+
+    @Column(name = "password_login_enabled", nullable = false,
+            columnDefinition = "boolean default true")
+    @Builder.Default
+    private Boolean passwordLoginEnabled = true;
+
+    /**
      * 사용자의 프로필 이미지 URL
      */
     private String profileImage;
@@ -162,6 +177,16 @@ public class User {
                latitude != null &&
                longitude != null &&
                address != null && !address.isEmpty();
+    }
+
+    @PrePersist
+    protected void applyAccountDefaults() {
+        if (accountType == null) {
+            accountType = UserAccountType.MEMBER;
+        }
+        if (passwordLoginEnabled == null) {
+            passwordLoginEnabled = true;
+        }
     }
 }
 

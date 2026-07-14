@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="800" viewBox="0 0 1200 800" role="img" aria-labelledby="title desc">
+  <title id="title">퇴근 후 우리 동네 산책</title>
+  <desc id="desc">노을 아래 나무와 골목길을 걷는 두 이웃을 그린 이웃톡 공식 일러스트</desc>
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffd6c2"/>
+      <stop offset="0.55" stop-color="#f5d4a8"/>
+      <stop offset="1" stop-color="#f4ead7"/>
+    </linearGradient>
+    <linearGradient id="path" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#f7f0e6"/>
+      <stop offset="1" stop-color="#d9c5aa"/>
+    </linearGradient>
+  </defs>
+  <rect width="1200" height="800" fill="url(#sky)"/>
+  <circle cx="930" cy="160" r="82" fill="#ff9e7a" opacity="0.85"/>
+  <path d="M0 490 C220 420 430 465 610 420 C820 370 990 400 1200 350 L1200 800 L0 800 Z" fill="#73946b"/>
+  <path d="M390 800 C430 650 560 535 745 430 C675 575 650 690 690 800 Z" fill="url(#path)"/>
+  <g fill="#42654a">
+    <circle cx="165" cy="410" r="95"/><rect x="150" y="405" width="30" height="180" rx="15"/>
+    <circle cx="1060" cy="355" r="115"/><rect x="1042" y="350" width="36" height="210" rx="18"/>
+  </g>
+  <g transform="translate(540 455)">
+    <circle cx="0" cy="0" r="31" fill="#5b4637"/>
+    <path d="M-35 40 Q0 15 35 40 L28 145 L-26 145 Z" fill="#fff5df"/>
+    <path d="M-12 145 L-18 225 M15 145 L23 225" stroke="#343434" stroke-width="18" stroke-linecap="round"/>
+  </g>
+  <g transform="translate(655 470)">
+    <circle cx="0" cy="0" r="31" fill="#3f342e"/>
+    <path d="M-35 40 Q0 15 35 40 L28 145 L-26 145 Z" fill="#465d76"/>
+    <path d="M-12 145 L-18 225 M15 145 L23 225" stroke="#303030" stroke-width="18" stroke-linecap="round"/>
+  </g>
+  <rect x="62" y="58" width="468" height="162" rx="36" fill="#fffaf2" opacity="0.94"/>
+  <text x="104" y="125" font-family="sans-serif" font-size="31" font-weight="700" fill="#5c4033">이웃톡 운영팀 기록</text>
+  <text x="104" y="180" font-family="sans-serif" font-size="48" font-weight="800" fill="#2d4434">퇴근 후 30분 산책</text>
+</svg>

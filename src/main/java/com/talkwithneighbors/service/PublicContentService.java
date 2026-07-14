@@ -10,7 +10,6 @@ import com.talkwithneighbors.repository.PostLikeRepository;
 import com.talkwithneighbors.repository.PostCommentRepository;
 import com.talkwithneighbors.repository.publiccontent.PublicFeedPostRepository;
 import com.talkwithneighbors.repository.publiccontent.PublicMeetupRepository;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
@@ -25,27 +24,20 @@ public class PublicContentService {
     private final PostCommentRepository postCommentRepository;
     private final PublicMeetupRepository meetupRepository;
     private final PostLikeRepository postLikeRepository;
-    private final boolean portfolioDemoEnabled;
-
     public PublicContentService(
             PublicFeedPostRepository feedPostRepository,
             PostCommentRepository postCommentRepository,
             PublicMeetupRepository meetupRepository,
-            PostLikeRepository postLikeRepository,
-            @Value("${app.portfolio-demo.enabled:false}") boolean portfolioDemoEnabled
+            PostLikeRepository postLikeRepository
     ) {
         this.feedPostRepository = feedPostRepository;
         this.postCommentRepository = postCommentRepository;
         this.meetupRepository = meetupRepository;
         this.postLikeRepository = postLikeRepository;
-        this.portfolioDemoEnabled = portfolioDemoEnabled;
     }
 
     public Page<PublicFeedPostDto> getFeed(Pageable pageable) {
         Page<FeedPost> page = feedPostRepository.findPublicFeed(pageable);
-        if (portfolioDemoEnabled && page.getTotalElements() == 0) {
-            return PortfolioDemoContent.feed(pageable);
-        }
         return page.map(post -> PublicFeedPostDto.fromEntity(
                         post,
                         postLikeRepository.countByPost_Id(post.getId()),
@@ -63,11 +55,6 @@ public class PublicContentService {
                         normalizedInterest,
                         pageable
                 );
-        if (portfolioDemoEnabled
-                && page.getTotalElements() == 0
-                && meetupRepository.countPublicMeetups(ChatRoomType.GROUP, ChatRoomStatus.ACTIVE) == 0) {
-            return PortfolioDemoContent.meetups(normalizedKeyword, normalizedInterest, pageable);
-        }
         return page.map(PublicMeetupDto::fromEntity);
     }
 
