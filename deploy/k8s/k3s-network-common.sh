@@ -35,3 +35,19 @@ k3s_config_has_desired_network() {
     grep -Fqx 'service-cidr: "10.96.0.0/16"' "$config_file" &&
     grep -Fqx 'cluster-dns: "10.96.0.10"' "$config_file"
 }
+
+k3s_wait_for_single_node_registration() {
+  local attempts="${1:-120}"
+  local attempt node_name
+  for ((attempt = 1; attempt <= attempts; attempt++)); do
+    if node_name="$(
+      k3s kubectl get nodes -o json 2>/dev/null \
+        | jq -er 'if (.items | length) == 1 then .items[0].metadata.name else empty end'
+    )" && [[ -n "$node_name" ]]; then
+      printf '%s\n' "$node_name"
+      return 0
+    fi
+    sleep 5
+  done
+  return 1
+}

@@ -82,21 +82,64 @@ jobs:
               /var/lib/talk-with-neighbors/migrations/mysql-restore-v1.pending.json \
               /var/lib/talk-with-neighbors/migrations/mysql-restore-v1.done.json; do
               marker_name="$(basename "$marker")"
-              if [ -f "$marker" ] && [ ! -L "$marker" ]; then
+              if [ ! -e "$marker" ] && [ ! -L "$marker" ]; then
+                printf "%s absent\n" "$marker_name"
+              elif [ -L "$marker" ]; then
+                printf "%s unsafe-symlink\n" "$marker_name"
+              elif [ -f "$marker" ]; then
                 marker_phase="$(jq -r ".phase // \"n/a\"" "$marker" 2>/dev/null || echo invalid)"
                 marker_release="$(jq -r ".release_id // \"n/a\"" "$marker" 2>/dev/null || echo invalid)"
                 printf "%s owner=%s mode=%s phase=%s release=%s\n" \
                   "$marker_name" "$(stat -c "%u" "$marker")" "$(stat -c "%a" "$marker")" \
                   "$marker_phase" "$marker_release"
               else
-                printf "%s missing-or-unsafe\n" "$marker_name"
+                printf "%s unsafe-non-regular\n" "$marker_name"
               fi
             done
             echo "backup-directories:"
-            find /var/lib/talk-with-neighbors/backups -mindepth 1 -maxdepth 1 -type d \
-              -name "k3s-network-v1-*" -printf "%f\n" 2>/dev/null | sort || true
+            for backup in /var/lib/talk-with-neighbors/backups/k3s-network-v1-*; do
+              [ -e "$backup" ] || [ -L "$backup" ] || continue
+              backup_name="$(basename "$backup")"
+              if [ ! -d "$backup" ] || [ -L "$backup" ]; then
+                printf "%s unsafe\n" "$backup_name"
+                continue
+              fi
+              backup_owner="$(stat -c "%u" "$backup")"
+              backup_mode="$(stat -c "%a" "$backup")"
+              if [ -s "$backup/SHA256SUMS" ] && [ -s "$backup/mysql.sql.gz" ] \
+                && [ -s "$backup/server.tar.gz" ] && [ -s "$backup/k3s-config.yaml" ]; then
+                checksum_status=fail
+                mysql_gzip_status=fail
+                server_tar_status=fail
+                (cd "$backup" && sha256sum --check --status SHA256SUMS) && checksum_status=ok
+                gzip -t "$backup/mysql.sql.gz" && mysql_gzip_status=ok
+                tar -tzf "$backup/server.tar.gz" >/dev/null && server_tar_status=ok
+                printf "%s owner=%s mode=%s full-backup checksum=%s mysql-gzip=%s server-tar=%s\n" \
+                  "$backup_name" "$backup_owner" "$backup_mode" "$checksum_status" \
+                  "$mysql_gzip_status" "$server_tar_status"
+              else
+                printf "%s owner=%s mode=%s partial-backup\n" \
+                  "$backup_name" "$backup_owner" "$backup_mode"
+              fi
+            done
+            if flock -n /run/lock/talk-with-neighbors-deploy.lock -c true; then
+              echo "deploy-lock=free"
+            else
+              echo "deploy-lock=busy"
+            fi
             k3s kubectl get nodes -o wide
             k3s kubectl -n "$namespace" get pods,deployments,statefulsets,services,ingress -o wide
+            pvc_json="$(k3s kubectl -n "$namespace" get persistentvolumeclaims -o json)"
+            echo "pvc-total=$(printf "%s" "$pvc_json" | jq ".items | length")"
+            echo "pvc-bound=$(printf "%s" "$pvc_json" | jq "[.items[] | select(.status.phase == \"Bound\")] | length")"
+            storage_path=/var/lib/rancher/k3s/storage
+            if [ -d "$storage_path" ] && [ ! -L "$storage_path" ] \
+              && [ "$(readlink -e "$storage_path")" = "$storage_path" ]; then
+              echo "storage-path=safe"
+              echo "storage-directory-count=$(find "$storage_path" -mindepth 1 -maxdepth 1 -type d | wc -l)"
+            else
+              echo "storage-path=unsafe"
+            fi
             k3s kubectl -n kube-system get pods,services -o wide
             k3s kubectl -n kube-system get jobs,helmcharts.helm.cattle.io -o wide
             echo "=== cluster CIDR and resolver routes ==="
@@ -143,6 +186,16 @@ jobs:
               MYSQL_PWD="$MYSQL_PASSWORD" mysql -N -u twn talk_with_neighbors -e "SELECT 1" >/dev/null
             '\''; then
               echo "database-query=up"
+              database_counts="$(k3s kubectl -n "$namespace" exec statefulset/mysql -- sh -ec '\''
+                MYSQL_PWD="$MYSQL_PASSWORD" mysql -N -u twn talk_with_neighbors -e "
+                  SELECT CONCAT(\"application-table-count=\", COUNT(*))
+                    FROM information_schema.tables WHERE table_schema = DATABASE();
+                  SELECT CONCAT(\"users-row-count=\", COUNT(*)) FROM users;
+                  SELECT CONCAT(\"feed-posts-row-count=\", COUNT(*)) FROM feed_posts;
+                  SELECT CONCAT(\"messages-row-count=\", COUNT(*)) FROM messages;
+                "
+              '\'' 2>/dev/null || echo "database-counts=unavailable")"
+              printf "%s\n" "$database_counts"
             else
               echo "database-query=down"
             fi
