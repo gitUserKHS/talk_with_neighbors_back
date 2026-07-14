@@ -109,7 +109,9 @@ management:
         liveness:
           include: livenessState
         readiness:
-          include: readinessState,db,redis,diskSpace,mediaStorage
+          include: readinessState,db,redis,diskSpace
+        storage:
+          include: mediaStorage
 
 cors:
   allowed-origins: http://localhost:3000

@@ -63,10 +63,13 @@ kubectl=(k3s kubectl)
 "${kubectl[@]}" apply -f "$RELEASE_DIR/app-secrets.json"
 "${kubectl[@]}" apply -f "$RELEASE_DIR/ghcr-pull.json"
 cleanup_plaintext_secrets
-"${kubectl[@]}" apply -k "$RELEASE_DIR/base"
 
+"${kubectl[@]}" -n "$NAMESPACE" apply -f "$RELEASE_DIR/base/mysql.yaml"
+"${kubectl[@]}" -n "$NAMESPACE" apply -f "$RELEASE_DIR/base/redis.yaml"
 "${kubectl[@]}" -n "$NAMESPACE" rollout status statefulset/mysql --timeout=8m
 "${kubectl[@]}" -n "$NAMESPACE" rollout status statefulset/redis --timeout=5m
+
+"${kubectl[@]}" apply -k "$RELEASE_DIR/base"
 "${kubectl[@]}" -n "$NAMESPACE" rollout status deployment/backend --timeout=10m
 "${kubectl[@]}" -n "$NAMESPACE" rollout status deployment/frontend --timeout=5m
 "${kubectl[@]}" -n "$NAMESPACE" exec deployment/backend -- \

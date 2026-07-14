@@ -75,6 +75,8 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - name: Verify staged deployment order
+        run: bash deploy/k8s/tests/deploy-on-node-order.sh
       - name: Run ShellCheck on deployment scripts
         run: >-
           docker run --rm
@@ -83,6 +85,7 @@ jobs:
           /repo/deploy/k8s/build-bundle.sh
           /repo/deploy/k8s/deploy-via-ssm.sh
           /repo/deploy/k8s/deploy-on-node.sh
+          /repo/deploy/k8s/tests/deploy-on-node-order.sh
       - name: Run actionlint
         run: >-
           docker run --rm
