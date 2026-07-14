@@ -86,6 +86,11 @@ jobs:
           /repo/deploy/k8s/deploy-via-ssm.sh
           /repo/deploy/k8s/deploy-on-node.sh
           /repo/deploy/k8s/tests/deploy-on-node-order.sh
+          /repo/deploy/k8s/k3s-network-common.sh
+          /repo/deploy/k8s/reinitialize-k3s-network.sh
+          /repo/deploy/k8s/tests/test-k3s-network-reinitialize.sh
+      - name: Test guarded k3s network migration
+        run: bash deploy/k8s/tests/test-k3s-network-reinitialize.sh
       - name: Run actionlint
         run: >-
           docker run --rm

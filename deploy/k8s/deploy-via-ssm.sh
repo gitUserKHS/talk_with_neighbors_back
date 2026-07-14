@@ -8,7 +8,13 @@ readonly BUNDLE_ARCHIVE="${4:?bundle archive is required}"
 readonly BACKEND_IMAGE="${5:?backend digest is required}"
 readonly FRONTEND_IMAGE="${6:?frontend digest is required}"
 readonly RELEASE_ID="${7:?release id is required}"
+readonly REINITIALIZE_K3S_NETWORK="${8:-false}"
+readonly REINITIALIZE_CONFIRMATION="${9:-}"
 readonly OBJECT_URI="s3://${DEPLOY_BUCKET}/${OBJECT_KEY}"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+readonly SCRIPT_DIR
+# shellcheck source=k3s-network-common.sh
+source "$SCRIPT_DIR/k3s-network-common.sh"
 
 [[ "$INSTANCE_ID" =~ ^i-[a-f0-9]{8,17}$ ]] || { echo "Invalid EC2 instance id" >&2; exit 1; }
 [[ "$DEPLOY_BUCKET" =~ ^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$ ]] || { echo "Invalid deployment bucket" >&2; exit 1; }
@@ -17,6 +23,13 @@ readonly OBJECT_URI="s3://${DEPLOY_BUCKET}/${OBJECT_KEY}"
 [[ "$FRONTEND_IMAGE" =~ ^ghcr\.io/gituserkhs/talk_with_neighbors_front@sha256:[a-f0-9]{64}$ ]] || { echo "Invalid frontend digest" >&2; exit 1; }
 [[ "$RELEASE_ID" =~ ^[0-9]+-[0-9]+$ ]] || { echo "Invalid release id" >&2; exit 1; }
 [[ -s "$BUNDLE_ARCHIVE" ]] || { echo "Deployment bundle is missing" >&2; exit 1; }
+[[ "$REINITIALIZE_K3S_NETWORK" == "true" || "$REINITIALIZE_K3S_NETWORK" == "false" ]] || { echo "Invalid k3s reinitialize flag" >&2; exit 1; }
+expected_confirmation="$(k3s_expected_reinitialize_confirmation "$INSTANCE_ID")"
+if [[ "$REINITIALIZE_K3S_NETWORK" == "true" ]]; then
+  [[ "$REINITIALIZE_CONFIRMATION" == "$expected_confirmation" ]] || { echo "The k3s network confirmation is invalid" >&2; exit 1; }
+else
+  [[ -z "$REINITIALIZE_CONFIRMATION" ]] || { echo "A k3s network confirmation is only allowed when reinitialization is enabled" >&2; exit 1; }
+fi
 
 umask 077
 parameters_file="$(mktemp "${RUNNER_TEMP:-/tmp}/twn-ssm-parameters.XXXXXX.json")"
@@ -51,6 +64,9 @@ jq -n \
   --arg backend "$BACKEND_IMAGE" \
   --arg frontend "$FRONTEND_IMAGE" \
   --arg release "$RELEASE_ID" \
+  --arg instance "$INSTANCE_ID" \
+  --arg reset "$REINITIALIZE_K3S_NETWORK" \
+  --arg confirmation "$REINITIALIZE_CONFIRMATION" \
   '{commands:[
     "set -eu",
     "umask 077",
@@ -66,9 +82,10 @@ jq -n \
     "find \"$release_dir\" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +",
     "tar -xzf /tmp/twn-deploy.tgz -C \"$release_dir\"",
     "shred -u -- /tmp/twn-deploy.tgz 2>/dev/null || rm -f -- /tmp/twn-deploy.tgz",
-    "chmod 0700 \"$release_dir/deploy-on-node.sh\"",
+    "chmod 0700 \"$release_dir/deploy-on-node.sh\" \"$release_dir/reinitialize-k3s-network.sh\"",
+    ("if [ " + ($reset | @sh) + " = true ]; then /bin/bash \"$release_dir/reinitialize-k3s-network.sh\" " + ($instance | @sh) + " " + ($confirmation | @sh) + " " + ($release | @sh) + "; fi"),
     ("/bin/bash \"$release_dir/deploy-on-node.sh\" \"" + $backend + "\" \"" + $frontend + "\" \"" + $release + "\"")
-  ],executionTimeout:["2400"]}' > "$parameters_file"
+  ],executionTimeout:["3600"]}' > "$parameters_file"
 
 command_id="$(aws ssm send-command \
   --instance-ids "$INSTANCE_ID" \
@@ -81,7 +98,7 @@ command_id="$(aws ssm send-command \
 [[ -n "$command_id" && "$command_id" != "None" ]] || { echo "SSM did not return a command id" >&2; exit 1; }
 echo "SSM command: $command_id"
 
-for _ in {1..270}; do
+for _ in {1..390}; do
   status="$(aws ssm get-command-invocation \
     --command-id "$command_id" \
     --instance-id "$INSTANCE_ID" \
@@ -109,5 +126,5 @@ for _ in {1..270}; do
   esac
 done
 
-echo "SSM deployment exceeded 45 minutes" >&2
+echo "SSM deployment exceeded 65 minutes" >&2
 exit 1

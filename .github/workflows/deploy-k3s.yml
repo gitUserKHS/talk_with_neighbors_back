@@ -20,6 +20,15 @@ on:
         required: true
         default: false
         type: boolean
+      reinitialize_k3s_network:
+        description: "One-time destructive k3s network reset; requires the exact instance-scoped confirmation"
+        required: true
+        default: false
+        type: boolean
+      reinitialize_confirmation:
+        description: "Leave blank normally; reset requires REINITIALIZE_K3S_NETWORK:<instance>:pods=10.244.0.0/16:services=10.96.0.0/16:dns=10.96.0.10"
+        required: false
+        type: string
 
 concurrency:
   group: ec2-k3s-production
@@ -254,7 +263,7 @@ jobs:
     name: Deploy through AWS Systems Manager
     if: github.ref == 'refs/heads/main' && inputs.public_origin != 'diagnose://k3s'
     runs-on: ubuntu-latest
-    timeout-minutes: 55
+    timeout-minutes: 75
     environment: production
     env:
       AWS_REGION: ${{ vars.AWS_REGION || 'ap-northeast-2' }}
@@ -266,6 +275,9 @@ jobs:
       FRONTEND_IMAGE: ${{ inputs.frontend_image }}
       PUBLIC_ORIGIN_INPUT: ${{ inputs.public_origin }}
       START_IF_STOPPED: ${{ inputs.start_if_stopped }}
+      REINITIALIZE_K3S_NETWORK: ${{ inputs.reinitialize_k3s_network }}
+      REINITIALIZE_CONFIRMATION: ${{ inputs.reinitialize_confirmation }}
+      K3S_NETWORK_REINITIALIZE_ALLOWED: ${{ vars.K3S_NETWORK_REINITIALIZE_ALLOWED }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
@@ -287,6 +299,14 @@ jobs:
           (( ${#MYSQL_ROOT_PASSWORD} >= 16 )) || { echo "MYSQL_ROOT_PASSWORD must contain at least 16 characters" >&2; exit 1; }
           (( ${#JWT_SECRET} >= 32 )) || { echo "JWT_SECRET must contain at least 32 characters" >&2; exit 1; }
           [[ -z "$GHCR_USERNAME" && -z "$GHCR_TOKEN" || -n "$GHCR_USERNAME" && -n "$GHCR_TOKEN" ]] || { echo "Set both GHCR credentials or neither" >&2; exit 1; }
+          expected_confirmation="REINITIALIZE_K3S_NETWORK:${INSTANCE_ID}:pods=10.244.0.0/16:services=10.96.0.0/16:dns=10.96.0.10"
+          if [[ "$REINITIALIZE_K3S_NETWORK" == "true" ]]; then
+            [[ "$K3S_NETWORK_REINITIALIZE_ALLOWED" == "true" ]] || { echo "The production Environment must explicitly set K3S_NETWORK_REINITIALIZE_ALLOWED=true" >&2; exit 1; }
+            [[ "$REINITIALIZE_CONFIRMATION" == "$expected_confirmation" ]] || { echo "The instance-scoped k3s network confirmation is invalid" >&2; exit 1; }
+          else
+            [[ "$REINITIALIZE_K3S_NETWORK" == "false" ]] || { echo "Invalid k3s reinitialize flag" >&2; exit 1; }
+            [[ -z "$REINITIALIZE_CONFIRMATION" ]] || { echo "Clear the k3s network confirmation when reinitialization is disabled" >&2; exit 1; }
+          fi
 
       - name: Configure short-lived AWS credentials
         id: aws
@@ -346,7 +366,9 @@ jobs:
             "$RUNNER_TEMP/deploy-bundle.tgz" \
             "$BACKEND_IMAGE" \
             "$FRONTEND_IMAGE" \
-            "${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+            "${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            "$REINITIALIZE_K3S_NETWORK" \
+            "$REINITIALIZE_CONFIRMATION"
 
       - name: Run strict public smoke tests
         env:
