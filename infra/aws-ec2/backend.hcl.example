@@ -1,0 +1,8 @@
+# Copy this file to backend.hcl and replace ACCOUNT_ID with the target AWS
+# account ID. The dedicated bucket is bootstrapped by CloudFormation and is
+# intentionally outside this Terraform stack's destroy lifecycle.
+bucket       = "talk-with-neighbors-tfstate-ACCOUNT_ID"
+key          = "talk-with-neighbors/production/terraform.tfstate"
+region       = "ap-northeast-2"
+encrypt      = true
+use_lockfile = true
