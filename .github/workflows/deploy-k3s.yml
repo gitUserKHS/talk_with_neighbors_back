@@ -62,29 +62,44 @@ jobs:
           namespace=talk-with-neighbors
           output=/tmp/twn-k3s-diagnostics.txt
           redacted=/tmp/twn-k3s-diagnostics-redacted.txt
+          compact=/tmp/twn-k3s-diagnostics-compact.txt
+          encoded=/tmp/twn-k3s-diagnostics.b64
           {
             date --iso-8601=seconds
             k3s kubectl get nodes -o wide
             k3s kubectl -n "$namespace" get pods,deployments,statefulsets,services,ingress -o wide
             k3s kubectl -n kube-system get pods,services -o wide
             k3s kubectl -n kube-system get jobs,helmcharts.helm.cattle.io -o wide
+            echo "=== cluster CIDR and resolver routes ==="
+            k3s kubectl get nodes \
+              -o jsonpath="{range .items[*]}{.metadata.name}{\" podCIDR=\"}{.spec.podCIDR}{\"\\n\"}{end}"
+            ip route get 10.42.0.2 || true
+            ip -4 route show table all | tail -n 80
+            cat /run/systemd/resolve/resolv.conf 2>/dev/null || true
             echo "=== Traefik installer diagnostics ==="
-            k3s kubectl -n kube-system describe job helm-install-traefik || true
-            k3s kubectl -n kube-system describe helmchart.helm.cattle.io traefik || true
-            k3s kubectl -n kube-system logs job/helm-install-traefik \
-              --all-containers=true --tail=300 || true
-            k3s kubectl -n kube-system logs job/helm-install-traefik \
-              --all-containers=true --previous --tail=300 || true
+            k3s kubectl -n kube-system get helmchart.helm.cattle.io traefik \
+              -o jsonpath="chart={.spec.chart}{\"\\n\"}{range .status.conditions[*]}{.type}{\"=\"}{.status}{\" reason=\"}{.reason}{\" message=\"}{.message}{\"\\n\"}{end}" \
+              || true
+            traefik_pod="$(k3s kubectl -n kube-system get pod \
+              -l batch.kubernetes.io/job-name=helm-install-traefik \
+              -o jsonpath="{.items[0].metadata.name}" 2>/dev/null || true)"
+            if [ -n "$traefik_pod" ]; then
+              k3s kubectl -n kube-system get pod "$traefik_pod" \
+                -o jsonpath="reason={.status.containerStatuses[0].lastState.terminated.reason}{\" code=\"}{.status.containerStatuses[0].lastState.terminated.exitCode}{\" started=\"}{.status.containerStatuses[0].lastState.terminated.startedAt}{\" finished=\"}{.status.containerStatuses[0].lastState.terminated.finishedAt}{\"\\n\"}" \
+                || true
+              k3s kubectl -n kube-system logs "$traefik_pod" \
+                --all-containers=true --tail=80 || true
+              k3s kubectl -n kube-system logs "$traefik_pod" \
+                --all-containers=true --previous --tail=80 || true
+            fi
+            k3s kubectl -n kube-system get events \
+              --sort-by=.metadata.creationTimestamp | tail -n 60
             k3s kubectl -n "$namespace" get endpointslice \
-              -l kubernetes.io/service-name=backend -o wide
-            k3s kubectl -n "$namespace" get pods -o json
-            k3s kubectl -n "$namespace" describe pods -l app.kubernetes.io/name=backend
-            k3s kubectl -n "$namespace" get events --sort-by=.metadata.creationTimestamp
-            echo "=== isolated actuator components ==="
-            for health_path in \
-              liveness readiness \
-              readiness/db readiness/redis readiness/diskSpace readiness/mediaStorage \
-              db redis diskSpace mediaStorage; do
+              -l kubernetes.io/service-name=backend \
+              -o jsonpath="{range .items[*].endpoints[*]}{.addresses}{\" ready=\"}{.conditions.ready}{\" serving=\"}{.conditions.serving}{\"\\n\"}{end}" \
+              || true
+            echo "=== actuator probes ==="
+            for health_path in liveness readiness; do
               started_at="$(date +%s)"
               health_result=0
               health_output="$(k3s kubectl -n "$namespace" exec deployment/backend -- \
@@ -141,45 +156,33 @@ jobs:
             k3s kubectl -n "$namespace" exec deployment/backend -- sh -ec '\''
               cat /etc/resolv.conf
               cat /proc/net/route
-              for hostname in "$1" "$2"; do
-                echo "dns-host=$hostname"
-                getent ahostsv4 "$hostname" || true
-              done
+              echo "dns-host=$1"
+              timeout 8 getent ahostsv4 "$1" || true
             '\'' sh \
-              "${media_bucket}.s3.${media_region}.amazonaws.com" \
-              "s3.${media_region}.amazonaws.com" || true
-            for route_url in \
-              "https://${media_bucket}.s3.${media_region}.amazonaws.com/" \
-              "https://s3.${media_region}.amazonaws.com/"; do
-              echo "https-route=$route_url"
-              k3s kubectl -n "$namespace" exec deployment/backend -- \
-                wget --timeout=8 --tries=1 --server-response --spider \
-                "$route_url" 2>&1 || true
-            done
+              "${media_bucket}.s3.${media_region}.amazonaws.com" || true
+            route_url="https://${media_bucket}.s3.${media_region}.amazonaws.com/"
+            echo "https-route=$route_url"
+            k3s kubectl -n "$namespace" exec deployment/backend -- \
+              wget -4 --timeout=8 --tries=1 --server-response --spider \
+              "$route_url" 2>&1 | tail -n 30 || true
             echo "=== node forwarding and masquerade rules ==="
             sysctl net.ipv4.ip_forward || true
-            iptables -t nat -S POSTROUTING || true
-            iptables -t nat -S 2>/dev/null \
-              | grep -E "(FLANNEL|flannel|CNI|KUBE|MASQ)" || true
-            journalctl --unit k3s --no-pager --since "30 minutes ago" --lines 300 || true
-            echo "=== backend cgroup and process resources ==="
-            k3s kubectl -n "$namespace" exec deployment/backend -- sh -ec '\''
-              grep -E "^(Threads|VmRSS|VmHWM|FDSize):" /proc/1/status || true
-              for metric in memory.current memory.events cpu.stat; do
-                echo "$metric"
-                cat "/sys/fs/cgroup/$metric" 2>/dev/null || true
-              done
-              df -h /tmp /app
-            '\'' || true
+            iptables-save -t nat -c 2>/dev/null \
+              | grep -E "(FLANNEL|flannel|CNI|KUBE|MASQ|10\\.42)" \
+              | tail -n 100 || true
+            journalctl --unit k3s --no-pager --since "30 minutes ago" \
+              | grep -Ei "(traefik|helm|flannel|iptables|network)" \
+              | tail -n 100 || true
             echo "=== node listeners and resources ==="
             ss -lnt
             free -m
             df -h / /var/lib/rancher/k3s
             echo "=== node-local ingress probe ==="
-            wget --timeout=5 --tries=1 --server-response -qO /dev/null \
-              http://127.0.0.1/healthz 2>&1 || true
-            k3s kubectl -n "$namespace" logs deployment/backend --all-containers=true --tail=300 || true
-            k3s kubectl -n "$namespace" logs deployment/backend --all-containers=true --previous --tail=300 || true
+            ingress_result=0
+            ingress_output="$(wget --timeout=5 --tries=1 --server-response --spider \
+              http://127.0.0.1/healthz 2>&1)" || ingress_result="$?"
+            printf "%s\n" "$ingress_output" | tail -n 20
+            echo "node-local-ingress-rc=$ingress_result"
           } >"$output" 2>&1
           sed -E \
             -e "/(authorization|cookie|password|secret|session([ _-]?id)?|token)/I c\\[REDACTED SENSITIVE LOG LINE]" \
@@ -187,8 +190,18 @@ jobs:
             -e "s/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/[REDACTED_UUID]/g" \
             -e "s/eyJ[A-Za-z0-9._-]+/[REDACTED_JWT]/g" \
             "$output" >"$redacted"
-          gzip -9 -c "$redacted" | base64 -w0
-          shred -u -- "$output" "$redacted" 2>/dev/null || rm -f -- "$output" "$redacted"'
+          gzip -9 -c "$redacted" | base64 -w0 >"$encoded"
+          if [ "$(wc -c <"$encoded")" -gt 20000 ]; then
+            {
+              head -n 300 "$redacted"
+              echo "[DIAGNOSTIC OUTPUT COMPACTED TO FIT SSM LIMIT]"
+              tail -n 300 "$redacted"
+            } >"$compact"
+            gzip -9 -c "$compact" | base64 -w0 >"$encoded"
+          fi
+          cat "$encoded"
+          shred -u -- "$output" "$redacted" "$compact" "$encoded" 2>/dev/null \
+            || rm -f -- "$output" "$redacted" "$compact" "$encoded"'
           jq -n --arg script "$diagnostic_script" '{commands:[$script],executionTimeout:["180"]}' > "$parameters_file"
 
           command_id="$(aws ssm send-command \
