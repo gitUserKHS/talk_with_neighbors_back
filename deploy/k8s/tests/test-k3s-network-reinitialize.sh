@@ -38,6 +38,12 @@ fi
 grep -Fq 'flock -n 9' "$SCRIPT_DIR/reinitialize-k3s-network.sh" || fail "Migration lock is missing"
 grep -Fq 'k3s-network-v1.done.json' "$SCRIPT_DIR/reinitialize-k3s-network.sh" || fail "One-time migration marker is missing"
 grep -Fq 'mysql-restore-v1.pending.json' "$SCRIPT_DIR/deploy-on-node.sh" || fail "Pending MySQL restore support is missing"
+grep -Fq 'executionTimeout:["9000"]' "$SCRIPT_DIR/deploy-via-ssm.sh" || fail "The remote rollback window is too short"
+grep -Fq 'select(.conditions.ready != false)' "$SCRIPT_DIR/reinitialize-k3s-network.sh" || fail "Traefik readiness is not checked"
+deploy_lock_line="$(grep -nF -m1 'exec 8>/run/lock/talk-with-neighbors-deploy.lock' "$SCRIPT_DIR/deploy-via-ssm.sh" | cut -d: -f1)"
+release_dir_line="$(grep -nF -m1 'release_dir=/var/lib/talk-with-neighbors/release' "$SCRIPT_DIR/deploy-via-ssm.sh" | cut -d: -f1)"
+[[ "$deploy_lock_line" =~ ^[0-9]+$ && "$release_dir_line" =~ ^[0-9]+$ && "$deploy_lock_line" -lt "$release_dir_line" ]] || \
+  fail "The on-node deployment lock must be acquired before the shared release directory is touched"
 
 restore_call_line="$(grep -n '^  restore_pending_mysql_dump$' "$SCRIPT_DIR/deploy-on-node.sh" | cut -d: -f1)"
 full_apply_line="$(grep -n 'apply -k "$RELEASE_DIR/base"' "$SCRIPT_DIR/deploy-on-node.sh" | cut -d: -f1)"

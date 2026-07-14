@@ -79,8 +79,10 @@ wait_for_deployment() {
   local attempt
   for ((attempt = 1; attempt <= attempts; attempt++)); do
     if k3s kubectl -n "$namespace" get "deployment/$deployment" >/dev/null 2>&1; then
-      k3s kubectl -n "$namespace" rollout status "deployment/$deployment" --timeout=5m
-      return 0
+      if k3s kubectl -n "$namespace" rollout status "deployment/$deployment" --timeout=5m; then
+        return 0
+      fi
+      return 1
     fi
     sleep 5
   done
@@ -119,13 +121,16 @@ safe_remove_cluster_state() {
       /var/lib/rancher/k3s/server|/var/lib/rancher/k3s/agent|/var/lib/cni|/etc/cni/net.d|/var/lib/kubelet/pods|/var/lib/kubelet/plugins|/var/lib/kubelet/plugins_registry|/run/k3s|/run/flannel|/etc/rancher/node/password)
         ;;
       *)
-        die "Refusing to remove an unexpected path: $path"
+        echo "Refusing to remove an unexpected path: $path" >&2
+        return 1
         ;;
     esac
-    [[ "$path" != "$K3S_STORAGE_DIR" && "$path" != "$K3S_STORAGE_DIR/"* ]] || \
-      die "Refusing to remove local persistent storage"
+    if [[ "$path" == "$K3S_STORAGE_DIR" || "$path" == "$K3S_STORAGE_DIR/"* ]]; then
+      echo "Refusing to remove local persistent storage" >&2
+      return 1
+    fi
     if [[ -e "$path" || -L "$path" ]]; then
-      rm -rf --one-file-system -- "$path"
+      rm -rf --one-file-system -- "$path" || return 1
     fi
   done
 }
@@ -141,6 +146,14 @@ restore_workload_replicas() {
 deployment backend $original_backend_replicas
 statefulset mysql $original_mysql_replicas
 statefulset redis $original_redis_replicas
+EOF
+  while read -r kind name replicas; do
+    [[ "$replicas" =~ ^[1-9][0-9]*$ ]] || continue
+    k3s kubectl -n "$NAMESPACE" rollout status "$kind/$name" --timeout=5m || return 1
+  done <<EOF
+statefulset mysql $original_mysql_replicas
+statefulset redis $original_redis_replicas
+deployment backend $original_backend_replicas
 EOF
   backend_scaled=false
 }
@@ -277,9 +290,13 @@ done
 (( original_mysql_replicas == 1 )) || die "The migration expects one MySQL replica"
 
 server_size_kib="$(du -sk "$K3S_SERVER_DIR" | awk '{print $1}')"
+database_size_bytes="$(k3s kubectl -n "$NAMESPACE" exec statefulset/mysql -- sh -ec \
+  'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" exec mysql --user=root --batch --skip-column-names --execute="SELECT COALESCE(SUM(data_length + index_length), 0) FROM information_schema.tables WHERE table_schema = '\''talk_with_neighbors'\''"')"
 available_kib="$(df --output=avail "$BACKUP_ROOT" | tail -n 1 | tr -d ' ')"
-[[ "$server_size_kib" =~ ^[0-9]+$ && "$available_kib" =~ ^[0-9]+$ ]] || die "Could not determine backup disk capacity"
-(( available_kib > server_size_kib + 1048576 )) || die "At least the server-state size plus 1 GiB must be free for the root-only backup"
+[[ "$server_size_kib" =~ ^[0-9]+$ && "$database_size_bytes" =~ ^[0-9]+$ && "$available_kib" =~ ^[0-9]+$ ]] || die "Could not determine backup disk capacity"
+database_size_kib=$(( (database_size_bytes + 1023) / 1024 ))
+required_backup_kib=$(( server_size_kib + (database_size_kib * 2) + 1048576 ))
+(( available_kib > required_backup_kib )) || die "At least the server-state size, twice the database size, and 1 GiB must be free for the root-only backup"
 
 install -d -m 0700 "$BACKUP_DIR"
 migration_started=true
@@ -292,8 +309,8 @@ k3s kubectl -n "$NAMESPACE" get deployments,statefulsets,persistentvolumeclaims 
 find "$K3S_STORAGE_DIR" -mindepth 1 -maxdepth 1 -printf '%f\n' | sort > "$BACKUP_DIR/storage-directories.txt"
 chmod 0600 "$BACKUP_DIR"/*
 
-k3s kubectl -n "$NAMESPACE" scale deployment/backend --replicas=0 >/dev/null
 backend_scaled=true
+k3s kubectl -n "$NAMESPACE" scale deployment/backend --replicas=0 >/dev/null
 k3s kubectl -n "$NAMESPACE" rollout status deployment/backend --timeout=3m
 wait_for_no_pods "$NAMESPACE" 'app.kubernetes.io/name=backend' 60 || die "The backend pod did not stop before the database dump"
 write_phase "dumping-mysql"
@@ -310,8 +327,8 @@ wait_for_no_pods "$NAMESPACE" 'app.kubernetes.io/name=mysql' 60 || die "The MySQ
 wait_for_no_pods "$NAMESPACE" 'app.kubernetes.io/name=redis' 60 || die "The Redis pod did not stop cleanly"
 
 write_phase "stopping-old-cluster"
-systemctl stop k3s
 cluster_stopped=true
+systemctl stop k3s
 if systemctl is-active --quiet k3s; then
   die "k3s did not stop cleanly"
 fi
@@ -376,7 +393,7 @@ traefik_endpoints=0
 for _ in {1..60}; do
   traefik_endpoints="$(k3s kubectl -n kube-system get endpointslices \
     -l kubernetes.io/service-name=traefik -o json 2>/dev/null \
-    | jq '[.items[].endpoints[]?.addresses[]?] | length' 2>/dev/null || echo 0)"
+    | jq '[.items[].endpoints[]? | select(.conditions.ready != false) | .addresses[]?] | length' 2>/dev/null || echo 0)"
   [[ "$traefik_endpoints" =~ ^[0-9]+$ ]] && (( traefik_endpoints > 0 )) && break
   sleep 5
 done

@@ -44,7 +44,7 @@ verify_desired_cluster_network() {
 }
 
 restore_pending_mysql_dump() {
-  local dump_path expected_sha256 actual_path file_mode table_count
+  local dump_path expected_sha256 actual_path file_mode table_count restore_error
   [[ -f "$MYSQL_RESTORE_PENDING" ]] || return 0
   [[ ! -e "$MYSQL_RESTORE_DONE" ]] || { echo "Both pending and completed MySQL restore markers exist" >&2; return 1; }
 
@@ -67,8 +67,14 @@ restore_pending_mysql_dump() {
   printf '%s  %s\n' "$expected_sha256" "$dump_path" | sha256sum --check --status
   gzip -t "$dump_path"
 
-  gzip -cd -- "$dump_path" | k3s kubectl -n "$NAMESPACE" exec -i statefulset/mysql -- sh -ec \
-    'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" exec mysql --user=root --binary-mode=1'
+  restore_error="$MIGRATION_ROOT/mysql-restore-v1.error.log"
+  install -o root -g root -m 0600 /dev/null "$restore_error"
+  if ! { gzip -cd -- "$dump_path" | k3s kubectl -n "$NAMESPACE" exec -i statefulset/mysql -- sh -ec \
+    'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" exec mysql --user=root --binary-mode=1'; } 2>"$restore_error"; then
+    echo "The MySQL restore failed; root-only details remain at $restore_error" >&2
+    return 1
+  fi
+  rm -f -- "$restore_error"
   table_count="$(k3s kubectl -n "$NAMESPACE" exec statefulset/mysql -- sh -ec \
     'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" exec mysql --user=root --batch --skip-column-names --execute="SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = '\''talk_with_neighbors'\''"')"
   [[ "$table_count" =~ ^[0-9]+$ ]] && (( table_count > 0 )) || { echo "The restored application database contains no tables" >&2; return 1; }

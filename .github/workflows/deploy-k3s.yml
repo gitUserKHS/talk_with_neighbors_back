@@ -263,7 +263,9 @@ jobs:
     name: Deploy through AWS Systems Manager
     if: github.ref == 'refs/heads/main' && inputs.public_origin != 'diagnose://k3s'
     runs-on: ubuntu-latest
-    timeout-minutes: 75
+    # The current deploy role has a one-hour session. A guarded reset continues
+    # independently in SSM (without cancellation) if this runner stops waiting.
+    timeout-minutes: 58
     environment: production
     env:
       AWS_REGION: ${{ vars.AWS_REGION || 'ap-northeast-2' }}

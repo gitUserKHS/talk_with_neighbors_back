@@ -40,7 +40,11 @@ uploaded=false
 # shellcheck disable=SC2329
 cleanup() {
   if [[ -n "$command_id" && "$command_finished" != true ]]; then
-    aws ssm cancel-command --command-id "$command_id" >/dev/null 2>&1 || true
+    if [[ "$REINITIALIZE_K3S_NETWORK" == "true" ]]; then
+      echo "Leaving destructive SSM command $command_id running so its rollback guard cannot be interrupted" >&2
+    else
+      aws ssm cancel-command --command-id "$command_id" >/dev/null 2>&1 || true
+    fi
   fi
   if [[ "$uploaded" == true ]]; then
     aws s3 rm "$OBJECT_URI" --only-show-errors >/dev/null 2>&1 || true
@@ -70,6 +74,9 @@ jq -n \
   '{commands:[
     "set -eu",
     "umask 077",
+    "command -v flock >/dev/null 2>&1 || { echo \"flock is required for serialized deployment\" >&2; exit 1; }",
+    "exec 8>/run/lock/talk-with-neighbors-deploy.lock",
+    "flock -n 8 || { echo \"Another on-node deployment is still running\" >&2; exit 1; }",
     "release_dir=/var/lib/talk-with-neighbors/release",
     "cleanup_plaintext() { for path in /tmp/twn-deploy.tgz \"$release_dir/app-secrets.json\" \"$release_dir/ghcr-pull.json\"; do if [ -f \"$path\" ]; then shred -u -- \"$path\" 2>/dev/null || rm -f -- \"$path\"; fi; done; }",
     "trap cleanup_plaintext EXIT",
@@ -85,7 +92,7 @@ jq -n \
     "chmod 0700 \"$release_dir/deploy-on-node.sh\" \"$release_dir/reinitialize-k3s-network.sh\"",
     ("if [ " + ($reset | @sh) + " = true ]; then /bin/bash \"$release_dir/reinitialize-k3s-network.sh\" " + ($instance | @sh) + " " + ($confirmation | @sh) + " " + ($release | @sh) + "; fi"),
     ("/bin/bash \"$release_dir/deploy-on-node.sh\" \"" + $backend + "\" \"" + $frontend + "\" \"" + $release + "\"")
-  ],executionTimeout:["3600"]}' > "$parameters_file"
+  ],executionTimeout:["9000"]}' > "$parameters_file"
 
 command_id="$(aws ssm send-command \
   --instance-ids "$INSTANCE_ID" \
@@ -98,7 +105,7 @@ command_id="$(aws ssm send-command \
 [[ -n "$command_id" && "$command_id" != "None" ]] || { echo "SSM did not return a command id" >&2; exit 1; }
 echo "SSM command: $command_id"
 
-for _ in {1..390}; do
+for _ in {1..300}; do
   status="$(aws ssm get-command-invocation \
     --command-id "$command_id" \
     --instance-id "$INSTANCE_ID" \
@@ -126,5 +133,9 @@ for _ in {1..390}; do
   esac
 done
 
-echo "SSM deployment exceeded 65 minutes" >&2
+if [[ "$REINITIALIZE_K3S_NETWORK" == "true" ]]; then
+  echo "SSM deployment exceeded the 50-minute runner observation window; the destructive command was deliberately left running for safe rollback" >&2
+else
+  echo "SSM deployment exceeded 50 minutes" >&2
+fi
 exit 1
