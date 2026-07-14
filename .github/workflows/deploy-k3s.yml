@@ -66,9 +66,85 @@ jobs:
             date --iso-8601=seconds
             k3s kubectl get nodes -o wide
             k3s kubectl -n "$namespace" get pods,deployments,statefulsets,services,ingress -o wide
+            k3s kubectl -n kube-system get pods,services -o wide
+            k3s kubectl -n "$namespace" get endpointslice \
+              -l kubernetes.io/service-name=backend -o wide
             k3s kubectl -n "$namespace" get pods -o json
             k3s kubectl -n "$namespace" describe pods -l app.kubernetes.io/name=backend
             k3s kubectl -n "$namespace" get events --sort-by=.metadata.creationTimestamp
+            echo "=== isolated actuator components ==="
+            for health_path in \
+              liveness readiness \
+              readiness/db readiness/redis readiness/diskSpace readiness/mediaStorage \
+              db redis diskSpace mediaStorage; do
+              started_at="$(date +%s)"
+              health_result=0
+              health_output="$(k3s kubectl -n "$namespace" exec deployment/backend -- \
+                wget --timeout=8 --tries=1 --content-on-error -qO- \
+                "http://127.0.0.1:8080/actuator/health/$health_path" 2>&1)" \
+                || health_result="$?"
+              printf "actuator-%s=%s\n" "$health_path" "$health_output"
+              echo "actuator-result path=$health_path rc=$health_result elapsed-seconds=$(($(date +%s) - started_at))"
+            done
+            echo "=== direct database and Redis checks ==="
+            if k3s kubectl -n "$namespace" exec statefulset/mysql -- sh -ec '\''
+              MYSQL_PWD="$MYSQL_PASSWORD" mysql -N -u twn talk_with_neighbors -e "SELECT 1" >/dev/null
+            '\''; then
+              echo "database-query=up"
+            else
+              echo "database-query=down"
+            fi
+            if k3s kubectl -n "$namespace" exec statefulset/redis -- \
+              redis-cli --raw PING | grep -qx PONG; then
+              echo "redis-query=up"
+            else
+              echo "redis-query=down"
+            fi
+            echo "=== pod IMDSv2 reachability ==="
+            if k3s kubectl -n "$namespace" exec deployment/backend -- sh -ec '\''
+              metadata_value="$(wget --timeout=4 --tries=1 -qO- --method=PUT \
+                --header="X-aws-ec2-metadata-token-ttl-seconds: 60" \
+                http://169.254.169.254/latest/api/token)"
+              test -n "$metadata_value"
+              wget --timeout=4 --tries=1 -qO /dev/null \
+                --header="X-aws-ec2-metadata-token: $metadata_value" \
+                http://169.254.169.254/latest/meta-data/iam/security-credentials/
+            '\''; then
+              echo "imds-v2=reachable"
+            else
+              echo "imds-v2=unreachable"
+            fi
+            echo "=== host instance-role S3 check ==="
+            media_bucket="$(k3s kubectl -n "$namespace" get configmap runtime-config -o jsonpath="{.data.media-s3-bucket}")"
+            media_region="$(k3s kubectl -n "$namespace" get configmap runtime-config -o jsonpath="{.data.media-s3-region}")"
+            if printf "%s" "$media_bucket" | grep -Eq "^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$" \
+              && aws s3api head-bucket --bucket "$media_bucket" >/dev/null 2>&1; then
+              echo "s3-host-role=up"
+            else
+              echo "s3-host-role=down"
+            fi
+            s3_route_result=0
+            k3s kubectl -n "$namespace" exec deployment/backend -- \
+              wget --timeout=8 --tries=1 -q --spider \
+              "https://${media_bucket}.s3.${media_region}.amazonaws.com/" \
+              || s3_route_result="$?"
+            echo "s3-pod-unsigned-route-rc=$s3_route_result"
+            echo "=== backend cgroup and process resources ==="
+            k3s kubectl -n "$namespace" exec deployment/backend -- sh -ec '\''
+              grep -E "^(Threads|VmRSS|VmHWM|FDSize):" /proc/1/status || true
+              for metric in memory.current memory.events cpu.stat; do
+                echo "$metric"
+                cat "/sys/fs/cgroup/$metric" 2>/dev/null || true
+              done
+              df -h /tmp /app
+            '\'' || true
+            echo "=== node listeners and resources ==="
+            ss -lnt
+            free -m
+            df -h / /var/lib/rancher/k3s
+            echo "=== node-local ingress probe ==="
+            wget --timeout=5 --tries=1 --server-response -qO /dev/null \
+              http://127.0.0.1/healthz 2>&1 || true
             k3s kubectl -n "$namespace" logs deployment/backend --all-containers=true --tail=300 || true
             k3s kubectl -n "$namespace" logs deployment/backend --all-containers=true --previous --tail=300 || true
           } >"$output" 2>&1
