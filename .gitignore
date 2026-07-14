@@ -52,8 +52,10 @@ backend-dev*.log
 **/.terraform.tfstate.lock.info
 **/terraform.tfvars
 **/*.auto.tfvars
+**/backend.hcl
 **/crash.log
 **/crash.*.log
 **/tfplan
 **/*.tfplan
 !**/terraform.tfvars.example
+!**/backend.hcl.example
