@@ -5,15 +5,13 @@ on:
     paths:
       - "infra/**"
       - "deploy/k8s/**"
-      - ".github/workflows/infra-ci.yml"
-      - ".github/workflows/deploy-k3s.yml"
+      - ".github/workflows/**"
   push:
     branches: [main]
     paths:
       - "infra/**"
       - "deploy/k8s/**"
-      - ".github/workflows/infra-ci.yml"
-      - ".github/workflows/deploy-k3s.yml"
+      - ".github/workflows/**"
   workflow_dispatch:
 
 concurrency:
