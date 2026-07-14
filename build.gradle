@@ -7,6 +7,9 @@ plugins {
 group = 'com.talkwithneighbors'
 version = '0.0.1-SNAPSHOT'
 
+ext['jackson-bom.version'] = '2.21.5'
+ext['logback.version'] = '1.5.35'
+
 java {
 	sourceCompatibility = '17'
 }
