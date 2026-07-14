@@ -33,6 +33,7 @@ readonly MYSQL_DUMP="$BACKUP_DIR/mysql.sql.gz"
 readonly LOCK_FILE="/run/lock/talk-with-neighbors-k3s-network.lock"
 
 original_backend_replicas=""
+original_backend_available=""
 original_mysql_replicas=""
 original_redis_replicas=""
 backend_scaled=false
@@ -136,6 +137,102 @@ safe_remove_cluster_state() {
   done
 }
 
+recover_stale_pre_destructive_attempt() {
+  if [[ ! -e "$IN_PROGRESS_MARKER" && ! -L "$IN_PROGRESS_MARKER" ]]; then
+    return 0
+  fi
+
+  local stale_phase stale_release stale_backup expected_backup aborted_marker file_mode artifact
+  [[ -f "$IN_PROGRESS_MARKER" && ! -L "$IN_PROGRESS_MARKER" ]] || {
+    echo "The previous migration journal is not a regular root-only file" >&2
+    return 1
+  }
+  [[ "$(readlink -e "$IN_PROGRESS_MARKER")" == "$IN_PROGRESS_MARKER" ]] || {
+    echo "The previous migration journal resolves outside its expected path" >&2
+    return 1
+  }
+  [[ "$(stat -c '%u' "$IN_PROGRESS_MARKER")" == "0" ]] || {
+    echo "The previous migration journal is not owned by root" >&2
+    return 1
+  }
+  file_mode="$(stat -c '%a' "$IN_PROGRESS_MARKER")"
+  if [[ ! "$file_mode" =~ ^[0-7]{3,4}$ ]] || (( (8#$file_mode & 077) != 0 )); then
+    echo "The previous migration journal is readable outside root" >&2
+    return 1
+  fi
+
+  stale_phase="$(jq -er '.phase | select(type == "string")' "$IN_PROGRESS_MARKER")" || {
+    echo "The previous migration journal has no valid phase" >&2
+    return 1
+  }
+  stale_release="$(jq -er '.release_id | select(type == "string" and test("^[0-9]+-[0-9]+$"))' "$IN_PROGRESS_MARKER")" || {
+    echo "The previous migration journal has no valid release id" >&2
+    return 1
+  }
+  stale_backup="$(jq -er '.backup_dir | select(type == "string")' "$IN_PROGRESS_MARKER")" || {
+    echo "The previous migration journal has no valid backup path" >&2
+    return 1
+  }
+  expected_backup="$BACKUP_ROOT/k3s-network-v1-$stale_release"
+
+  [[ "$stale_phase" == "preparing-backup" ]] || {
+    echo "The previous migration advanced beyond the safe pre-destructive retry phase: $stale_phase" >&2
+    return 1
+  }
+  [[ "$stale_backup" == "$expected_backup" && -d "$stale_backup" && ! -L "$stale_backup" ]] || {
+    echo "The previous migration backup path is unsafe" >&2
+    return 1
+  }
+  [[ "$(readlink -e "$stale_backup")" == "$stale_backup" && "$(stat -c '%u' "$stale_backup")" == "0" ]] || {
+    echo "The previous migration backup is not a root-owned canonical directory" >&2
+    return 1
+  }
+  file_mode="$(stat -c '%a' "$stale_backup")"
+  if [[ ! "$file_mode" =~ ^[0-7]{3,4}$ ]] || (( (8#$file_mode & 077) != 0 )); then
+    echo "The previous migration backup directory is accessible outside root" >&2
+    return 1
+  fi
+  [[ -s "$stale_backup/inventory.txt" && ! -L "$stale_backup/inventory.txt" ]] || {
+    echo "The previous pre-destructive inventory is missing or unsafe" >&2
+    return 1
+  }
+  file_mode="$(stat -c '%a' "$stale_backup/inventory.txt")"
+  if [[ "$(stat -c '%u' "$stale_backup/inventory.txt")" != "0" || ! "$file_mode" =~ ^[0-7]{3,4}$ ]] ||
+    (( (8#$file_mode & 077) != 0 )); then
+    echo "The previous pre-destructive inventory is accessible outside root" >&2
+    return 1
+  fi
+  if ! grep -Fxq "release_id=$stale_release" "$stale_backup/inventory.txt" ||
+    ! grep -Fxq "legacy_pod_cidr=$legacy_pod_cidr" "$stale_backup/inventory.txt" ||
+    ! grep -Fxq "backend_replicas=$original_backend_replicas" "$stale_backup/inventory.txt" ||
+    ! grep -Fxq "mysql_replicas=$original_mysql_replicas" "$stale_backup/inventory.txt" ||
+    ! grep -Fxq "redis_replicas=$original_redis_replicas" "$stale_backup/inventory.txt"; then
+    echo "Current workload replicas do not match the previous pre-destructive inventory" >&2
+    return 1
+  fi
+  if grep -q '^backend_available=' "$stale_backup/inventory.txt" &&
+    ! grep -Fxq "backend_available=$original_backend_available" "$stale_backup/inventory.txt"; then
+    echo "Current backend availability does not match the previous pre-destructive inventory" >&2
+    return 1
+  fi
+
+  for artifact in server.tar.gz mysql.sql.gz k3s-config.yaml k3s.service.env node-password SHA256SUMS; do
+    [[ ! -e "$stale_backup/$artifact" && ! -L "$stale_backup/$artifact" ]] || {
+      echo "The previous attempt created destructive-phase artifact $artifact; refusing automatic retry" >&2
+      return 1
+    }
+  done
+
+  aborted_marker="$stale_backup/aborted-before-destructive.json"
+  [[ ! -e "$aborted_marker" && ! -L "$aborted_marker" ]] || {
+    echo "The previous pre-destructive journal was already archived" >&2
+    return 1
+  }
+  chmod 0600 "$IN_PROGRESS_MARKER" || return 1
+  mv -- "$IN_PROGRESS_MARKER" "$aborted_marker" || return 1
+  echo "Archived a verified pre-destructive failed attempt at $aborted_marker"
+}
+
 restore_workload_replicas() {
   local kind name replicas
   while read -r kind name replicas; do
@@ -154,8 +251,10 @@ EOF
   done <<EOF
 statefulset mysql $original_mysql_replicas
 statefulset redis $original_redis_replicas
-deployment backend $original_backend_replicas
 EOF
+  if [[ "$original_backend_available" =~ ^[1-9][0-9]*$ && "$original_backend_replicas" =~ ^[1-9][0-9]*$ ]]; then
+    k3s kubectl -n "$NAMESPACE" rollout status deployment/backend --timeout=5m || return 1
+  fi
   backend_scaled=false
 }
 
@@ -249,7 +348,6 @@ exec 9>"$LOCK_FILE"
 flock -n 9 || die "Another k3s network migration is running"
 
 [[ ! -e "$MIGRATION_MARKER" ]] || die "The one-time k3s network migration was already completed"
-[[ ! -e "$IN_PROGRESS_MARKER" ]] || die "A previous k3s network migration is incomplete; inspect its root-only phase journal before retrying"
 [[ ! -e "$MYSQL_RESTORE_PENDING" && ! -e "$MYSQL_RESTORE_DONE" ]] || die "A MySQL restore marker already exists"
 [[ ! -e "$BACKUP_DIR" ]] || die "The release-specific backup directory already exists"
 systemctl is-active --quiet k3s || die "k3s must be active before the migration"
@@ -285,12 +383,15 @@ k3s_is_legacy_pod_cidr "$legacy_pod_cidr" || die "The current node Pod CIDR is n
 k3s kubectl -n "$NAMESPACE" get deployment/backend statefulset/mysql statefulset/redis >/dev/null
 k3s kubectl -n "$NAMESPACE" rollout status statefulset/mysql --timeout=3m
 original_backend_replicas="$(k3s kubectl -n "$NAMESPACE" get deployment/backend -o jsonpath='{.spec.replicas}')"
+original_backend_available="$(k3s kubectl -n "$NAMESPACE" get deployment/backend -o json | jq -er '.status.availableReplicas // 0')"
 original_mysql_replicas="$(k3s kubectl -n "$NAMESPACE" get statefulset/mysql -o jsonpath='{.spec.replicas}')"
 original_redis_replicas="$(k3s kubectl -n "$NAMESPACE" get statefulset/redis -o jsonpath='{.spec.replicas}')"
-for replicas in "$original_backend_replicas" "$original_mysql_replicas" "$original_redis_replicas"; do
+for replicas in "$original_backend_replicas" "$original_backend_available" "$original_mysql_replicas" "$original_redis_replicas"; do
   [[ "$replicas" =~ ^[0-9]+$ ]] || die "A workload replica count is invalid"
 done
+(( original_backend_available <= original_backend_replicas )) || die "The backend availability count exceeds its replica count"
 (( original_mysql_replicas == 1 )) || die "The migration expects one MySQL replica"
+recover_stale_pre_destructive_attempt
 
 server_size_kib="$(du -sk "$K3S_SERVER_DIR" | awk '{print $1}')"
 # MYSQL_ROOT_PASSWORD expands inside the container, not in this host shell.
@@ -306,8 +407,8 @@ required_backup_kib=$(( server_size_kib + (database_size_kib * 2) + 1048576 ))
 install -d -m 0700 "$BACKUP_DIR"
 migration_started=true
 write_phase "preparing-backup"
-printf 'release_id=%s\nlegacy_pod_cidr=%s\nbackend_replicas=%s\nmysql_replicas=%s\nredis_replicas=%s\n' \
-  "$RELEASE_ID" "$legacy_pod_cidr" "$original_backend_replicas" "$original_mysql_replicas" "$original_redis_replicas" \
+printf 'release_id=%s\nlegacy_pod_cidr=%s\nbackend_replicas=%s\nbackend_available=%s\nmysql_replicas=%s\nredis_replicas=%s\n' \
+  "$RELEASE_ID" "$legacy_pod_cidr" "$original_backend_replicas" "$original_backend_available" "$original_mysql_replicas" "$original_redis_replicas" \
   > "$BACKUP_DIR/inventory.txt"
 k3s kubectl get nodes,persistentvolumes -o yaml > "$BACKUP_DIR/cluster-inventory.yaml"
 k3s kubectl -n "$NAMESPACE" get deployments,statefulsets,persistentvolumeclaims -o yaml >> "$BACKUP_DIR/cluster-inventory.yaml"
@@ -316,7 +417,6 @@ chmod 0600 "$BACKUP_DIR"/*
 
 backend_scaled=true
 k3s kubectl -n "$NAMESPACE" scale deployment/backend --replicas=0 >/dev/null
-k3s kubectl -n "$NAMESPACE" rollout status deployment/backend --timeout=3m
 wait_for_no_pods "$NAMESPACE" 'app.kubernetes.io/name=backend' 60 || die "The backend pod did not stop before the database dump"
 write_phase "dumping-mysql"
 # MYSQL_ROOT_PASSWORD expands inside the container, not in this host shell.

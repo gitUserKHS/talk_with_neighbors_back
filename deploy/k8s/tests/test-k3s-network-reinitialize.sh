@@ -41,6 +41,12 @@ grep -Fq 'k3s-network-v1.done.json' "$SCRIPT_DIR/reinitialize-k3s-network.sh" ||
 grep -Fq 'mysql-restore-v1.pending.json' "$SCRIPT_DIR/deploy-on-node.sh" || fail "Pending MySQL restore support is missing"
 grep -Fq 'executionTimeout:["9000"]' "$SCRIPT_DIR/deploy-via-ssm.sh" || fail "The remote rollback window is too short"
 grep -Fq 'select(.conditions.ready != false)' "$SCRIPT_DIR/reinitialize-k3s-network.sh" || fail "Traefik readiness is not checked"
+grep -Fq 'recover_stale_pre_destructive_attempt' "$SCRIPT_DIR/reinitialize-k3s-network.sh" || fail "A safe pre-destructive retry path is missing"
+grep -Fq 'aborted-before-destructive.json' "$SCRIPT_DIR/reinitialize-k3s-network.sh" || fail "Failed pre-destructive journals are not retained"
+grep -Fq 'The previous migration advanced beyond the safe pre-destructive retry phase' "$SCRIPT_DIR/reinitialize-k3s-network.sh" || fail "Advanced migration phases are not blocked from automatic retry"
+if grep -Fq 'rollout status deployment/backend --timeout=3m' "$SCRIPT_DIR/reinitialize-k3s-network.sh"; then
+  fail "A scaled-to-zero backend must not use rollout status because stale ProgressDeadlineExceeded conditions fail immediately"
+fi
 deploy_lock_line="$(grep -nF -m1 'exec 8>/run/lock/talk-with-neighbors-deploy.lock' "$SCRIPT_DIR/deploy-via-ssm.sh" | cut -d: -f1)"
 release_dir_line="$(grep -nF -m1 'release_dir=/var/lib/talk-with-neighbors/release' "$SCRIPT_DIR/deploy-via-ssm.sh" | cut -d: -f1)"
 [[ "$deploy_lock_line" =~ ^[0-9]+$ && "$release_dir_line" =~ ^[0-9]+$ && "$deploy_lock_line" -lt "$release_dir_line" ]] || \

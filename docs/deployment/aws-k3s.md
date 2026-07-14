@@ -324,6 +324,8 @@ REINITIALIZE_K3S_NETWORK:<EC2_INSTANCE_ID>:pods=10.244.0.0/16:services=10.96.0.0
 
 워크플로는 `main`, `production`, Environment 토글, boolean 입력, 인스턴스별 확인 문구가 모두 맞을 때만 진행한다. 실행 전 기존 k3s server 디렉터리와 설정 파일, MySQL 논리 dump를 EC2의 root 전용 백업 위치에 저장하고 무결성을 확인한다. PVC 복구 가능성을 훼손할 수 있으므로 `k3s-uninstall.sh`는 사용하지 않는다. 백업 뒤 k3s 네트워크를 목표 CIDR로 다시 만들고 노드·CoreDNS·Traefik을 확인한다. 이어서 MySQL을 다시 만들고 백업 dump를 한 번 복원한 뒤에만 백엔드를 시작한다. 커밋 전 실패에는 기존 server 상태와 설정으로 자동 롤백을 시도하며, root 전용 백업은 수동 복구를 위해 남긴다.
 
+재초기화가 MySQL dump나 k3s server archive를 만들기 전 `preparing-backup` 단계에서만 실패했다면, 다음 승인 실행은 root 소유 journal·백업 경로, 기존 replica 수, 파괴 단계 artifact 부재를 모두 다시 확인한다. 조건이 정확히 맞을 때만 이전 journal을 해당 백업의 `aborted-before-destructive.json`으로 보존하고 새 시도를 시작한다. 다른 phase이거나 dump·server archive가 하나라도 있으면 자동 재시도를 거부하므로 root 전용 journal과 백업을 먼저 조사해야 한다. 네트워크 마이그레이션 완료 뒤 애플리케이션 배포만 실패한 경우에는 `reinitialize_k3s_network=false`와 빈 확인 문구로만 재배포한다.
+
 성공 후에는 다음을 바로 수행한다.
 
 1. `K3S_NETWORK_REINITIALIZE_ALLOWED`를 `false`로 바꾸거나 삭제한다.
