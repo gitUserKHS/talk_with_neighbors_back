@@ -6,7 +6,8 @@ readonly FRONTEND_IMAGE="${2:-}"
 readonly RELEASE_ID="${3:-}"
 RELEASE_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 readonly RELEASE_DIR
-# shellcheck source=k3s-network-common.sh
+# The helper is resolved from the private release directory at runtime.
+# shellcheck disable=SC1091
 source "$RELEASE_DIR/k3s-network-common.sh"
 readonly NAMESPACE="talk-with-neighbors"
 readonly K3S_CONFIG="/etc/rancher/k3s/config.yaml"
@@ -69,15 +70,22 @@ restore_pending_mysql_dump() {
 
   restore_error="$MIGRATION_ROOT/mysql-restore-v1.error.log"
   install -o root -g root -m 0600 /dev/null "$restore_error"
+  # MYSQL_ROOT_PASSWORD expands inside the container, not in this host shell.
+  # shellcheck disable=SC2016
   if ! { gzip -cd -- "$dump_path" | k3s kubectl -n "$NAMESPACE" exec -i statefulset/mysql -- sh -ec \
     'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" exec mysql --user=root --binary-mode=1'; } 2>"$restore_error"; then
     echo "The MySQL restore failed; root-only details remain at $restore_error" >&2
     return 1
   fi
   rm -f -- "$restore_error"
+  # MYSQL_ROOT_PASSWORD expands inside the container, not in this host shell.
+  # shellcheck disable=SC2016
   table_count="$(k3s kubectl -n "$NAMESPACE" exec statefulset/mysql -- sh -ec \
     'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" exec mysql --user=root --batch --skip-column-names --execute="SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = '\''talk_with_neighbors'\''"')"
-  [[ "$table_count" =~ ^[0-9]+$ ]] && (( table_count > 0 )) || { echo "The restored application database contains no tables" >&2; return 1; }
+  if [[ ! "$table_count" =~ ^[0-9]+$ ]] || (( table_count == 0 )); then
+    echo "The restored application database contains no tables" >&2
+    return 1
+  fi
 
   mv -- "$MYSQL_RESTORE_PENDING" "$MYSQL_RESTORE_DONE"
   echo "The pending MySQL logical backup was restored exactly once"

@@ -6,7 +6,8 @@ readonly CONFIRMATION="${2:-}"
 readonly RELEASE_ID="${3:-}"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 readonly SCRIPT_DIR
-# shellcheck source=k3s-network-common.sh
+# The helper is resolved from the private release directory at runtime.
+# shellcheck disable=SC1091
 source "$SCRIPT_DIR/k3s-network-common.sh"
 
 readonly NAMESPACE="talk-with-neighbors"
@@ -290,6 +291,8 @@ done
 (( original_mysql_replicas == 1 )) || die "The migration expects one MySQL replica"
 
 server_size_kib="$(du -sk "$K3S_SERVER_DIR" | awk '{print $1}')"
+# MYSQL_ROOT_PASSWORD expands inside the container, not in this host shell.
+# shellcheck disable=SC2016
 database_size_bytes="$(k3s kubectl -n "$NAMESPACE" exec statefulset/mysql -- sh -ec \
   'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" exec mysql --user=root --batch --skip-column-names --execute="SELECT COALESCE(SUM(data_length + index_length), 0) FROM information_schema.tables WHERE table_schema = '\''talk_with_neighbors'\''"')"
 available_kib="$(df --output=avail "$BACKUP_ROOT" | tail -n 1 | tr -d ' ')"
@@ -314,6 +317,8 @@ k3s kubectl -n "$NAMESPACE" scale deployment/backend --replicas=0 >/dev/null
 k3s kubectl -n "$NAMESPACE" rollout status deployment/backend --timeout=3m
 wait_for_no_pods "$NAMESPACE" 'app.kubernetes.io/name=backend' 60 || die "The backend pod did not stop before the database dump"
 write_phase "dumping-mysql"
+# MYSQL_ROOT_PASSWORD expands inside the container, not in this host shell.
+# shellcheck disable=SC2016
 k3s kubectl -n "$NAMESPACE" exec statefulset/mysql -- sh -ec \
   'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" exec mysqldump --user=root --single-transaction --quick --routines --events --triggers --hex-blob --set-gtid-purged=OFF --no-tablespaces --add-drop-database --databases talk_with_neighbors' \
   | gzip -9 > "$MYSQL_DUMP"

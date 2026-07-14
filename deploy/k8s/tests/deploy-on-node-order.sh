@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+readonly SCRIPT_DIR
 readonly TARGET_SCRIPT="${1:-$SCRIPT_DIR/../deploy-on-node.sh}"
 
 line_number() {
@@ -24,12 +25,20 @@ assert_before() {
   fi
 }
 
+# These are intentional literal source-code patterns, not local expansions.
+# shellcheck disable=SC2016
 mysql_apply="$(line_number '"${kubectl[@]}" -n "$NAMESPACE" apply -f "$RELEASE_DIR/base/mysql.yaml"')"
+# shellcheck disable=SC2016
 redis_apply="$(line_number '"${kubectl[@]}" -n "$NAMESPACE" apply -f "$RELEASE_DIR/base/redis.yaml"')"
+# shellcheck disable=SC2016
 mysql_rollout="$(line_number '"${kubectl[@]}" -n "$NAMESPACE" rollout status statefulset/mysql --timeout=8m')"
+# shellcheck disable=SC2016
 redis_rollout="$(line_number '"${kubectl[@]}" -n "$NAMESPACE" rollout status statefulset/redis --timeout=5m')"
+# shellcheck disable=SC2016
 full_apply="$(line_number '"${kubectl[@]}" apply -k "$RELEASE_DIR/base"')"
+# shellcheck disable=SC2016
 backend_rollout="$(line_number '"${kubectl[@]}" -n "$NAMESPACE" rollout status deployment/backend --timeout=10m')"
+# shellcheck disable=SC2016
 frontend_rollout="$(line_number '"${kubectl[@]}" -n "$NAMESPACE" rollout status deployment/frontend --timeout=5m')"
 
 assert_before "$mysql_apply" "$mysql_rollout" "MySQL must be applied before its rollout wait"

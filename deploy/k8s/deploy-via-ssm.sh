@@ -13,7 +13,8 @@ readonly REINITIALIZE_CONFIRMATION="${9:-}"
 readonly OBJECT_URI="s3://${DEPLOY_BUCKET}/${OBJECT_KEY}"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 readonly SCRIPT_DIR
-# shellcheck source=k3s-network-common.sh
+# The helper is resolved from the checked-out release directory at runtime.
+# shellcheck disable=SC1091
 source "$SCRIPT_DIR/k3s-network-common.sh"
 
 [[ "$INSTANCE_ID" =~ ^i-[a-f0-9]{8,17}$ ]] || { echo "Invalid EC2 instance id" >&2; exit 1; }

@@ -3,7 +3,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 readonly SCRIPT_DIR
-# shellcheck source=../k3s-network-common.sh
+# The helper path is derived dynamically from this test's location.
+# shellcheck disable=SC1091
 source "$SCRIPT_DIR/k3s-network-common.sh"
 
 fail() {
@@ -46,6 +47,8 @@ release_dir_line="$(grep -nF -m1 'release_dir=/var/lib/talk-with-neighbors/relea
   fail "The on-node deployment lock must be acquired before the shared release directory is touched"
 
 restore_call_line="$(grep -n '^  restore_pending_mysql_dump$' "$SCRIPT_DIR/deploy-on-node.sh" | cut -d: -f1)"
+# This is an intentional literal source-code pattern.
+# shellcheck disable=SC2016
 full_apply_line="$(grep -n 'apply -k "$RELEASE_DIR/base"' "$SCRIPT_DIR/deploy-on-node.sh" | cut -d: -f1)"
 [[ "$restore_call_line" =~ ^[0-9]+$ && "$full_apply_line" =~ ^[0-9]+$ && "$restore_call_line" -lt "$full_apply_line" ]] || \
   fail "MySQL restore must complete before the full application kustomization"
