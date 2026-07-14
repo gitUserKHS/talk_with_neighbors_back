@@ -26,4 +26,4 @@ Spring Boot 3 기반의 이웃톡 백엔드야. 인증, 피드, 관심사 매칭
 
 로컬 개발은 계속 상위 폴더의 Docker Compose를 기본으로 사용해. PR과 `main` 브랜치에서는 GitHub Actions가 테스트, `bootJar`, 프로덕션 이미지, MySQL·Redis 연동 컨테이너 스모크 테스트를 검증해. `main`과 버전 태그의 이미지는 같은 품질 검증을 통과한 뒤 GHCR에 게시돼.
 
-선택형 AWS 포트폴리오 배포는 [EC2 + S3 + k3s 가이드](docs/deployment/aws-k3s.md)를 따라. Terraform과 SSM 배포 워크플로가 준비되어 있지만 비용이 발생하는 `terraform apply`는 자동 실행하지 않아.
+AWS 포트폴리오 환경은 서울 리전의 ARM64 EC2 한 대, 비공개 S3, 단일 노드 k3s로 실제 구성되어 있어. 배포는 GitHub OIDC와 SSM을 통해 검증된 GHCR 이미지 digest만 사용해. 리소스는 비용이 발생할 수 있으며, `terraform apply`는 자동화하지 않고 명시적 검토 후 수동 실행해. 운영·중지·삭제 절차는 [EC2 + S3 + k3s 가이드](docs/deployment/aws-k3s.md)를 따라.
