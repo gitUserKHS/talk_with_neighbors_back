@@ -164,7 +164,7 @@ rollback_old_cluster() {
   [[ "$rollback_running" == false ]] || return 0
   rollback_running=true
 
-  rm -f -- "$MYSQL_RESTORE_PENDING"
+  rm -f -- "$MYSQL_RESTORE_PENDING" || rollback_status=1
 
   if [[ "$destructive_started" == true ]]; then
     echo "Migration failed before commit; restoring the previous k3s server state" >&2
@@ -199,7 +199,9 @@ rollback_old_cluster() {
   fi
 
   if (( rollback_status == 0 )); then
-    rm -f -- "$IN_PROGRESS_MARKER"
+    rm -f -- "$IN_PROGRESS_MARKER" || rollback_status=1
+  fi
+  if (( rollback_status == 0 )); then
     echo "Previous k3s state restored; backup retained at $BACKUP_DIR" >&2
   else
     echo "Rollback was incomplete; inspect $BACKUP_DIR before retrying" >&2

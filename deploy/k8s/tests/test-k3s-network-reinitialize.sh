@@ -33,7 +33,7 @@ done
 if grep -Fq 'k3s-uninstall.sh' "$SCRIPT_DIR/reinitialize-k3s-network.sh"; then
   fail "The destructive k3s uninstall helper must never be called"
 fi
-if grep -Eq 'rm[^\n]*/var/lib/rancher/k3s/storage' "$SCRIPT_DIR/reinitialize-k3s-network.sh"; then
+if grep -Eq 'rm.*/var/lib/rancher/k3s/storage' "$SCRIPT_DIR/reinitialize-k3s-network.sh"; then
   fail "The local persistent storage path must never be removed"
 fi
 grep -Fq 'flock -n 9' "$SCRIPT_DIR/reinitialize-k3s-network.sh" || fail "Migration lock is missing"
