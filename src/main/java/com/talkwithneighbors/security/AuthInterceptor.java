@@ -7,6 +7,7 @@ import jakarta.servlet.http.HttpSession;
 import jakarta.servlet.http.Cookie;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
 import org.springframework.web.method.HandlerMethod;
@@ -29,24 +30,32 @@ public class AuthInterceptor implements HandlerInterceptor {
             return true;
         }
 
-        // 핸들러 메소드가 아닌 경우 통과 (정적 리소스 등)
-        if (!(handler instanceof HandlerMethod)) {
+        boolean chatMediaRequest = isChatMediaRequest(request);
+        if (chatMediaRequest) {
+            response.setHeader(HttpHeaders.CACHE_CONTROL, "private, no-store");
+            response.setHeader(HttpHeaders.PRAGMA, "no-cache");
+        }
+
+        // 일반 정적 리소스는 통과하지만 채팅 첨부 파일은 항상 인증한다.
+        if (!(handler instanceof HandlerMethod) && !chatMediaRequest) {
             log.debug("[AuthInterceptor] Handler is not HandlerMethod, allowing. Handler: {}", handler.getClass().getName());
             return true;
         }
 
-        HandlerMethod handlerMethod = (HandlerMethod) handler;
-        RequireLogin requireLogin = handlerMethod.getMethodAnnotation(RequireLogin.class);
-        if (requireLogin == null) {
-            requireLogin = handlerMethod.getBeanType().getAnnotation(RequireLogin.class);
+        RequireLogin requireLogin = null;
+        if (handler instanceof HandlerMethod handlerMethod) {
+            requireLogin = handlerMethod.getMethodAnnotation(RequireLogin.class);
+            if (requireLogin == null) {
+                requireLogin = handlerMethod.getBeanType().getAnnotation(RequireLogin.class);
+            }
         }
 
         // @RequireLogin 어노테이션이 없으면 통과
-        if (requireLogin == null) {
+        if (requireLogin == null && !chatMediaRequest) {
             log.debug("[AuthInterceptor] No @RequireLogin annotation, allowing.");
             return true;
         }
-        log.debug("[AuthInterceptor] @RequireLogin annotation found, proceeding with authentication.");
+        log.debug("[AuthInterceptor] Protected handler or chat media request, proceeding with authentication.");
 
         UserSession userSession = null;
         String sessionId = null;
@@ -118,5 +127,14 @@ public class AuthInterceptor implements HandlerInterceptor {
             response.setStatus(HttpStatus.UNAUTHORIZED.value());
             return false;
         }
+    }
+
+    private boolean isChatMediaRequest(HttpServletRequest request) {
+        String requestUri = request.getRequestURI();
+        String contextPath = request.getContextPath();
+        String path = contextPath != null && !contextPath.isEmpty() && requestUri.startsWith(contextPath)
+                ? requestUri.substring(contextPath.length())
+                : requestUri;
+        return "/uploads/chat".equals(path) || path.startsWith("/uploads/chat/");
     }
 }

@@ -69,7 +69,7 @@ public class S3MediaResourceController {
                     .build();
         }
 
-        HttpHeaders headers = responseHeaders(metadata, range);
+        HttpHeaders headers = responseHeaders(metadata, range, category);
         if (RequestMethod.HEAD.name().equals(request.getMethod())) {
             return new ResponseEntity<>(null, headers, range == null ? HttpStatus.OK : HttpStatus.PARTIAL_CONTENT);
         }
@@ -79,10 +79,13 @@ public class S3MediaResourceController {
         return new ResponseEntity<>(body, headers, range == null ? HttpStatus.OK : HttpStatus.PARTIAL_CONTENT);
     }
 
-    private HttpHeaders responseHeaders(MediaObjectMetadata metadata, ByteRange range) {
+    private HttpHeaders responseHeaders(MediaObjectMetadata metadata, ByteRange range, String category) {
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(mediaType(metadata.contentType()));
-        headers.setCacheControl(CacheControl.maxAge(Duration.ofDays(30)).cachePublic().immutable());
+        CacheControl cacheControl = "chat".equals(category)
+                ? CacheControl.noStore().cachePrivate()
+                : CacheControl.maxAge(Duration.ofDays(30)).cachePublic().immutable();
+        headers.setCacheControl(cacheControl);
         headers.set(HttpHeaders.ACCEPT_RANGES, "bytes");
         headers.set(X_CONTENT_TYPE_OPTIONS, "nosniff");
         if (metadata.eTag() != null && !metadata.eTag().isBlank()) {

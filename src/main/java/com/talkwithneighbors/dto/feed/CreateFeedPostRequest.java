@@ -13,4 +13,5 @@ public class CreateFeedPostRequest {
     private String imageUrl;
     private String caption;
     private List<String> interestTags;
+    private boolean publicPreview = false;
 }

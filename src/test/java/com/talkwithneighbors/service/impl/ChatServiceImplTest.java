@@ -313,4 +313,32 @@ class ChatServiceImplTest {
         assertEquals(HttpStatus.INTERNAL_SERVER_ERROR, exception.getStatus());
         verifyNoInteractions(applicationEventPublisher, domainEventPublisher);
     }
+
+    @Test
+    void searchRoomsUsesOnlyTheParticipantScopedRepositoryQuery() {
+        User currentUser = createUser(testUserIdLong, "currentUser");
+        ChatRoom participantRoom = createChatRoom(
+                "participant-room",
+                currentUser,
+                new HashSet<>(List.of(currentUser))
+        );
+        Page<ChatRoom> participantRooms = new PageImpl<>(List.of(participantRoom));
+
+        when(userRepository.findById(testUserIdLong)).thenReturn(Optional.of(currentUser));
+        when(chatRoomRepository.searchParticipantRooms(
+                currentUser, ChatRoomType.ONE_ON_ONE, "coffee", pageable
+        )).thenReturn(participantRooms);
+
+        var result = chatService.searchRooms(
+                "  coffee  ", ChatRoomType.ONE_ON_ONE, testUserIdString, pageable
+        );
+
+        assertEquals(List.of("participant-room"),
+                result.getContent().stream().map(dto -> dto.getId()).toList());
+        verify(chatRoomRepository).searchParticipantRooms(
+                currentUser, ChatRoomType.ONE_ON_ONE, "coffee", pageable
+        );
+        verify(chatRoomRepository, never()).findAll(any(Pageable.class));
+        verify(chatRoomRepository, never()).findByType(any(ChatRoomType.class), any(Pageable.class));
+    }
 }

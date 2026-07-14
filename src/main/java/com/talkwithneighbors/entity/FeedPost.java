@@ -45,6 +45,15 @@ public class FeedPost {
     @Column(columnDefinition = "TEXT")
     private String caption;
 
+    /**
+     * Explicit author opt-in for the anonymous portfolio preview.
+     *
+     * <p>The database default is deliberately false so Hibernate's schema update
+     * keeps every row that predates this field private.</p>
+     */
+    @Column(name = "public_preview", nullable = false, columnDefinition = "boolean default false")
+    private boolean publicPreview = false;
+
     @ElementCollection
     @CollectionTable(name = "feed_post_interest_tags", joinColumns = @JoinColumn(name = "post_id"))
     @Column(name = "interest_tag")

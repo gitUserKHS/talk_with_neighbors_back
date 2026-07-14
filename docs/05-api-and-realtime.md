@@ -9,6 +9,15 @@
 - 페이지 응답: Spring Data `Page<T>` 형태
 - 인증 필요 API는 `@RequireLogin`과 사용자 세션 해석기를 사용한다.
 
+## 로그인 없는 공개 API
+
+| 메서드 | 경로 | 공개 범위 |
+|---|---|---|
+| GET | `/api/public/feed?page=0&size=20` | 작성자가 `publicPreview=true`로 동의한 게시글만 제공; 작성자는 `이웃`으로 익명화 |
+| GET | `/api/public/meetups?keyword=&interest=&page=0&size=20` | 활성 상태인 공개 그룹 모임만 제공; 위치·생성자·참가자 식별자·최근 메시지는 제외 |
+
+공개 API의 페이지 크기는 최대 50이야. 댓글 본문과 댓글 작성자, 좋아요 여부, 궁합·공통 관심사 같은 개인화 정보는 제공하지 않아. 작성·수정·삭제, 좋아요·댓글 열람, 모임 참여와 채팅은 기존 인증 API에서만 가능해.
+
 ## 인증 API
 
 | 메서드 | 경로 | 인증 | 목적 |
@@ -28,7 +37,7 @@
 | 메서드 | 경로 | 목적 |
 |---|---|---|
 | GET | `/api/feed?page=0&size=20` | 피드 조회 |
-| POST | `/api/feed` | 게시물 생성; JSON은 기존 URL 호환, multipart는 `post` JSON 파트와 `files` 최대 10개 |
+| POST | `/api/feed` | 게시물 생성; JSON은 기존 URL 호환, multipart는 `post` JSON 파트와 `files` 최대 10개; `publicPreview` 기본값은 `false` |
 | POST | `/api/feed/{postId}/likes` | 좋아요 |
 | DELETE | `/api/feed/{postId}/likes` | 좋아요 취소 |
 | GET | `/api/feed/{postId}/comments` | 댓글 조회 |
@@ -65,9 +74,9 @@ multipart 업로드 지원 형식은 JPG, PNG, GIF, WebP, MP4, WebM, MOV다. 사
 | 메서드 | 경로 | 목적 |
 |---|---|---|
 | POST | `/api/chat/rooms` | 방 생성 |
-| GET | `/api/chat/rooms` | 내 방 또는 조건 검색 |
-| GET | `/api/chat/rooms/search/all` | 전체 공개 검색 |
-| GET | `/api/chat/rooms/search` | 그룹방 목록 검색 |
+| GET | `/api/chat/rooms` | 내가 참가한 방 조회 또는 조건 검색 |
+| GET | `/api/chat/rooms/search/all` | 내가 참가한 방에서 유형·키워드 검색 |
+| GET | `/api/chat/rooms/search` | 내가 참가한 그룹방 검색 |
 | GET | `/api/chat/rooms/my` | 내 채팅방 목록 |
 | POST | `/api/chat/rooms/one-to-one/{otherUserId}` | 1:1 방 생성 또는 재사용 |
 | GET | `/api/chat/rooms/{roomId}` | 방 상세 |
@@ -82,7 +91,7 @@ multipart 업로드 지원 형식은 JPG, PNG, GIF, WebP, MP4, WebM, MOV다. 사
 | GET | `/api/chat/rooms/{roomId}/unread-count` | 방의 미읽음 수 |
 | GET | `/api/chat/unread-counts` | 모든 방의 미읽음 수 |
 
-채팅 첨부는 이미지·영상 외에 PDF, ZIP, Office 문서, TXT, CSV, JSON, Markdown을 지원한다. 이미지 10MB, 영상 100MB, 문서 25MB, 한 메시지 전체 120MB가 상한이다. 메시지 DTO의 `attachments[]`는 URL·썸네일·원래 파일명·MIME·크기·해상도·재생시간·순서를 포함하며 REST 저장 응답과 STOMP 실시간 이벤트의 계약이 같다.
+채팅 첨부는 이미지·영상 외에 PDF, ZIP, Office 문서, TXT, CSV, JSON, Markdown을 지원한다. 이미지 10MB, 영상 100MB, 문서 25MB, 한 메시지 전체 120MB가 상한이다. 메시지 DTO의 `attachments[]`는 URL·썸네일·원래 파일명·MIME·크기·해상도·재생시간·순서를 포함하며 REST 저장 응답과 STOMP 실시간 이벤트의 계약이 같다. `/uploads/chat/**` 조회도 세션과 해당 채팅방 참가자 권한을 확인하며, 응답은 공유 캐시에 저장하지 않는다.
 
 ## 안전 API
 

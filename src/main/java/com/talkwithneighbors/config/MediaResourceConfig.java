@@ -33,9 +33,16 @@ public class MediaResourceConfig implements WebMvcConfigurer {
             }
             registry.addResourceHandler("/uploads/" + category + "/**")
                     .addResourceLocations(resourceLocation)
-                    .setCacheControl(CacheControl.maxAge(Duration.ofDays(30)).cachePublic())
+                    .setCacheControl(cacheControlFor(category))
                     .resourceChain(false)
                     .addResolver(new PathResourceResolver());
         }
+    }
+
+    static CacheControl cacheControlFor(String category) {
+        if ("chat".equals(category)) {
+            return CacheControl.noStore().cachePrivate();
+        }
+        return CacheControl.maxAge(Duration.ofDays(30)).cachePublic();
     }
 }

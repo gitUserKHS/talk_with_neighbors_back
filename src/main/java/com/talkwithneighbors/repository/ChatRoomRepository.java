@@ -48,6 +48,40 @@ public interface ChatRoomRepository extends JpaRepository<ChatRoom, String> {
      */
     @Query("SELECT DISTINCT cr FROM ChatRoom cr JOIN FETCH cr.participants WHERE :user MEMBER OF cr.participants ORDER BY cr.lastMessageTime DESC")
     Page<ChatRoom> findByParticipantsContainingOrderByLastMessageTimeDesc(@Param("user") User user, Pageable pageable);
+
+    @Query(
+            value = """
+                    SELECT DISTINCT cr
+                    FROM ChatRoom cr
+                    JOIN cr.participants participant
+                    WHERE participant = :user
+                      AND (:type IS NULL OR cr.type = :type)
+                      AND (
+                        :query = ''
+                        OR LOWER(cr.name) LIKE LOWER(CONCAT('%', :query, '%'))
+                        OR LOWER(cr.id) LIKE LOWER(CONCAT('%', :query, '%'))
+                      )
+                    ORDER BY cr.lastMessageTime DESC, cr.id ASC
+                    """,
+            countQuery = """
+                    SELECT COUNT(DISTINCT cr)
+                    FROM ChatRoom cr
+                    JOIN cr.participants participant
+                    WHERE participant = :user
+                      AND (:type IS NULL OR cr.type = :type)
+                      AND (
+                        :query = ''
+                        OR LOWER(cr.name) LIKE LOWER(CONCAT('%', :query, '%'))
+                        OR LOWER(cr.id) LIKE LOWER(CONCAT('%', :query, '%'))
+                      )
+                    """
+    )
+    Page<ChatRoom> searchParticipantRooms(
+            @Param("user") User user,
+            @Param("type") ChatRoomType type,
+            @Param("query") String query,
+            Pageable pageable
+    );
     
     @Query("SELECT cr FROM ChatRoom cr JOIN cr.participants p1 JOIN cr.participants p2 " +
            "WHERE p1 = :user1 AND p2 = :user2 AND SIZE(cr.participants) = 2")

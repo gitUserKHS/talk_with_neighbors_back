@@ -107,4 +107,22 @@ class S3MediaResourceControllerTest {
         assertThat(response.getBody()).isNull();
         verify(storage, never()).writeTo(any(), any(), any());
     }
+
+    @Test
+    void keepsFeedMediaPublicButPreventsSharedCachingForChatMedia() {
+        when(request.getMethod()).thenReturn("HEAD");
+        when(storage.metadata("chat/video.mp4")).thenReturn(new MediaObjectMetadata(
+                10L, "video/mp4", "chat-etag", Instant.parse("2026-07-14T00:00:00Z")
+        ));
+
+        var feedResponse = controller.resource("feed", "video.mp4", null, request);
+        var chatResponse = controller.resource("chat", "video.mp4", null, request);
+
+        assertThat(feedResponse.getHeaders().getCacheControl())
+                .contains("public")
+                .doesNotContain("no-store");
+        assertThat(chatResponse.getHeaders().getCacheControl())
+                .contains("private", "no-store")
+                .doesNotContain("public");
+    }
 }
