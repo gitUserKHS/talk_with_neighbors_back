@@ -112,6 +112,8 @@ class PublicContentRepositoryTest {
 
         assertThat(result.getTotalElements()).isEqualTo(2);
         assertThat(result.getContent()).extracting(ChatRoom::getId).containsExactly("meetup-1");
+        assertThat(meetupRepository.countPublicMeetups(ChatRoomType.GROUP, ChatRoomStatus.ACTIVE))
+                .isEqualTo(2);
     }
 
     private User persistUser(String username) {

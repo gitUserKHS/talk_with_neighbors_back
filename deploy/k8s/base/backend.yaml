@@ -94,6 +94,9 @@ spec:
                 configMapKeyRef:
                   name: runtime-config
                   key: cookie-secure
+            # Curated DTOs are returned only while the public datasets are empty.
+            - name: APP_PORTFOLIO_DEMO_ENABLED
+              value: "true"
             - name: APP_MEDIA_STORAGE_TYPE
               valueFrom:
                 configMapKeyRef:

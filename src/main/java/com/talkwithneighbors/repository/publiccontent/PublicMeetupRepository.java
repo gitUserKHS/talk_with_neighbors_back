@@ -11,6 +11,18 @@ import org.springframework.data.repository.query.Param;
 
 public interface PublicMeetupRepository extends Repository<ChatRoom, String> {
 
+    @Query("""
+            SELECT COUNT(room)
+            FROM ChatRoom room
+            WHERE room.type = :type
+              AND room.publicRoom = true
+              AND room.status = :status
+            """)
+    long countPublicMeetups(
+            @Param("type") ChatRoomType type,
+            @Param("status") ChatRoomStatus status
+    );
+
     @Query(
             value = """
                     SELECT DISTINCT room
