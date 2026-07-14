@@ -20,6 +20,8 @@ import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
 
 import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -169,7 +171,13 @@ class PublicContentServiceTest {
         assertThat(afterEnd.getContent()).isEmpty();
         assertThat(first.getContent().get(0).demo()).isTrue();
         assertThat(first.getContent().get(0).scheduledAt())
-                .isAfter(LocalDateTime.now().plusDays(2));
+                .isAfter(OffsetDateTime.now(ZoneOffset.UTC).plusDays(2));
+        assertThat(first.getContent().get(0).scheduledAt().getOffset()).isEqualTo(ZoneOffset.UTC);
+        assertThat(first.getContent().get(0).scheduledAt().getHour()).isEqualTo(9);
+        assertThat(first.getContent().get(0).scheduledAt().getMinute()).isEqualTo(30);
+        assertThat(first.getContent().get(0).registrationDeadline().getOffset()).isEqualTo(ZoneOffset.UTC);
+        assertThat(first.getContent().get(0).registrationDeadline().getHour()).isEqualTo(11);
+        assertThat(first.getContent().get(0).registrationDeadline().getMinute()).isZero();
     }
 
     @Test

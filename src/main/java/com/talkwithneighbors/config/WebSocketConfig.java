@@ -1,8 +1,10 @@
 package com.talkwithneighbors.config;
 
 import com.talkwithneighbors.handler.CustomHandshakeHandler;
+import com.talkwithneighbors.handler.SessionCookieHandshakeInterceptor;
 import com.talkwithneighbors.interceptor.CustomAuthenticationChannelInterceptor;
 import com.talkwithneighbors.service.RedisSessionService;
+import com.talkwithneighbors.websocket.AuthenticatedWebSocketSessionRegistry;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
@@ -12,6 +14,7 @@ import org.springframework.messaging.simp.config.ChannelRegistration;
 import org.springframework.messaging.simp.config.MessageBrokerRegistry;
 import org.springframework.security.authorization.AuthorizationManager;
 import org.springframework.security.messaging.access.intercept.AuthorizationChannelInterceptor;
+import org.springframework.security.messaging.context.SecurityContextChannelInterceptor;
 import org.springframework.web.socket.config.annotation.EnableWebSocketMessageBroker;
 import org.springframework.web.socket.config.annotation.StompEndpointRegistry;
 import org.springframework.web.socket.config.annotation.WebSocketMessageBrokerConfigurer;
@@ -33,6 +36,9 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
 
     @Autowired
     private CustomAuthenticationChannelInterceptor customAuthenticationChannelInterceptor;
+
+    @Autowired
+    private AuthenticatedWebSocketSessionRegistry authenticatedWebSocketSessionRegistry;
 
     @Override
     public void configureMessageBroker(MessageBrokerRegistry config) {
@@ -64,6 +70,7 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
         // WebSocket 엔드포인트 설정
         registry.addEndpoint("/ws")
                 .setAllowedOrigins(allowedOrigins.split(","))
+                .addInterceptors(new SessionCookieHandshakeInterceptor())
                 .setHandshakeHandler(new CustomHandshakeHandler(redisSessionService))
                 .withSockJS(); // SockJS 폴백 옵션 추가
     }
@@ -73,15 +80,19 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
         // WebSocket 메시지 크기 제한 설정
         registration.setMessageSizeLimit(64 * 1024) // 64KB
                     .setSendBufferSizeLimit(512 * 1024) // 512KB
-                    .setSendTimeLimit(20000); // 20초
+                    .setSendTimeLimit(20000) // 20초
+                    .addDecoratorFactory(authenticatedWebSocketSessionRegistry.decoratorFactory());
     }
 
     @Override
     public void configureClientInboundChannel(ChannelRegistration registration) {
-        // 1. CustomAuthenticationChannelInterceptor를 먼저 등록
+        // Convert the trusted handshake principal into the message Authentication.
         registration.interceptors(customAuthenticationChannelInterceptor);
 
-        // 2. 그 다음에 AuthorizationChannelInterceptor를 등록
+        // Populate and clear SecurityContext for both send and executor threads.
+        registration.interceptors(new SecurityContextChannelInterceptor());
+
+        // Authorize only after the current message has populated SecurityContext.
         AuthorizationChannelInterceptor authorizationChannelInterceptor = 
             new AuthorizationChannelInterceptor(messageAuthorizationManager);
         registration.interceptors(authorizationChannelInterceptor);

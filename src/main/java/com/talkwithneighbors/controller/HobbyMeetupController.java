@@ -2,7 +2,6 @@ package com.talkwithneighbors.controller;
 
 import com.talkwithneighbors.dto.meetup.CreateHobbyMeetupRequest;
 import com.talkwithneighbors.dto.meetup.HobbyMeetupDto;
-import com.talkwithneighbors.security.RequireLogin;
 import com.talkwithneighbors.security.UserSession;
 import com.talkwithneighbors.service.HobbyMeetupService;
 import jakarta.validation.Valid;
@@ -22,7 +21,6 @@ import org.springframework.web.bind.annotation.RestController;
 @RestController
 @RequestMapping("/api/meetups")
 @RequiredArgsConstructor
-@RequireLogin
 public class HobbyMeetupController {
     private final HobbyMeetupService hobbyMeetupService;
 

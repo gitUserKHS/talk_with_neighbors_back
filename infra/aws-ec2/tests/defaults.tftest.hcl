@@ -29,6 +29,16 @@ run "secure_low_cost_defaults" {
   }
 
   assert {
+    condition     = aws_eip.app.domain == "vpc"
+    error_message = "The portfolio node must allocate a VPC Elastic IP that survives stop/start."
+  }
+
+  assert {
+    condition     = output.application_https_url == "https://talk-with-neighbors.duckdns.org"
+    error_message = "The default application URL must be the canonical HTTPS DuckDNS origin."
+  }
+
+  assert {
     condition = (
       strcontains(aws_instance.app.user_data, "cluster-cidr: \"10.244.0.0/16\"") &&
       strcontains(aws_instance.app.user_data, "service-cidr: \"10.96.0.0/16\"") &&

@@ -3,7 +3,6 @@ package com.talkwithneighbors.controller;
 import com.talkwithneighbors.dto.feed.FeedPostDto;
 import com.talkwithneighbors.dto.meetup.HobbyMeetupDto;
 import com.talkwithneighbors.dto.mypage.*;
-import com.talkwithneighbors.security.RequireLogin;
 import com.talkwithneighbors.security.UserSession;
 import com.talkwithneighbors.service.MyPageService;
 import jakarta.validation.Valid;
@@ -15,7 +14,6 @@ import java.util.List;
 
 @RestController
 @RequestMapping("/api/mypage")
-@RequireLogin
 @RequiredArgsConstructor
 public class MyPageController {
     private final MyPageService myPageService;

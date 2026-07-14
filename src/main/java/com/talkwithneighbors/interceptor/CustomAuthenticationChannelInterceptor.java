@@ -1,92 +1,164 @@
 package com.talkwithneighbors.interceptor;
 
-import com.talkwithneighbors.service.RedisSessionService; // 직접 사용하지 않으므로 제거 가능
+import com.talkwithneighbors.handler.CustomHandshakeHandler;
+import com.talkwithneighbors.security.UserSession;
+import com.talkwithneighbors.service.SessionValidationService;
+import com.talkwithneighbors.websocket.AuthenticatedWebSocketSessionRegistry;
+import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.messaging.Message;
 import org.springframework.messaging.MessageChannel;
+import org.springframework.messaging.MessageHandler;
+import org.springframework.messaging.simp.stomp.StompCommand;
 import org.springframework.messaging.simp.stomp.StompHeaderAccessor;
-import org.springframework.messaging.support.ChannelInterceptor;
+import org.springframework.messaging.support.ExecutorChannelInterceptor;
+import org.springframework.messaging.support.MessageBuilder;
 import org.springframework.messaging.support.MessageHeaderAccessor;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
-import org.springframework.security.core.userdetails.UserDetails;
-import org.springframework.security.core.userdetails.UserDetailsService;
 import org.springframework.stereotype.Component;
 
 import java.security.Principal;
-import java.nio.charset.StandardCharsets;
-import java.util.Base64;
-import com.talkwithneighbors.service.impl.UserServiceImpl; // UserServiceImpl import
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
+/**
+ * Revalidates the server-side handshake credential for every client frame and
+ * converts the current session user into the message Authentication. This
+ * rejects subsequent client frames after logout or Redis expiry. The transport
+ * registry also closes every live socket that belongs to a revoked session.
+ */
 @Component
-public class CustomAuthenticationChannelInterceptor implements ChannelInterceptor {
+@RequiredArgsConstructor
+public class CustomAuthenticationChannelInterceptor implements ExecutorChannelInterceptor {
 
+    public static final String USER_ID_ATTRIBUTE = "userId";
     private static final Logger log = LoggerFactory.getLogger(CustomAuthenticationChannelInterceptor.class);
+    private static final List<SimpleGrantedAuthority> USER_AUTHORITIES =
+            List.of(new SimpleGrantedAuthority("ROLE_USER"));
+    private static final Set<StompCommand> AUTHENTICATED_COMMANDS = Set.of(
+            StompCommand.CONNECT,
+            StompCommand.SEND,
+            StompCommand.SUBSCRIBE,
+            StompCommand.UNSUBSCRIBE,
+            StompCommand.ACK,
+            StompCommand.NACK,
+            StompCommand.BEGIN,
+            StompCommand.COMMIT,
+            StompCommand.ABORT
+    );
 
-    private final UserServiceImpl userDetailsService; // 타입을 UserServiceImpl로 변경
-
-    @Autowired
-    public CustomAuthenticationChannelInterceptor(UserServiceImpl userDetailsService) { // 생성자 주입 타입 변경
-        this.userDetailsService = userDetailsService;
-    }
+    private final SessionValidationService sessionValidationService;
+    private final AuthenticatedWebSocketSessionRegistry webSocketSessionRegistry;
 
     @Override
     public Message<?> preSend(Message<?> message, MessageChannel channel) {
+        // Inbound channel threads are pooled. Never let context from a previous
+        // message influence current authentication or authorization.
+        SecurityContextHolder.clearContext();
+
         StompHeaderAccessor accessor = MessageHeaderAccessor.getAccessor(message, StompHeaderAccessor.class);
-
-        if (accessor != null && accessor.getCommand() != null) {
-            java.security.Principal principal = accessor.getUser(); // 타입 명시
-            Authentication currentAuth = SecurityContextHolder.getContext().getAuthentication();
-
-            if (principal != null && principal.getName() != null) {
-                String principalName = principal.getName(); // Principal 이름 (사용자 ID 문자열)
-                
-                try {
-                    Long userId = Long.parseLong(principalName);
-                    log.debug("Attempting to populate SecurityContext. Principal Name (User ID): {}", userId);
-
-                    // WebSocket 세션 속성에 userId 설정 (매우 중요!)
-                    accessor.getSessionAttributes().put("userId", principalName);
-                    log.info("Set userId in WebSocket session attributes: {}", principalName);
-
-                    // UserDetails의 username과 Principal의 name (ID)이 다를 수 있으므로, UserDetails 자체로 비교하거나, UserDetails의 username으로 비교합니다.
-                    // 여기서는 UserDetails.getUsername()으로 비교합니다.
-                    if (currentAuth == null || !(currentAuth.getPrincipal() instanceof UserDetails) || 
-                        !((UserDetails)currentAuth.getPrincipal()).getUsername().equals(userDetailsService.loadUserById(userId).getUsername())) {
-                        
-                        UserDetails userDetails = userDetailsService.loadUserById(userId); // 사용자 ID로 조회
-
-                        if (userDetails != null) {
-                            UsernamePasswordAuthenticationToken authentication = new UsernamePasswordAuthenticationToken(
-                                    userDetails, null, userDetails.getAuthorities());
-                            SecurityContextHolder.getContext().setAuthentication(authentication);
-                            log.info("SecurityContextHolder populated with Authentication for user ID: {}, username: {}, authorities: {}",
-                                     userId, userDetails.getUsername(), userDetails.getAuthorities());
-                        } else {
-                            log.warn("UserDetails not found for user ID: {}. Cannot set SecurityContext.", userId);
-                        }
-                    } else {
-                        log.trace("SecurityContextHolder already contains valid Authentication for user ID: {}", userId);
-                    }
-                } catch (NumberFormatException nfe) {
-                    log.error("Failed to parse principal name to Long (User ID): {}. Error: {}", principalName, nfe.getMessage());
-                } catch (Exception e) {
-                    log.error("Error loading UserDetails or setting SecurityContext for principal name (User ID) {}: {}", 
-                              principalName, e.getMessage(), e);
-                }
-            } else if (accessor.getCommand() != org.springframework.messaging.simp.stomp.StompCommand.CONNECT && accessor.getCommand() != org.springframework.messaging.simp.stomp.StompCommand.CONNECTED) {
-                // CONNECT, CONNECTED 외의 STOMP 명령어에 대해 Principal이 null이면 경고 로그 (DISCONNECT 등은 Principal이 없을 수 있음)
-                 if (accessor.getUser() == null && 
-                    (accessor.getCommand() == org.springframework.messaging.simp.stomp.StompCommand.SEND || 
-                     accessor.getCommand() == org.springframework.messaging.simp.stomp.StompCommand.SUBSCRIBE || 
-                     accessor.getCommand() == org.springframework.messaging.simp.stomp.StompCommand.UNSUBSCRIBE)) {
-                    log.warn("STOMP Principal is null for command: {}. This might indicate an issue if authentication is expected.", accessor.getCommand());
-                 }
-            }
+        if (accessor == null) {
+            return message;
         }
+
+        Map<String, Object> sessionAttributes = accessor.getSessionAttributes();
+        Object credential = sessionAttributes != null
+                ? sessionAttributes.get(CustomHandshakeHandler.SESSION_ATTRIBUTE)
+                : null;
+        StompCommand command = accessor.getCommand();
+        boolean requiresAuthentication = command != null && AUTHENTICATED_COMMANDS.contains(command);
+        if (!(credential instanceof String sessionId) || sessionId.isBlank()) {
+            if (!requiresAuthentication) {
+                return message;
+            }
+            throw new AccessDeniedException("WebSocket session is missing or expired.");
+        }
+
+        // A null command represents an inbound heartbeat. Revalidate it too so
+        // an otherwise passive connection is closed promptly after expiry.
+        if (!requiresAuthentication && command != null) {
+            return message;
+        }
+
+        final UserSession userSession;
+        try {
+            userSession = sessionValidationService.validateSessionWithoutTouch(sessionId);
+        } catch (RuntimeException exception) {
+            webSocketSessionRegistry.closeSessionsForCredential(sessionId);
+            throw new AccessDeniedException("WebSocket session is missing or expired.", exception);
+        }
+
+        if (command == null) {
+            return message;
+        }
+
+        String principalName = userSession != null ? userSession.getUserIdStr() : null;
+        if (!isValidUserId(principalName)) {
+            log.warn("Rejected a STOMP message with an invalid validated user identity.");
+            throw new AccessDeniedException("WebSocket user identity is invalid.");
+        }
+
+        Principal handshakePrincipal = accessor.getUser();
+        if (handshakePrincipal != null && !principalName.equals(handshakePrincipal.getName())) {
+            log.warn("Rejected a STOMP message whose session user no longer matches the handshake user.");
+            throw new AccessDeniedException("WebSocket session user changed.");
+        }
+
+        // Existing @MessageMapping handlers read the user id from the
+        // server-side simpSessionAttributes map. Always overwrite it with the
+        // freshly validated value rather than trusting a client frame.
+        sessionAttributes.put(USER_ID_ATTRIBUTE, principalName);
+
+        Authentication authentication = new UsernamePasswordAuthenticationToken(
+                principalName,
+                null,
+                USER_AUTHORITIES
+        );
+        StompHeaderAccessor authenticatedAccessor = StompHeaderAccessor.wrap(message);
+        authenticatedAccessor.setUser(authentication);
+        return MessageBuilder.createMessage(message.getPayload(), authenticatedAccessor.getMessageHeaders());
+    }
+
+    @Override
+    public void afterSendCompletion(
+            Message<?> message,
+            MessageChannel channel,
+            boolean sent,
+            Exception exception
+    ) {
+        SecurityContextHolder.clearContext();
+    }
+
+    @Override
+    public Message<?> beforeHandle(Message<?> message, MessageChannel channel, MessageHandler handler) {
+        SecurityContextHolder.clearContext();
         return message;
     }
-} 
+
+    @Override
+    public void afterMessageHandled(
+            Message<?> message,
+            MessageChannel channel,
+            MessageHandler handler,
+            Exception exception
+    ) {
+        SecurityContextHolder.clearContext();
+    }
+
+    private boolean isValidUserId(String principalName) {
+        if (principalName == null || principalName.isBlank()) {
+            return false;
+        }
+        try {
+            return Long.parseLong(principalName) > 0;
+        } catch (NumberFormatException exception) {
+            return false;
+        }
+    }
+}

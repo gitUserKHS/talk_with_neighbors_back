@@ -1,8 +1,10 @@
 package com.talkwithneighbors.dto.publiccontent;
 
+import com.fasterxml.jackson.annotation.JsonFormat;
 import com.talkwithneighbors.entity.ChatRoom;
+import com.talkwithneighbors.service.MeetupTimePolicy;
 
-import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
 import java.util.List;
 
 public record PublicMeetupDto(
@@ -13,9 +15,9 @@ public record PublicMeetupDto(
         Integer maxParticipants,
         int participantCount,
         boolean full,
-        LocalDateTime scheduledAt,
+        @JsonFormat(shape = JsonFormat.Shape.STRING) OffsetDateTime scheduledAt,
         Integer durationMinutes,
-        LocalDateTime registrationDeadline,
+        @JsonFormat(shape = JsonFormat.Shape.STRING) OffsetDateTime registrationDeadline,
         boolean demo
 ) {
     public static PublicMeetupDto fromEntity(ChatRoom room) {
@@ -28,9 +30,9 @@ public record PublicMeetupDto(
                 room.getMaxParticipants(),
                 participantCount,
                 room.getMaxParticipants() != null && participantCount >= room.getMaxParticipants(),
-                room.getScheduledAt(),
+                MeetupTimePolicy.toUtcOffset(room.getScheduledAt(), room.getMeetupTimeBasis()),
                 room.getDurationMinutes(),
-                room.getRegistrationDeadline(),
+                MeetupTimePolicy.toUtcOffset(room.getRegistrationDeadline(), room.getMeetupTimeBasis()),
                 false
         );
     }

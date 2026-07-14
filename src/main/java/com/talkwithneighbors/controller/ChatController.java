@@ -12,7 +12,6 @@ import com.talkwithneighbors.entity.Message;
 import com.talkwithneighbors.entity.MessageAttachment;
 import com.talkwithneighbors.entity.User;
 import com.talkwithneighbors.repository.MessageRepository;
-import com.talkwithneighbors.security.RequireLogin;
 import com.talkwithneighbors.service.ChatService;
 import com.talkwithneighbors.service.MediaStorageService;
 import com.talkwithneighbors.service.RedisSessionService;
@@ -42,7 +41,6 @@ import com.talkwithneighbors.exception.ChatException;
 
 @RestController
 @RequestMapping("/api/chat")
-@RequireLogin
 @Slf4j
 public class ChatController extends BaseController {
 
@@ -293,7 +291,7 @@ public class ChatController extends BaseController {
             @PathVariable(name = "messageId") String messageId,
             HttpServletRequest request) {
         User user = getCurrentUser(request);
-        chatService.markMessageAsRead(messageId, user.getId().toString());
+        chatService.markMessageAsRead(roomId, messageId, user.getId().toString());
         return ResponseEntity.ok().build();
     }
 
@@ -371,7 +369,7 @@ public class ChatController extends BaseController {
         
         try {
             User user = getCurrentUser(request);
-            long unreadCount = messageRepository.countUnreadMessages(roomId, user.getId());
+            long unreadCount = chatService.getUnreadCount(roomId, user.getId().toString());
             
             Map<String, Object> response = new HashMap<>();
             response.put("chatRoomId", roomId);
@@ -418,20 +416,16 @@ public class ChatController extends BaseController {
     public void sendMessageViaWebSocket(@Payload ChatMessageDto chatMessageDto, 
                                        @Header("simpSessionAttributes") Map<String, Object> sessionAttributes) {
         log.info("=== [ChatController] WebSocket sendMessage START ===");
-        log.info("[ChatController] Received payload: {}", chatMessageDto);
-        log.info("[ChatController] Session attributes: {}", sessionAttributes);
-        
         try {
             String roomId = chatMessageDto.getRoomId();
             String userIdString = (String) sessionAttributes.get("userId");
             String content = chatMessageDto.getContent();
             
-            log.info("[ChatController] WebSocket sendMessage request: roomId={}, userId={}, content='{}'", 
-                     roomId, userIdString, content);
+            log.debug("[ChatController] WebSocket sendMessage request: roomId={}, userId={}",
+                     roomId, userIdString);
             
             if (roomId == null || userIdString == null || content == null || content.trim().isEmpty()) {
-                log.warn("[ChatController] Invalid sendMessage request: roomId={}, userId={}, content='{}'", 
-                         roomId, userIdString, content);
+                log.warn("[ChatController] Invalid WebSocket sendMessage request.");
                 return;
             }
             
@@ -465,16 +459,17 @@ public class ChatController extends BaseController {
                                              @Header("simpSessionAttributes") Map<String, Object> sessionAttributes) {
         try {
             String messageId = payload.get("messageId");
+            String roomId = payload.get("roomId");
             String userIdString = (String) sessionAttributes.get("userId");
             
             log.info("[ChatController] WebSocket markAsRead request: messageId={}, userId={}", messageId, userIdString);
             
-            if (messageId == null || userIdString == null) {
-                log.warn("[ChatController] Invalid markAsRead request: messageId={}, userId={}", messageId, userIdString);
+            if (roomId == null || messageId == null || userIdString == null) {
+                log.warn("[ChatController] Invalid markAsRead request.");
                 return;
             }
             
-            chatService.markMessageAsRead(messageId, userIdString);
+            chatService.markMessageAsRead(roomId, messageId, userIdString);
             
             log.info("[ChatController] Successfully marked message as read via WebSocket: messageId={}, userId={}", 
                      messageId, userIdString);

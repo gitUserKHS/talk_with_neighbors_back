@@ -8,6 +8,7 @@ import org.springframework.data.domain.Pageable;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Locale;
@@ -19,11 +20,13 @@ import java.util.Locale;
  * mutation targets.
  */
 final class PortfolioDemoContent {
+    private static final ZoneId PORTFOLIO_TIME_ZONE = ZoneId.of("Asia/Seoul");
+
     private PortfolioDemoContent() {
     }
 
     static Page<PublicFeedPostDto> feed(Pageable pageable) {
-        LocalDate today = LocalDate.now(ZoneOffset.UTC);
+        LocalDate today = LocalDate.now(PORTFOLIO_TIME_ZONE);
         List<PublicFeedPostDto> items = List.of(
             feed(
                     "portfolio-demo-feed-01",
@@ -62,7 +65,7 @@ final class PortfolioDemoContent {
     }
 
     static Page<PublicMeetupDto> meetups(String keyword, String interest, Pageable pageable) {
-        LocalDate today = LocalDate.now(ZoneOffset.UTC);
+        LocalDate today = LocalDate.now(PORTFOLIO_TIME_ZONE);
         List<PublicMeetupDto> items = List.of(
             meetup(
                     "portfolio-demo-meetup-01",
@@ -158,9 +161,13 @@ final class PortfolioDemoContent {
                 maxParticipants,
                 participantCount,
                 participantCount >= maxParticipants,
-                scheduledAt,
+                scheduledAt.atZone(PORTFOLIO_TIME_ZONE)
+                        .withZoneSameInstant(ZoneOffset.UTC)
+                        .toOffsetDateTime(),
                 durationMinutes,
-                registrationDeadline,
+                registrationDeadline.atZone(PORTFOLIO_TIME_ZONE)
+                        .withZoneSameInstant(ZoneOffset.UTC)
+                        .toOffsetDateTime(),
                 true
         );
     }

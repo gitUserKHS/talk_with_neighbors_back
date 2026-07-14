@@ -2,7 +2,6 @@ package com.talkwithneighbors.controller;
 
 import com.talkwithneighbors.dto.safety.*;
 import com.talkwithneighbors.entity.SafetyTargetType;
-import com.talkwithneighbors.security.RequireLogin;
 import com.talkwithneighbors.security.UserSession;
 import com.talkwithneighbors.service.SafetyService;
 import jakarta.validation.Valid;
@@ -14,7 +13,6 @@ import java.util.List;
 
 @RestController
 @RequestMapping("/api/safety")
-@RequireLogin
 @RequiredArgsConstructor
 public class SafetyController {
     private final SafetyService safetyService;

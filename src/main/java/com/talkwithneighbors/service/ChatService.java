@@ -47,7 +47,9 @@ public interface ChatService {
     void deleteRoom(String roomId);
 
     // 메시지 읽음 처리
-    void markMessageAsRead(String messageId, String userId);
+    void markMessageAsRead(String roomId, String messageId, String userId);
+
+    long getUnreadCount(String roomId, String userId);
 
     // 채팅방에 사용자 추가
     void addUserToRoom(String roomId, String userId);

@@ -36,8 +36,6 @@ public class AuthService {
 
     @Transactional(rollbackFor = Exception.class)
     public AuthResponse register(RegisterRequestDto request) {
-        log.info("Registering new user with email: {}", request.getEmail());
-        
         try {
             // 이메일과 사용자명 중복 체크
             boolean emailExists = userRepository.existsByEmail(request.getEmail());
@@ -95,23 +93,6 @@ public class AuthService {
         try {
             User user = userRepository.findByEmail(request.getEmail())
                     .orElseThrow(() -> new AuthException("이메일 또는 비밀번호가 올바르지 않습니다.", HttpStatus.UNAUTHORIZED));
-
-            // === User 엔티티의 username 로깅 추가 ===
-            if (user != null && user.getUsername() != null) {
-                log.info("Username from DB in AuthService.login for email {}: '{}'", request.getEmail(), user.getUsername());
-                byte[] usernameBytes = user.getUsername().getBytes(java.nio.charset.StandardCharsets.UTF_8);
-                log.info("Username from DB (UTF-8 bytes) in AuthService.login: {}", java.util.Arrays.toString(usernameBytes));
-                try {
-                    log.info("Username from DB (re-decoded from UTF-8 bytes) in AuthService.login: '{}'", new String(usernameBytes, java.nio.charset.StandardCharsets.UTF_8));
-                    log.info("Username from DB (decoded as ISO-8859-1) in AuthService.login: '{}'", new String(user.getUsername().getBytes(java.nio.charset.StandardCharsets.ISO_8859_1), java.nio.charset.StandardCharsets.ISO_8859_1));
-                    log.info("Username from DB (decoded as MS949) in AuthService.login: '{}'", new String(user.getUsername().getBytes(java.nio.charset.Charset.forName("MS949")), java.nio.charset.Charset.forName("MS949")));
-                } catch (Exception e) {
-                    log.error("Error logging username encodings in AuthService.login", e);
-                }
-            } else {
-                log.warn("User or username is null in AuthService.login for email: {}", request.getEmail());
-            }
-            // === 로깅 추가 끝 ===
 
             if (!passwordEncoder.matches(request.getPassword(), user.getPassword())) {
                 throw new AuthException("이메일 또는 비밀번호가 올바르지 않습니다.", HttpStatus.UNAUTHORIZED);

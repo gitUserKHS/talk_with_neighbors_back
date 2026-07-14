@@ -58,7 +58,6 @@ jobs:
         env:
           MYSQL_PASSWORD: ci-password
           MYSQL_ROOT_PASSWORD: ci-root-password
-          JWT_SECRET: ci-only-secret-that-is-long-enough-for-validation
           PUBLIC_ORIGIN: https://example.invalid
         run: docker compose -f compose.production.yml config --quiet
       - name: Validate reproducible local compose

@@ -1,6 +1,10 @@
 name: Deploy EC2 k3s production
 
 on:
+  workflow_run:
+    workflows: ["Publish backend image"]
+    types: [completed]
+    branches: [main]
   workflow_dispatch:
     inputs:
       backend_image:
@@ -12,7 +16,7 @@ on:
         required: true
         type: string
       public_origin:
-        description: "Optional HTTP origin; blank derives the EC2 IPv4; diagnose://k3s collects a redacted one-day diagnostic artifact"
+        description: "Optional HTTPS DNS origin; blank uses https://talk-with-neighbors.duckdns.org; diagnose://k3s collects a redacted one-day diagnostic artifact"
         required: false
         type: string
       start_if_stopped:
@@ -41,7 +45,7 @@ permissions:
 jobs:
   diagnose:
     name: Collect redacted k3s diagnostics
-    if: github.ref == 'refs/heads/main' && inputs.public_origin == 'diagnose://k3s'
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.public_origin == 'diagnose://k3s'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment: production
@@ -334,7 +338,14 @@ jobs:
 
   deploy:
     name: Deploy through AWS Systems Manager
-    if: github.ref == 'refs/heads/main' && inputs.public_origin != 'diagnose://k3s'
+    if: >-
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_branch == 'main' &&
+       github.event.workflow_run.head_repository.full_name == github.repository) ||
+      (github.event_name == 'workflow_dispatch' &&
+       github.ref == 'refs/heads/main' &&
+       inputs.public_origin != 'diagnose://k3s')
     runs-on: ubuntu-latest
     # The current deploy role has a one-hour session. A guarded reset continues
     # independently in SSM (without cancellation) if this runner stops waiting.
@@ -346,21 +357,65 @@ jobs:
       INSTANCE_ID: ${{ vars.EC2_INSTANCE_ID }}
       DEPLOY_BUCKET: ${{ vars.DEPLOY_BUCKET }}
       MEDIA_BUCKET: ${{ vars.MEDIA_BUCKET }}
-      BACKEND_IMAGE: ${{ inputs.backend_image }}
-      FRONTEND_IMAGE: ${{ inputs.frontend_image }}
-      PUBLIC_ORIGIN_INPUT: ${{ inputs.public_origin }}
-      START_IF_STOPPED: ${{ inputs.start_if_stopped }}
-      REINITIALIZE_K3S_NETWORK: ${{ inputs.reinitialize_k3s_network }}
-      REINITIALIZE_CONFIRMATION: ${{ inputs.reinitialize_confirmation }}
+      BACKEND_IMAGE: ${{ github.event_name == 'workflow_dispatch' && inputs.backend_image || '' }}
+      FRONTEND_IMAGE: ${{ github.event_name == 'workflow_dispatch' && inputs.frontend_image || '' }}
+      PUBLIC_ORIGIN_INPUT: ${{ (github.event_name == 'workflow_dispatch' && inputs.public_origin) || vars.PUBLIC_ORIGIN || 'https://talk-with-neighbors.duckdns.org' }}
+      ACME_EMAIL: ${{ vars.ACME_EMAIL }}
+      START_IF_STOPPED: ${{ github.event_name == 'workflow_run' && 'true' || inputs.start_if_stopped }}
+      REINITIALIZE_K3S_NETWORK: ${{ github.event_name == 'workflow_run' && 'false' || inputs.reinitialize_k3s_network }}
+      REINITIALIZE_CONFIRMATION: ${{ github.event_name == 'workflow_dispatch' && inputs.reinitialize_confirmation || '' }}
       K3S_NETWORK_REINITIALIZE_ALLOWED: ${{ vars.K3S_NETWORK_REINITIALIZE_ALLOWED }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+
+      - name: Set up Buildx for immutable tag resolution
+        if: github.event_name == 'workflow_run'
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+
+      - name: Resolve verified main tags to immutable digests
+        if: github.event_name == 'workflow_run'
+        env:
+          GHCR_USERNAME: ${{ secrets.GHCR_USERNAME }}
+          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ -z "$GHCR_USERNAME" && -z "$GHCR_TOKEN" || -n "$GHCR_USERNAME" && -n "$GHCR_TOKEN" ]] || { echo "Set both GHCR credentials or neither" >&2; exit 1; }
+
+          ghcr_logged_in=false
+          cleanup_ghcr_login() {
+            if [[ "$ghcr_logged_in" == "true" ]]; then
+              docker logout ghcr.io >/dev/null 2>&1 || true
+            fi
+          }
+          trap cleanup_ghcr_login EXIT
+          if [[ -n "$GHCR_USERNAME" ]]; then
+            printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$GHCR_USERNAME" --password-stdin >/dev/null
+            ghcr_logged_in=true
+          fi
+
+          resolve_main_image() {
+            local image="$1"
+            local digest
+            digest="$(docker buildx imagetools inspect "${image}:main" | awk '$1 == "Digest:" && digest == "" { digest = $2 } END { print digest }')"
+            [[ "$digest" =~ ^sha256:[a-f0-9]{64}$ ]] || { echo "Could not resolve a valid OCI digest for ${image}:main" >&2; exit 1; }
+            printf '%s@%s' "$image" "$digest"
+          }
+
+          backend_image="$(resolve_main_image ghcr.io/gituserkhs/talk_with_neighbors_back)"
+          frontend_image="$(resolve_main_image ghcr.io/gituserkhs/talk_with_neighbors_front)"
+          {
+            printf 'BACKEND_IMAGE=%s\n' "$backend_image"
+            printf 'FRONTEND_IMAGE=%s\n' "$frontend_image"
+          } >> "$GITHUB_ENV"
+          echo "Resolved verified backend and frontend main tags to immutable OCI digests."
 
       - name: Validate deployment inputs
         env:
           MYSQL_PASSWORD: ${{ secrets.MYSQL_PASSWORD }}
           MYSQL_ROOT_PASSWORD: ${{ secrets.MYSQL_ROOT_PASSWORD }}
-          JWT_SECRET: ${{ secrets.JWT_SECRET }}
           GHCR_USERNAME: ${{ secrets.GHCR_USERNAME }}
           GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
         shell: bash
@@ -372,7 +427,6 @@ jobs:
           [[ -n "$AWS_ROLE_ARN" && -n "$DEPLOY_BUCKET" && -n "$MEDIA_BUCKET" ]] || { echo "AWS role and S3 bucket variables are required" >&2; exit 1; }
           (( ${#MYSQL_PASSWORD} >= 16 )) || { echo "MYSQL_PASSWORD must contain at least 16 characters" >&2; exit 1; }
           (( ${#MYSQL_ROOT_PASSWORD} >= 16 )) || { echo "MYSQL_ROOT_PASSWORD must contain at least 16 characters" >&2; exit 1; }
-          (( ${#JWT_SECRET} >= 32 )) || { echo "JWT_SECRET must contain at least 32 characters" >&2; exit 1; }
           [[ -z "$GHCR_USERNAME" && -z "$GHCR_TOKEN" || -n "$GHCR_USERNAME" && -n "$GHCR_TOKEN" ]] || { echo "Set both GHCR credentials or neither" >&2; exit 1; }
           expected_confirmation="REINITIALIZE_K3S_NETWORK:${INSTANCE_ID}:pods=10.244.0.0/16:services=10.96.0.0/16:dns=10.96.0.10"
           if [[ "$REINITIALIZE_K3S_NETWORK" == "true" ]]; then
@@ -409,8 +463,22 @@ jobs:
 
           public_ip="$(aws ec2 describe-instances --instance-ids "$INSTANCE_ID" --query 'Reservations[0].Instances[0].PublicIpAddress' --output text)"
           [[ "$public_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "EC2 has no public IPv4 address" >&2; exit 1; }
-          public_origin="${PUBLIC_ORIGIN_INPUT:-http://${public_ip}}"
-          [[ "$public_origin" =~ ^http://[^/]+$ ]] || { echo "The base ingress supports an HTTP origin without a path only" >&2; exit 1; }
+          elastic_ip="$(aws ec2 describe-addresses --filters "Name=instance-id,Values=$INSTANCE_ID" --query 'Addresses[0].PublicIp' --output text)"
+          [[ "$elastic_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ && "$elastic_ip" == "$public_ip" ]] || { echo "Apply Terraform so the instance has its declared Elastic IP before HTTPS deployment" >&2; exit 1; }
+          public_origin="$PUBLIC_ORIGIN_INPUT"
+          [[ "$public_origin" =~ ^https://([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]] || { echo "public_origin must be a lowercase HTTPS DNS origin without a port or path" >&2; exit 1; }
+          public_host="${public_origin#https://}"
+
+          dns_matches=false
+          for _ in {1..30}; do
+            resolved_ips="$(getent ahostsv4 "$public_host" 2>/dev/null | awk '{print $1}' | sort -u)"
+            if [[ "$resolved_ips" == "$elastic_ip" ]]; then
+              dns_matches=true
+              break
+            fi
+            sleep 10
+          done
+          [[ "$dns_matches" == "true" ]] || { echo "Update the ${public_host} A record to Elastic IP ${elastic_ip} and wait for propagation" >&2; exit 1; }
 
           for _ in {1..60}; do
             ping_status="$(aws ssm describe-instance-information --filters "Key=InstanceIds,Values=$INSTANCE_ID" --query 'InstanceInformationList[0].PingStatus' --output text 2>/dev/null || true)"
@@ -419,13 +487,14 @@ jobs:
           done
           [[ "${ping_status:-}" == "Online" ]] || { echo "SSM agent did not become online within five minutes" >&2; exit 1; }
           echo "public_origin=$public_origin" >> "$GITHUB_OUTPUT"
+          echo "public_host=$public_host" >> "$GITHUB_OUTPUT"
 
       - name: Build the private deployment bundle
         env:
           PUBLIC_ORIGIN: ${{ steps.instance.outputs.public_origin }}
+          ACME_EMAIL: ${{ env.ACME_EMAIL }}
           MYSQL_PASSWORD: ${{ secrets.MYSQL_PASSWORD }}
           MYSQL_ROOT_PASSWORD: ${{ secrets.MYSQL_ROOT_PASSWORD }}
-          JWT_SECRET: ${{ secrets.JWT_SECRET }}
           GHCR_USERNAME: ${{ secrets.GHCR_USERNAME }}
           GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
         shell: bash
@@ -448,9 +517,13 @@ jobs:
       - name: Run strict public smoke tests
         env:
           PUBLIC_ORIGIN: ${{ steps.instance.outputs.public_origin }}
+          PUBLIC_HOST: ${{ steps.instance.outputs.public_host }}
         shell: bash
         run: |
           set -euo pipefail
+          read -r redirect_status redirect_url < <(curl --show-error --silent --output /dev/null --max-redirs 0 --write-out '%{http_code} %{redirect_url}' "http://${PUBLIC_HOST}/healthz")
+          [[ "$redirect_status" == "301" || "$redirect_status" == "308" ]] || { echo "HTTP did not return a permanent HTTPS redirect" >&2; exit 1; }
+          [[ "$redirect_url" == "$PUBLIC_ORIGIN/healthz" ]] || { echo "HTTP redirect target was not the canonical HTTPS origin" >&2; exit 1; }
           health_status="$(curl --fail --show-error --silent --retry 12 --retry-all-errors --retry-delay 5 --output "$RUNNER_TEMP/healthz.txt" --write-out '%{http_code}' "$PUBLIC_ORIGIN/healthz")"
           [[ "$health_status" == "200" ]] || { echo "healthz returned HTTP $health_status" >&2; exit 1; }
           [[ "$(tr -d '\r\n' < "$RUNNER_TEMP/healthz.txt")" == "ok" ]] || { echo "healthz returned an unexpected body" >&2; exit 1; }

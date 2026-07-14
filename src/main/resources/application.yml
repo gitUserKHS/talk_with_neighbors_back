@@ -2,6 +2,11 @@ spring:
   application:
     name: talkWithNeighbors
   mandatory-file-encoding: UTF-8
+  jackson:
+    serialization:
+      write-dates-as-timestamps: false
+    deserialization:
+      adjust-dates-to-context-time-zone: false
   servlet:
     multipart:
       max-file-size: 100MB
@@ -122,26 +127,7 @@ cors:
 logging:
   level:
     com.talkwithneighbors: DEBUG
-    org.springframework.messaging: TRACE
-    org.springframework.web.socket: TRACE
-    org.springframework.messaging.simp: TRACE
-    org.springframework.messaging.simp.broker: TRACE
-    org.springframework.messaging.simp.user: TRACE
-    org.springframework.messaging.simp.stomp: TRACE
-    org.springframework.messaging.converter: TRACE
-    org.springframework.messaging.core: TRACE
-    org.springframework.messaging.support: TRACE
-    org.springframework.web.socket.sockjs: TRACE
-    org.springframework.web.socket.adapter: TRACE
-    org.springframework.web.socket.handler: TRACE
-    # === SimpleBroker 구독 레지스트리 상세 로깅 ===
-    org.springframework.messaging.simp.broker.DefaultSubscriptionRegistry: TRACE
-    org.springframework.messaging.simp.broker.SimpleBrokerMessageHandler: TRACE
     ROOT: WARN  # 다른 로그 노이즈 줄이기
-
-jwt:
-  secret: your-jwt-secret-key
-  expiration: 86400000
 
 app:
   portfolio-demo:

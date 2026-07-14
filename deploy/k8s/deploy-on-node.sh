@@ -44,6 +44,49 @@ verify_desired_cluster_network() {
   [[ "$kube_dns_ip" == "$K3S_DESIRED_CLUSTER_DNS" ]] || { echo "CoreDNS is not using 10.96.0.10" >&2; return 1; }
 }
 
+wait_for_traefik_https_config() {
+  local deployment_json acme_claim phase
+
+  for _ in {1..120}; do
+    deployment_json="$("${kubectl[@]}" -n kube-system get deployment traefik -o json 2>/dev/null || true)"
+    if [[ -n "$deployment_json" ]] && jq -e '
+      [.spec.template.spec.containers[] | select(.name == "traefik")][0] as $container |
+      ($container.args // []) as $args |
+      ($args | index("--certificatesresolvers.letsencrypt.acme.storage=/data/acme.json")) != null and
+      ($args | index("--certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web")) != null and
+      ($args | index("--entrypoints.web.http.redirections.entrypoint.to=websecure")) != null and
+      ($args | index("--entrypoints.web.http.redirections.entrypoint.scheme=https")) != null and
+      (.spec.template.spec.securityContext.fsGroup == 65532)
+    ' <<<"$deployment_json" >/dev/null; then
+      break
+    fi
+    sleep 5
+  done
+
+  if [[ -z "${deployment_json:-}" ]]; then
+    echo "Traefik did not render the HTTPS/ACME configuration within ten minutes" >&2
+    return 1
+  fi
+
+  if ! jq -e '
+    [.spec.template.spec.containers[] | select(.name == "traefik")][0].args as $args |
+    ($args | index("--certificatesresolvers.letsencrypt.acme.storage=/data/acme.json")) != null and
+    (.spec.template.spec.securityContext.fsGroup == 65532)
+  ' <<<"$deployment_json" >/dev/null; then
+    echo "Traefik did not render the HTTPS/ACME configuration within ten minutes" >&2
+    return 1
+  fi
+
+  acme_claim="$(jq -er '.spec.template.spec.volumes[] | select(.name == "data") | .persistentVolumeClaim.claimName' <<<"$deployment_json")"
+  for _ in {1..60}; do
+    phase="$("${kubectl[@]}" -n kube-system get "pvc/${acme_claim}" -o jsonpath='{.status.phase}' 2>/dev/null || true)"
+    [[ "$phase" == "Bound" ]] && break
+    sleep 5
+  done
+  [[ "${phase:-}" == "Bound" ]] || { echo "Traefik ACME storage PVC did not bind" >&2; return 1; }
+  "${kubectl[@]}" -n kube-system rollout status deployment/traefik --timeout=5m
+}
+
 restore_pending_mysql_dump() {
   local dump_path expected_sha256 actual_path file_mode table_count restore_error
   [[ -f "$MYSQL_RESTORE_PENDING" ]] || return 0
@@ -112,6 +155,7 @@ command -v k3s >/dev/null 2>&1 || { echo "k3s was not installed within 10 minute
 
 for required in \
   "$RELEASE_DIR/base/kustomization.yaml" \
+  "$RELEASE_DIR/traefik-config.yaml" \
   "$RELEASE_DIR/k3s-network-common.sh" \
   "$RELEASE_DIR/k3s-server-config.yaml" \
   "$RELEASE_DIR/runtime-config.json" \
@@ -129,10 +173,16 @@ sed -i "s#REPLACE_RELEASE_ID#${RELEASE_ID}#" "$RELEASE_DIR/base/backend.yaml"
 grep -Fq "image: ${BACKEND_IMAGE}" "$RELEASE_DIR/base/backend.yaml"
 grep -Fq "image: ${FRONTEND_IMAGE}" "$RELEASE_DIR/base/frontend.yaml"
 grep -Fq "talkwithneighbors.io/release: ${RELEASE_ID}" "$RELEASE_DIR/base/backend.yaml"
+if grep -Fq "REPLACE_ACME_EMAIL_ARGUMENT" "$RELEASE_DIR/traefik-config.yaml"; then
+  echo "Rendered Traefik configuration still contains the ACME email placeholder" >&2
+  exit 1
+fi
 
 kubectl=(k3s kubectl)
 "${kubectl[@]}" wait --for=condition=Ready node --all --timeout=30s
 verify_desired_cluster_network
+"${kubectl[@]}" apply -f "$RELEASE_DIR/traefik-config.yaml"
+wait_for_traefik_https_config # Gate TLS ingress creation on the rendered Traefik rollout and bound ACME PVC.
 "${kubectl[@]}" apply -f "$RELEASE_DIR/base/namespace.yaml"
 "${kubectl[@]}" apply -f "$RELEASE_DIR/runtime-config.json"
 "${kubectl[@]}" apply -f "$RELEASE_DIR/app-secrets.json"

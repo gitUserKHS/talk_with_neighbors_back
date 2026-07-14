@@ -1,11 +1,14 @@
 package com.talkwithneighbors.dto.meetup;
 
+import com.fasterxml.jackson.annotation.JsonFormat;
 import com.talkwithneighbors.entity.ChatRoom;
 import com.talkwithneighbors.entity.User;
+import com.talkwithneighbors.service.MeetupTimePolicy;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
 
+import java.time.OffsetDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.Locale;
@@ -25,6 +28,10 @@ public class HobbyMeetupDto {
     private List<String> interestTags;
     private List<String> sharedInterests;
     private String location;
+    private String locationAddress;
+    private Double latitude;
+    private Double longitude;
+    private String kakaoPlaceId;
     private Integer maxParticipants;
     private Integer participantCount;
     private boolean joined;
@@ -32,9 +39,11 @@ public class HobbyMeetupDto {
     private String creatorUsername;
     private String lastMessage;
     private String lastMessageTime;
-    private String scheduledAt;
+    @JsonFormat(shape = JsonFormat.Shape.STRING)
+    private OffsetDateTime scheduledAt;
     private Integer durationMinutes;
-    private String registrationDeadline;
+    @JsonFormat(shape = JsonFormat.Shape.STRING)
+    private OffsetDateTime registrationDeadline;
     private boolean waitlisted;
     private long waitlistCount;
 
@@ -58,6 +67,10 @@ public class HobbyMeetupDto {
                 .filter(tag -> currentInterests.contains(tag.trim().toLowerCase(Locale.ROOT)))
                 .toList());
         dto.setLocation(room.getLocation());
+        dto.setLocationAddress(room.getLocationAddress());
+        dto.setLatitude(room.getLatitude());
+        dto.setLongitude(room.getLongitude());
+        dto.setKakaoPlaceId(room.getKakaoPlaceId());
         dto.setMaxParticipants(room.getMaxParticipants());
         dto.setParticipantCount(participantCount);
         dto.setJoined(currentUser != null && room.getParticipants() != null
@@ -68,9 +81,11 @@ public class HobbyMeetupDto {
         if (room.getLastMessageTime() != null) {
             dto.setLastMessageTime(room.getLastMessageTime().format(DATE_TIME_FORMATTER));
         }
-        if (room.getScheduledAt() != null) dto.setScheduledAt(room.getScheduledAt().format(DATE_TIME_FORMATTER));
+        dto.setScheduledAt(MeetupTimePolicy.toUtcOffset(
+                room.getScheduledAt(), room.getMeetupTimeBasis()));
         dto.setDurationMinutes(room.getDurationMinutes());
-        if (room.getRegistrationDeadline() != null) dto.setRegistrationDeadline(room.getRegistrationDeadline().format(DATE_TIME_FORMATTER));
+        dto.setRegistrationDeadline(MeetupTimePolicy.toUtcOffset(
+                room.getRegistrationDeadline(), room.getMeetupTimeBasis()));
         return dto;
     }
 }

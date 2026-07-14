@@ -5,6 +5,7 @@ import com.talkwithneighbors.dto.meetup.HobbyMeetupDto;
 import com.talkwithneighbors.domain.event.MeetupJoinedEvent;
 import com.talkwithneighbors.entity.ChatRoom;
 import com.talkwithneighbors.entity.ChatRoomType;
+import com.talkwithneighbors.entity.MeetupTimeBasis;
 import com.talkwithneighbors.entity.User;
 import com.talkwithneighbors.exception.ChatException;
 import com.talkwithneighbors.repository.ChatRoomRepository;
@@ -30,6 +31,9 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.stream.Collectors;
 import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
+import java.time.Instant;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.talkwithneighbors.entity.OfflineNotification;
 
@@ -74,7 +78,8 @@ public class HobbyMeetupService {
         User currentUser = getUser(currentUserId);
         return chatRoomRepository.findByParticipantsContainingAndType(currentUser, ChatRoomType.GROUP).stream()
                 .filter(ChatRoom::isPublicRoom)
-                .sorted(Comparator.comparing(ChatRoom::getScheduledAt,
+                .sorted(Comparator.comparing(
+                        room -> MeetupTimePolicy.toInstant(room.getScheduledAt(), room.getMeetupTimeBasis()),
                         Comparator.nullsLast(Comparator.reverseOrder())))
                 .map(room -> toDto(room, currentUser))
                 .toList();
@@ -94,17 +99,25 @@ public class HobbyMeetupService {
         room.setDescription(trimToNull(request.getDescription()));
         room.setInterestTags(tags);
         room.setLocation(trimToNull(request.getLocation()));
+        room.setLocationAddress(trimToNull(request.getLocationAddress()));
+        room.setLatitude(request.getLatitude());
+        room.setLongitude(request.getLongitude());
+        room.setKakaoPlaceId(trimToNull(request.getKakaoPlaceId()));
         room.setMaxParticipants(request.getMaxParticipants());
-        if (request.getScheduledAt() != null && request.getScheduledAt().isBefore(LocalDateTime.now())) {
+        LocalDateTime scheduledAtUtc = toUtcLocalDateTime(request.getScheduledAt());
+        LocalDateTime registrationDeadlineUtc = toUtcLocalDateTime(request.getRegistrationDeadline());
+        LocalDateTime nowUtc = LocalDateTime.now(ZoneOffset.UTC);
+        if (scheduledAtUtc != null && scheduledAtUtc.isBefore(nowUtc)) {
             throw new ChatException("모임 일정은 현재 이후여야 해요.", HttpStatus.BAD_REQUEST);
         }
-        if (request.getRegistrationDeadline() != null && request.getScheduledAt() != null
-                && request.getRegistrationDeadline().isAfter(request.getScheduledAt())) {
+        if (registrationDeadlineUtc != null && scheduledAtUtc != null
+                && registrationDeadlineUtc.isAfter(scheduledAtUtc)) {
             throw new ChatException("신청 마감은 모임 시작 전이어야 해요.", HttpStatus.BAD_REQUEST);
         }
-        room.setScheduledAt(request.getScheduledAt());
+        room.setScheduledAt(scheduledAtUtc);
+        room.setMeetupTimeBasis(MeetupTimeBasis.UTC);
         room.setDurationMinutes(request.getDurationMinutes() != null ? request.getDurationMinutes() : 120);
-        room.setRegistrationDeadline(request.getRegistrationDeadline());
+        room.setRegistrationDeadline(registrationDeadlineUtc);
         room.setCreator(creator);
         room.getParticipants().add(creator);
 
@@ -117,7 +130,8 @@ public class HobbyMeetupService {
         if (room.getCreator() != null && userBlockRepository.existsBetween(userId, room.getCreator().getId())) {
             throw new ChatException("차단 관계인 사용자의 모임에는 참여할 수 없어요.", HttpStatus.FORBIDDEN);
         }
-        if (room.getRegistrationDeadline() != null && LocalDateTime.now().isAfter(room.getRegistrationDeadline())) {
+        if (MeetupTimePolicy.isPast(
+                room.getRegistrationDeadline(), room.getMeetupTimeBasis(), Instant.now())) {
             throw new ChatException("모임 신청이 마감되었어요.", HttpStatus.CONFLICT);
         }
 
@@ -230,5 +244,9 @@ public class HobbyMeetupService {
             return null;
         }
         return value.trim();
+    }
+
+    private LocalDateTime toUtcLocalDateTime(OffsetDateTime value) {
+        return value == null ? null : value.withOffsetSameInstant(ZoneOffset.UTC).toLocalDateTime();
     }
 }

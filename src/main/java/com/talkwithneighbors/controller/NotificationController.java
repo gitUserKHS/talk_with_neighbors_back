@@ -3,7 +3,6 @@ package com.talkwithneighbors.controller;
 import com.talkwithneighbors.service.OfflineNotificationService;
 import com.talkwithneighbors.service.NotificationInboxService;
 import com.talkwithneighbors.dto.notification.NotificationInboxDto;
-import com.talkwithneighbors.security.RequireLogin;
 import com.talkwithneighbors.security.UserSession;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
@@ -41,7 +40,6 @@ public class NotificationController {
     }
 
     @GetMapping("/api/notifications")
-    @RequireLogin
     public ResponseEntity<Page<NotificationInboxDto>> getNotifications(
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size,
@@ -51,27 +49,23 @@ public class NotificationController {
     }
 
     @GetMapping("/api/notifications/unread-count")
-    @RequireLogin
     public ResponseEntity<Map<String, Long>> unreadCount(UserSession session) {
         return ResponseEntity.ok(Map.of("count", notificationInboxService.unreadCount(session.getUserId())));
     }
 
     @PatchMapping("/api/notifications/{id}/read")
-    @RequireLogin
     public ResponseEntity<Void> markRead(@PathVariable Long id, UserSession session) {
         notificationInboxService.markRead(session.getUserId(), id);
         return ResponseEntity.noContent().build();
     }
 
     @PatchMapping("/api/notifications/read-all")
-    @RequireLogin
     public ResponseEntity<Void> markAllRead(UserSession session) {
         notificationInboxService.markAllRead(session.getUserId());
         return ResponseEntity.noContent().build();
     }
 
     @DeleteMapping("/api/notifications/{id}")
-    @RequireLogin
     public ResponseEntity<Void> delete(@PathVariable Long id, UserSession session) {
         notificationInboxService.delete(session.getUserId(), id);
         return ResponseEntity.noContent().build();

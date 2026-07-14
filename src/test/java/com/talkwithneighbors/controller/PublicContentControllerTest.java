@@ -4,10 +4,7 @@ import com.talkwithneighbors.dto.publiccontent.PublicFeedMediaDto;
 import com.talkwithneighbors.dto.publiccontent.PublicFeedPostDto;
 import com.talkwithneighbors.dto.publiccontent.PublicMeetupDto;
 import com.talkwithneighbors.entity.FeedMediaType;
-import com.talkwithneighbors.security.AuthInterceptor;
-import com.talkwithneighbors.security.PublicEndpoint;
 import com.talkwithneighbors.service.PublicContentService;
-import com.talkwithneighbors.service.SessionValidationService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -21,6 +18,8 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
 import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -39,23 +38,13 @@ class PublicContentControllerTest {
     @Mock
     PublicContentService publicContentService;
 
-    @Mock
-    SessionValidationService sessionValidationService;
-
     MockMvc mockMvc;
 
     @BeforeEach
     void setUp() {
         PublicContentController controller = new PublicContentController(publicContentService);
-        AuthInterceptor authInterceptor = new AuthInterceptor(sessionValidationService);
         mockMvc = MockMvcBuilders.standaloneSetup(controller)
-                .addInterceptors(authInterceptor)
                 .build();
-    }
-
-    @Test
-    void controllerIsExplicitlyMarkedPublic() {
-        assertThat(PublicContentController.class.isAnnotationPresent(PublicEndpoint.class)).isTrue();
     }
 
     @Test
@@ -94,7 +83,6 @@ class PublicContentControllerTest {
         verify(publicContentService).getFeed(pageable.capture());
         assertThat(pageable.getValue().getPageNumber()).isZero();
         assertThat(pageable.getValue().getPageSize()).isEqualTo(50);
-        verifyNoInteractions(sessionValidationService);
     }
 
     @Test
@@ -102,7 +90,7 @@ class PublicContentControllerTest {
         mockMvc.perform(get("/api/public/feed/post-1/comments"))
                 .andExpect(status().isNotFound());
 
-        verifyNoInteractions(publicContentService, sessionValidationService);
+        verifyNoInteractions(publicContentService);
     }
 
     @Test
@@ -115,9 +103,9 @@ class PublicContentControllerTest {
                 8,
                 3,
                 false,
-                LocalDateTime.of(2026, 8, 1, 10, 0),
+                OffsetDateTime.of(2026, 8, 1, 10, 0, 0, 0, ZoneOffset.UTC),
                 120,
-                LocalDateTime.of(2026, 7, 30, 23, 59),
+                OffsetDateTime.of(2026, 7, 30, 23, 59, 0, 0, ZoneOffset.UTC),
                 false
         );
         when(publicContentService.getMeetups(eq("book"), eq("books"), any(Pageable.class)))
@@ -129,13 +117,18 @@ class PublicContentControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.content[0].id").value("meetup-1"))
                 .andExpect(jsonPath("$.content[0].demo").value(false))
+                .andExpect(jsonPath("$.content[0].scheduledAt").value("2026-08-01T10:00:00Z"))
+                .andExpect(jsonPath("$.content[0].registrationDeadline").value("2026-07-30T23:59:00Z"))
                 .andExpect(jsonPath("$.content[0].location").doesNotExist())
+                .andExpect(jsonPath("$.content[0].locationAddress").doesNotExist())
+                .andExpect(jsonPath("$.content[0].latitude").doesNotExist())
+                .andExpect(jsonPath("$.content[0].longitude").doesNotExist())
+                .andExpect(jsonPath("$.content[0].kakaoPlaceId").doesNotExist())
                 .andExpect(jsonPath("$.content[0].creatorUsername").doesNotExist())
                 .andExpect(jsonPath("$.content[0].lastMessage").doesNotExist())
                 .andExpect(jsonPath("$.content[0].joined").doesNotExist())
                 .andExpect(jsonPath("$.content[0].waitlisted").doesNotExist())
                 .andExpect(jsonPath("$.content[0].sharedInterests").doesNotExist());
 
-        verifyNoInteractions(sessionValidationService);
     }
 }

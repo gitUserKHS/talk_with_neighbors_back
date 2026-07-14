@@ -9,6 +9,7 @@ import com.talkwithneighbors.entity.Message;
 import com.talkwithneighbors.entity.OfflineNotification;
 import com.talkwithneighbors.entity.User;
 import com.talkwithneighbors.repository.MessageRepository;
+import com.talkwithneighbors.repository.ChatRoomRepository;
 import com.talkwithneighbors.service.NotificationService;
 import com.talkwithneighbors.service.OfflineNotificationService;
 import com.talkwithneighbors.service.RedisSessionService;
@@ -27,6 +28,7 @@ public class NotificationServiceImpl implements NotificationService {
     
     private final SimpMessagingTemplate messagingTemplate;
     private final MessageRepository messageRepository;
+    private final ChatRoomRepository chatRoomRepository;
     private final RedisSessionService redisSessionService;
     private final OfflineNotificationService offlineNotificationService;
     private final ObjectMapper objectMapper;
@@ -166,8 +168,6 @@ public class NotificationServiceImpl implements NotificationService {
             log.info("[NotificationService] 🔄 User {} is OFFLINE. Attempting to save offline notification...", userId);
             try {
                 String dataJson = objectMapper.writeValueAsString(notificationData);
-                log.info("[NotificationService] 📝 Serialized notification data: {}", dataJson);
-                
                 offlineNotificationService.saveOfflineNotification(
                     userId,
                     OfflineNotification.NotificationType.NEW_MESSAGE,
@@ -256,9 +256,15 @@ public class NotificationServiceImpl implements NotificationService {
                 updateData
             );
             
-            // 해당 채팅방의 모든 참여자에게 읽음 상태 업데이트 전송
-            String topicDestination = "/topic/chat/room/" + chatRoomId + "/read-status";
-            messagingTemplate.convertAndSend(topicDestination, notification);
+            ChatRoom chatRoom = chatRoomRepository.findById(chatRoomId)
+                    .orElseThrow(() -> new IllegalArgumentException("Chat room not found"));
+            for (User participant : chatRoom.getParticipants()) {
+                messagingTemplate.convertAndSendToUser(
+                        participant.getId().toString(),
+                        "/queue/chat/read-status",
+                        notification
+                );
+            }
             
             log.info("[NotificationService] Sent message read status update to chatRoom: {}", chatRoomId);
             

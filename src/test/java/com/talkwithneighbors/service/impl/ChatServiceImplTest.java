@@ -13,6 +13,7 @@ import com.talkwithneighbors.repository.ChatRoomDeletionRepository;
 import com.talkwithneighbors.repository.ChatRoomRepository;
 import com.talkwithneighbors.repository.MessageRepository;
 import com.talkwithneighbors.repository.UserRepository;
+import com.talkwithneighbors.service.NotificationService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.InjectMocks;
@@ -59,6 +60,9 @@ class ChatServiceImplTest {
 
     @Mock
     private DomainEventPublisher domainEventPublisher;
+
+    @Mock
+    private NotificationService notificationService;
 
     @InjectMocks
     private ChatServiceImpl chatService;
@@ -244,14 +248,74 @@ class ChatServiceImplTest {
 
         when(messageRepository.findById("msg-id")).thenReturn(Optional.of(messageToMark));
         when(userRepository.findById(1L)).thenReturn(Optional.of(testUser));
+        when(chatRoomRepository.findByIdAndParticipantsContaining(room.getId(), testUser))
+                .thenReturn(Optional.of(room));
         when(messageRepository.save(any(Message.class))).thenReturn(messageToMark);
 
-        chatService.markMessageAsRead("msg-id", "1");
+        chatService.markMessageAsRead(room.getId(), "msg-id", "1");
 
         ArgumentCaptor<Message> messageCaptor = ArgumentCaptor.forClass(Message.class);
         verify(messageRepository).save(messageCaptor.capture());
         Message savedMessage = messageCaptor.getValue();
         assertTrue(savedMessage.getReadByUsers().contains(testUser.getId()));
+    }
+
+    @Test
+    void markMessageAsReadRejectsNonParticipantBeforeLoadingMessage() {
+        User outsider = createUser(9L, "outsider");
+        when(userRepository.findById(9L)).thenReturn(Optional.of(outsider));
+        when(chatRoomRepository.findByIdAndParticipantsContaining(room.getId(), outsider))
+                .thenReturn(Optional.empty());
+
+        ChatException exception = assertThrows(ChatException.class,
+                () -> chatService.markMessageAsRead(room.getId(), "msg-id", "9"));
+
+        assertEquals(HttpStatus.NOT_FOUND, exception.getStatus());
+        verify(messageRepository, never()).findById(anyString());
+        verify(messageRepository, never()).save(any());
+        verifyNoInteractions(notificationService);
+    }
+
+    @Test
+    void markMessageAsReadRejectsMessageFromAnotherRoom() {
+        User reader = createUser(1L, "reader");
+        ChatRoom anotherRoom = createChatRoom("another-room", creator, participants);
+        Message foreignMessage = createMessage("foreign-message", anotherRoom, creator);
+        when(userRepository.findById(1L)).thenReturn(Optional.of(reader));
+        when(chatRoomRepository.findByIdAndParticipantsContaining(room.getId(), reader))
+                .thenReturn(Optional.of(room));
+        when(messageRepository.findById("foreign-message")).thenReturn(Optional.of(foreignMessage));
+
+        ChatException exception = assertThrows(ChatException.class,
+                () -> chatService.markMessageAsRead(room.getId(), "foreign-message", "1"));
+
+        assertEquals(HttpStatus.NOT_FOUND, exception.getStatus());
+        verify(messageRepository, never()).save(any());
+        verifyNoInteractions(notificationService);
+    }
+
+    @Test
+    void unreadCountRequiresRoomMembership() {
+        User outsider = createUser(9L, "outsider");
+        when(userRepository.findById(9L)).thenReturn(Optional.of(outsider));
+        when(chatRoomRepository.findByIdAndParticipantsContaining(room.getId(), outsider))
+                .thenReturn(Optional.empty());
+
+        ChatException exception = assertThrows(ChatException.class,
+                () -> chatService.getUnreadCount(room.getId(), "9"));
+
+        assertEquals(HttpStatus.NOT_FOUND, exception.getStatus());
+        verify(messageRepository, never()).countUnreadMessages(anyString(), any());
+    }
+
+    @Test
+    void unreadCountReturnsCountForParticipant() {
+        when(userRepository.findById(creator.getId())).thenReturn(Optional.of(creator));
+        when(chatRoomRepository.findByIdAndParticipantsContaining(room.getId(), creator))
+                .thenReturn(Optional.of(room));
+        when(messageRepository.countUnreadMessages(room.getId(), creator.getId())).thenReturn(3L);
+
+        assertEquals(3L, chatService.getUnreadCount(room.getId(), creator.getId().toString()));
     }
 
     @Test

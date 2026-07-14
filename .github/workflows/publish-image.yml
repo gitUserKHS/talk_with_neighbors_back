@@ -64,7 +64,6 @@ jobs:
         env:
           MYSQL_PASSWORD: publish-ci-password
           MYSQL_ROOT_PASSWORD: publish-ci-root-password
-          JWT_SECRET: publish-ci-only-secret-that-is-long-enough
           PUBLIC_ORIGIN: https://example.invalid
         run: docker compose -f compose.production.yml config --quiet
 

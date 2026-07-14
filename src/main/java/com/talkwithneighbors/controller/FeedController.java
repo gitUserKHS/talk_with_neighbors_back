@@ -5,7 +5,6 @@ import com.talkwithneighbors.dto.feed.CreateFeedPostRequest;
 import com.talkwithneighbors.dto.feed.FeedPostDto;
 import com.talkwithneighbors.dto.feed.PostCommentDto;
 import com.talkwithneighbors.entity.FeedPostMedia;
-import com.talkwithneighbors.security.RequireLogin;
 import com.talkwithneighbors.security.UserSession;
 import com.talkwithneighbors.service.FeedService;
 import com.talkwithneighbors.service.MediaStorageService;
@@ -32,7 +31,6 @@ import java.util.stream.Stream;
 @RestController
 @RequestMapping("/api/feed")
 @RequiredArgsConstructor
-@RequireLogin
 public class FeedController {
     private final FeedService feedService;
     private final MediaStorageService mediaStorageService;

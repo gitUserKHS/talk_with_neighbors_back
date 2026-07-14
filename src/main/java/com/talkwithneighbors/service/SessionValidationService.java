@@ -21,12 +21,10 @@ public class SessionValidationService {
         // 쉼표로 구분된 세션 ID가 있을 경우 첫 번째 세션 ID만 사용
         String actualSessionId = sessionId.split(",")[0].trim();
         
-        log.info("Validating session with ID: {}", actualSessionId);
-        
         try {
             UserSession userSession = redisSessionService.getSession(actualSessionId);
             if (userSession == null) {
-                log.warn("Session not found or expired for ID: {}. User needs to log in again.", actualSessionId);
+                log.warn("Session validation failed because the credential is missing or expired.");
                 throw new RuntimeException("세션이 만료되었습니다. 새로고침 후 다시 로그인해주세요.");
             }
             
@@ -39,8 +37,20 @@ public class SessionValidationService {
             // 이미 RuntimeException인 경우 그대로 전파
             throw e;
         } catch (Exception e) {
-            log.error("Unexpected error during session validation for ID: {}", actualSessionId, e);
+            log.error("Unexpected error during session validation", e);
             throw new RuntimeException("세션 검증 중 오류가 발생했습니다. 다시 로그인해주세요.");
         }
     }
-} 
+
+    /** Validates without extending TTL or writing presence for each STOMP frame. */
+    public UserSession validateSessionWithoutTouch(String sessionId) {
+        if (sessionId == null || sessionId.isBlank()) {
+            throw new RuntimeException("Session is missing.");
+        }
+        UserSession userSession = redisSessionService.getSessionWithoutTouch(sessionId);
+        if (userSession == null || userSession.getUserId() == null) {
+            throw new RuntimeException("Session is missing or expired.");
+        }
+        return userSession;
+    }
+}

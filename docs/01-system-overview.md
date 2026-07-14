@@ -77,4 +77,4 @@ talk_with_neighbors/
 
 ## 인증 경계
 
-현재 인증은 JWT가 아니라 `X-Session-Id` 헤더와 Redis 세션을 사용한다. 로그인과 가입 응답 헤더로 세션 ID를 전달하고 이후 API와 WebSocket 연결에서 재사용한다. 설정에 JWT 항목이 존재하지만 현재 핵심 인증 흐름에는 사용되지 않는다.
+현재 인증은 Redis/DB 세션과 `TWN_SESSION` HttpOnly 쿠키만 사용한다. 로그인과 가입은 쿠키만 발급하며 REST와 WebSocket 모두 URL·응답 헤더·브라우저 저장소에 인증 값을 노출하지 않는다. 사용하지 않던 JWT 실행 설정과 배포 Secret은 제거했다.

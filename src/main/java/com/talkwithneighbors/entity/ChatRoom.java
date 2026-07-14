@@ -70,11 +70,36 @@ public class ChatRoom {
     @Column(length = 100)
     private String location;
 
+    /**
+     * 모임 장소 검색 결과의 주소다. 기존 {@code location}은 사람이 읽는 장소명으로 유지한다.
+     * 일반 채팅방과 좌표가 없는 기존 모임에서는 모두 null일 수 있다.
+     */
+    @Column(name = "location_address", length = 255)
+    private String locationAddress;
+
+    @Column(name = "latitude")
+    private Double latitude;
+
+    @Column(name = "longitude")
+    private Double longitude;
+
+    /** 카카오 장소 검색 결과의 ID. 지도 클릭이나 수기 입력 장소에는 값이 없을 수 있다. */
+    @Column(name = "kakao_place_id", length = 64)
+    private String kakaoPlaceId;
+
     @Column(name = "max_participants")
     private Integer maxParticipants;
 
     @Column(name = "scheduled_at")
     private LocalDateTime scheduledAt;
+
+    /**
+     * Null is intentionally retained for pre-cutover rows and means an
+     * Asia/Seoul wall clock. New meetup rows are explicitly stored as UTC.
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "meetup_time_basis", length = 32)
+    private MeetupTimeBasis meetupTimeBasis;
 
     @Column(name = "duration_minutes")
     private Integer durationMinutes;

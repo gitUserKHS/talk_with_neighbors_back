@@ -63,7 +63,6 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @ActiveProfiles("test")
 @Import({ChatExceptionHandler.class, com.talkwithneighbors.config.TestSecurityConfig.class})
 class ChatControllerTest {
-    private static final String SESSION_HEADER = "X-Session-Id";
     private static final String SESSION_ID = "mock-session-id";
 
     @Autowired
@@ -124,7 +123,7 @@ class ChatControllerTest {
                 .thenReturn(roomDto);
 
         mockMvc.perform(post("/api/chat/rooms")
-                        .header(SESSION_HEADER, SESSION_ID)
+                        .cookie(new jakarta.servlet.http.Cookie("TWN_SESSION", SESSION_ID))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(createRoomRequest)))
                 .andExpect(status().isOk())
@@ -138,7 +137,7 @@ class ChatControllerTest {
                 .thenReturn(new PageImpl<>(List.of(room("room-1", "Room 1", ChatRoomType.GROUP, "1"))));
 
         mockMvc.perform(get("/api/chat/rooms")
-                        .header(SESSION_HEADER, SESSION_ID)
+                        .cookie(new jakarta.servlet.http.Cookie("TWN_SESSION", SESSION_ID))
                         .param("page", "0")
                         .param("size", "20"))
                 .andExpect(status().isOk())
@@ -151,7 +150,7 @@ class ChatControllerTest {
                 .thenReturn(room("room-1", "Room 1", ChatRoomType.GROUP, "1"));
 
         mockMvc.perform(get("/api/chat/rooms/{roomId}", "room-1")
-                        .header(SESSION_HEADER, SESSION_ID))
+                        .cookie(new jakarta.servlet.http.Cookie("TWN_SESSION", SESSION_ID)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.id").value("room-1"));
     }
@@ -161,7 +160,7 @@ class ChatControllerTest {
         doNothing().when(chatService).joinRoom(anyString(), anyString());
 
         mockMvc.perform(post("/api/chat/rooms/{roomId}/join", "room-1")
-                        .header(SESSION_HEADER, SESSION_ID))
+                        .cookie(new jakarta.servlet.http.Cookie("TWN_SESSION", SESSION_ID)))
                 .andExpect(status().isOk());
     }
 
@@ -172,7 +171,7 @@ class ChatControllerTest {
         doNothing().when(chatService).leaveRoom(anyString(), anyString());
 
         mockMvc.perform(post("/api/chat/rooms/{roomId}/leave", "room-1")
-                        .header(SESSION_HEADER, SESSION_ID))
+                        .cookie(new jakarta.servlet.http.Cookie("TWN_SESSION", SESSION_ID)))
                 .andExpect(status().isOk());
     }
 
@@ -185,7 +184,7 @@ class ChatControllerTest {
                 .thenReturn(new PageImpl<>(List.of(messageDto)));
 
         mockMvc.perform(get("/api/chat/rooms/{roomId}/messages", "room-1")
-                        .header(SESSION_HEADER, SESSION_ID)
+                        .cookie(new jakarta.servlet.http.Cookie("TWN_SESSION", SESSION_ID))
                         .param("page", "0")
                         .param("size", "20"))
                 .andExpect(status().isOk())
@@ -202,7 +201,7 @@ class ChatControllerTest {
         when(chatService.sendMessage(anyString(), anyLong(), anyString())).thenReturn(response);
 
         mockMvc.perform(post("/api/chat/rooms/{roomId}/messages", "room-1")
-                        .header(SESSION_HEADER, SESSION_ID)
+                        .cookie(new jakarta.servlet.http.Cookie("TWN_SESSION", SESSION_ID))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(request)))
                 .andExpect(status().isOk())
@@ -218,7 +217,7 @@ class ChatControllerTest {
                 .thenReturn(response);
 
         mockMvc.perform(patch("/api/chat/rooms/{roomId}/messages/{messageId}", "room-1", "msg-1")
-                        .header(SESSION_HEADER, SESSION_ID)
+                        .cookie(new jakarta.servlet.http.Cookie("TWN_SESSION", SESSION_ID))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(
                                 new UpdateChatMessageRequest("수정된 메시지"))))
@@ -235,7 +234,7 @@ class ChatControllerTest {
         when(chatService.deleteMessage("room-1", "msg-1", 1L)).thenReturn(response);
 
         mockMvc.perform(delete("/api/chat/rooms/{roomId}/messages/{messageId}", "room-1", "msg-1")
-                        .header(SESSION_HEADER, SESSION_ID))
+                        .cookie(new jakarta.servlet.http.Cookie("TWN_SESSION", SESSION_ID)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.id").value("msg-1"))
                 .andExpect(jsonPath("$.isDeleted").value(true));
@@ -247,7 +246,7 @@ class ChatControllerTest {
                 .thenThrow(new ChatException("내 메시지만 수정할 수 있어.", HttpStatus.FORBIDDEN));
 
         mockMvc.perform(patch("/api/chat/rooms/{roomId}/messages/{messageId}", "room-1", "msg-2")
-                        .header(SESSION_HEADER, SESSION_ID)
+                        .cookie(new jakarta.servlet.http.Cookie("TWN_SESSION", SESSION_ID))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(new UpdateChatMessageRequest("수정"))))
                 .andExpect(status().isForbidden());
@@ -255,10 +254,10 @@ class ChatControllerTest {
 
     @Test
     void markMessageAsReadSuccess() throws Exception {
-        doNothing().when(chatService).markMessageAsRead(anyString(), anyString());
+        doNothing().when(chatService).markMessageAsRead(anyString(), anyString(), anyString());
 
         mockMvc.perform(post("/api/chat/rooms/{roomId}/messages/{messageId}/read", "room-1", "msg-1")
-                        .header(SESSION_HEADER, SESSION_ID))
+                        .cookie(new jakarta.servlet.http.Cookie("TWN_SESSION", SESSION_ID)))
                 .andExpect(status().isOk());
     }
 
@@ -272,7 +271,7 @@ class ChatControllerTest {
                 .thenReturn(page);
 
         mockMvc.perform(get("/api/chat/rooms")
-                        .header(SESSION_HEADER, SESSION_ID)
+                        .cookie(new jakarta.servlet.http.Cookie("TWN_SESSION", SESSION_ID))
                         .param("keyword", "Group")
                         .param("type", "GROUP")
                         .param("page", "0")
@@ -288,7 +287,7 @@ class ChatControllerTest {
         doNothing().when(chatService).deleteRoom("room-1");
 
         mockMvc.perform(delete("/api/chat/rooms/{roomId}", "room-1")
-                        .header(SESSION_HEADER, SESSION_ID))
+                        .cookie(new jakarta.servlet.http.Cookie("TWN_SESSION", SESSION_ID)))
                 .andExpect(status().isOk());
     }
 
@@ -298,7 +297,7 @@ class ChatControllerTest {
                 .thenThrow(new ChatException("Chat room not found", HttpStatus.NOT_FOUND));
 
         mockMvc.perform(delete("/api/chat/rooms/{roomId}", "missing-room")
-                        .header(SESSION_HEADER, SESSION_ID))
+                        .cookie(new jakarta.servlet.http.Cookie("TWN_SESSION", SESSION_ID)))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.success").value(false));
 
@@ -319,7 +318,7 @@ class ChatControllerTest {
                 .thenThrow(new ChatException("Room not found", HttpStatus.NOT_FOUND));
 
         mockMvc.perform(get("/api/chat/rooms/{roomId}", "missing-room")
-                        .header(SESSION_HEADER, SESSION_ID))
+                        .cookie(new jakarta.servlet.http.Cookie("TWN_SESSION", SESSION_ID)))
                 .andExpect(status().isNotFound());
     }
 
@@ -329,7 +328,7 @@ class ChatControllerTest {
                 .when(chatService).joinRoom(anyString(), anyString());
 
         mockMvc.perform(post("/api/chat/rooms/{roomId}/join", "room-1")
-                        .header(SESSION_HEADER, SESSION_ID))
+                        .cookie(new jakarta.servlet.http.Cookie("TWN_SESSION", SESSION_ID)))
                 .andExpect(status().isBadRequest());
     }
 
@@ -341,17 +340,17 @@ class ChatControllerTest {
                 .when(chatService).leaveRoom(anyString(), anyString());
 
         mockMvc.perform(post("/api/chat/rooms/{roomId}/leave", "room-1")
-                        .header(SESSION_HEADER, SESSION_ID))
+                        .cookie(new jakarta.servlet.http.Cookie("TWN_SESSION", SESSION_ID)))
                 .andExpect(status().isBadRequest());
     }
 
     @Test
     void markMessageAsReadNotFoundReturnsNotFound() throws Exception {
         doThrow(new ChatException("Message not found", HttpStatus.NOT_FOUND))
-                .when(chatService).markMessageAsRead(eq("missing-message"), anyString());
+                .when(chatService).markMessageAsRead(anyString(), eq("missing-message"), anyString());
 
         mockMvc.perform(post("/api/chat/rooms/{roomId}/messages/{messageId}/read", "room-1", "missing-message")
-                        .header(SESSION_HEADER, SESSION_ID))
+                        .cookie(new jakarta.servlet.http.Cookie("TWN_SESSION", SESSION_ID)))
                 .andExpect(status().isNotFound());
     }
 
@@ -361,7 +360,7 @@ class ChatControllerTest {
                 .thenReturn(room("room-1", "Room 1", ChatRoomType.GROUP, "2"));
 
         mockMvc.perform(delete("/api/chat/rooms/{roomId}", "room-1")
-                        .header(SESSION_HEADER, SESSION_ID))
+                        .cookie(new jakarta.servlet.http.Cookie("TWN_SESSION", SESSION_ID)))
                 .andExpect(status().isForbidden());
     }
 

@@ -4,13 +4,18 @@ output "instance_id" {
 }
 
 output "instance_public_ip" {
-  description = "Current dynamic public IPv4 address. It can change after stop/start because no Elastic IP is allocated."
-  value       = aws_instance.app.public_ip
+  description = "Stable Elastic IP associated with the single portfolio node."
+  value       = aws_eip.app.public_ip
 }
 
-output "application_http_url" {
-  description = "Current HTTP origin for initial smoke tests. Configure DNS and TLS before real production use."
-  value       = "http://${aws_instance.app.public_ip}"
+output "elastic_ip_allocation_id" {
+  description = "Elastic IP allocation associated with the portfolio node."
+  value       = aws_eip.app.id
+}
+
+output "application_https_url" {
+  description = "Canonical HTTPS origin served by Traefik with automatic Let's Encrypt renewal."
+  value       = "https://${var.application_domain}"
 }
 
 output "ubuntu_arm64_ami_id" {
