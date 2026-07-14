@@ -71,7 +71,8 @@ class PublicContentControllerTest {
                 now,
                 now,
                 4,
-                2
+                2,
+                false
         );
         when(publicContentService.getFeed(any(Pageable.class)))
                 .thenReturn(new PageImpl<>(List.of(post), PageRequest.of(0, 50), 1));
@@ -82,6 +83,7 @@ class PublicContentControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.content[0].id").value("post-1"))
                 .andExpect(jsonPath("$.content[0].authorDisplayName").value("이웃"))
+                .andExpect(jsonPath("$.content[0].demo").value(false))
                 .andExpect(jsonPath("$.content[0].authorProfileImage").doesNotExist())
                 .andExpect(jsonPath("$.content[0].authorId").doesNotExist())
                 .andExpect(jsonPath("$.content[0].likedByCurrentUser").doesNotExist())
@@ -115,7 +117,8 @@ class PublicContentControllerTest {
                 false,
                 LocalDateTime.of(2026, 8, 1, 10, 0),
                 120,
-                LocalDateTime.of(2026, 7, 30, 23, 59)
+                LocalDateTime.of(2026, 7, 30, 23, 59),
+                false
         );
         when(publicContentService.getMeetups(eq("book"), eq("books"), any(Pageable.class)))
                 .thenReturn(new PageImpl<>(List.of(meetup), PageRequest.of(0, 20), 1));
@@ -125,6 +128,7 @@ class PublicContentControllerTest {
                         .param("interest", "books"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.content[0].id").value("meetup-1"))
+                .andExpect(jsonPath("$.content[0].demo").value(false))
                 .andExpect(jsonPath("$.content[0].location").doesNotExist())
                 .andExpect(jsonPath("$.content[0].creatorUsername").doesNotExist())
                 .andExpect(jsonPath("$.content[0].lastMessage").doesNotExist())

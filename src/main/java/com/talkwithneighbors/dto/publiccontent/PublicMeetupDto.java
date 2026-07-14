@@ -15,7 +15,8 @@ public record PublicMeetupDto(
         boolean full,
         LocalDateTime scheduledAt,
         Integer durationMinutes,
-        LocalDateTime registrationDeadline
+        LocalDateTime registrationDeadline,
+        boolean demo
 ) {
     public static PublicMeetupDto fromEntity(ChatRoom room) {
         int participantCount = room.getParticipants() != null ? room.getParticipants().size() : 0;
@@ -29,7 +30,8 @@ public record PublicMeetupDto(
                 room.getMaxParticipants() != null && participantCount >= room.getMaxParticipants(),
                 room.getScheduledAt(),
                 room.getDurationMinutes(),
-                room.getRegistrationDeadline()
+                room.getRegistrationDeadline(),
+                false
         );
     }
 }

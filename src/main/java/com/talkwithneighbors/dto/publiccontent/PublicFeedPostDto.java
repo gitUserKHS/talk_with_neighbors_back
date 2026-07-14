@@ -17,7 +17,8 @@ public record PublicFeedPostDto(
         LocalDateTime createdAt,
         LocalDateTime updatedAt,
         long likeCount,
-        long commentCount
+        long commentCount,
+        boolean demo
 ) {
     private static final String ANONYMOUS_AUTHOR = "이웃";
 
@@ -45,7 +46,8 @@ public record PublicFeedPostDto(
                 post.getCreatedAt(),
                 post.getUpdatedAt(),
                 likeCount,
-                commentCount
+                commentCount,
+                false
         );
     }
 }

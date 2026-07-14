@@ -144,6 +144,8 @@ jwt:
   expiration: 86400000
 
 app:
+  portfolio-demo:
+    enabled: ${APP_PORTFOLIO_DEMO_ENABLED:false}
   media:
     storage-type: ${APP_MEDIA_STORAGE_TYPE:local}
     storage-directory: ${APP_MEDIA_STORAGE_DIRECTORY:./uploads}

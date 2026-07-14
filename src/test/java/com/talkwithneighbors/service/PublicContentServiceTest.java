@@ -15,6 +15,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
 
@@ -25,6 +26,7 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -51,11 +53,12 @@ class PublicContentServiceTest {
         when(postLikeRepository.countByPost_Id("post-1")).thenReturn(3L);
         when(postCommentRepository.countByPost_Id("post-1")).thenReturn(2L);
 
-        PublicFeedPostDto result = service().getFeed(pageable).getContent().get(0);
+        PublicFeedPostDto result = service(true).getFeed(pageable).getContent().get(0);
 
         assertThat(result.authorDisplayName()).isEqualTo("이웃");
         assertThat(result.likeCount()).isEqualTo(3);
         assertThat(result.commentCount()).isEqualTo(2);
+        assertThat(result.demo()).isFalse();
     }
 
     @Test
@@ -83,20 +86,125 @@ class PublicContentServiceTest {
                 ChatRoomType.GROUP, ChatRoomStatus.ACTIVE, "book", "books", pageable))
                 .thenReturn(new PageImpl<>(List.of(room), pageable, 1));
 
-        PublicMeetupDto result = service().getMeetups("  BOOK ", " Books ", pageable)
+        PublicMeetupDto result = service(true).getMeetups("  BOOK ", " Books ", pageable)
                 .getContent().get(0);
 
         assertThat(result.id()).isEqualTo("meetup-1");
+        assertThat(result.demo()).isFalse();
         verify(meetupRepository)
                 .findPublicMeetups(ChatRoomType.GROUP, ChatRoomStatus.ACTIVE, "book", "books", pageable);
     }
 
+    @Test
+    void returnsCuratedFeedOnlyWhenEnabledAndTheWholePublicFeedIsEmpty() {
+        PageRequest firstPage = PageRequest.of(0, 2);
+        PageRequest secondPage = PageRequest.of(1, 2);
+        PageRequest pageAfterEnd = PageRequest.of(2, 2);
+        when(feedPostRepository.findPublicFeed(firstPage)).thenReturn(Page.empty(firstPage));
+        when(feedPostRepository.findPublicFeed(secondPage)).thenReturn(Page.empty(secondPage));
+        when(feedPostRepository.findPublicFeed(pageAfterEnd)).thenReturn(Page.empty(pageAfterEnd));
+
+        var first = service(true).getFeed(firstPage);
+        var second = service(true).getFeed(secondPage);
+        var afterEnd = service(true).getFeed(pageAfterEnd);
+
+        assertThat(first.getTotalElements()).isEqualTo(4);
+        assertThat(first.getTotalPages()).isEqualTo(2);
+        assertThat(first.getContent()).extracting(PublicFeedPostDto::id)
+                .containsExactly("portfolio-demo-feed-01", "portfolio-demo-feed-02");
+        assertThat(second.getContent()).extracting(PublicFeedPostDto::id)
+                .containsExactly("portfolio-demo-feed-03", "portfolio-demo-feed-04");
+        assertThat(afterEnd.getContent()).isEmpty();
+        assertThat(first.getContent()).allMatch(PublicFeedPostDto::demo);
+        assertThat(first.getContent()).allMatch(item -> item.media().isEmpty() && item.imageUrl() == null);
+        verifyNoInteractions(postLikeRepository, postCommentRepository);
+    }
+
+    @Test
+    void doesNotMixDemoFeedIntoAnEmptyPageWhenRealPublicFeedExists() {
+        PageRequest pageable = PageRequest.of(3, 2);
+        when(feedPostRepository.findPublicFeed(pageable))
+                .thenReturn(new PageImpl<>(List.of(), pageable, 2));
+
+        assertThat(service(true).getFeed(pageable).getContent()).isEmpty();
+        verifyNoInteractions(postLikeRepository, postCommentRepository);
+    }
+
+    @Test
+    void leavesAnEmptyFeedEmptyWhenPortfolioDemoIsDisabled() {
+        PageRequest pageable = PageRequest.of(0, 20);
+        when(feedPostRepository.findPublicFeed(pageable)).thenReturn(Page.empty(pageable));
+
+        assertThat(service(false).getFeed(pageable).getContent()).isEmpty();
+        verifyNoInteractions(postLikeRepository, postCommentRepository);
+    }
+
+    @Test
+    void filtersAndPagesCuratedMeetupsWhenTheWholePublicDatasetIsEmpty() {
+        PageRequest firstPage = PageRequest.of(0, 1);
+        PageRequest secondPage = PageRequest.of(1, 1);
+        PageRequest pageAfterEnd = PageRequest.of(2, 1);
+        when(meetupRepository.findPublicMeetups(
+                ChatRoomType.GROUP, ChatRoomStatus.ACTIVE, "산책", "산책", firstPage))
+                .thenReturn(Page.empty(firstPage));
+        when(meetupRepository.findPublicMeetups(
+                ChatRoomType.GROUP, ChatRoomStatus.ACTIVE, "산책", "산책", secondPage))
+                .thenReturn(Page.empty(secondPage));
+        when(meetupRepository.findPublicMeetups(
+                ChatRoomType.GROUP, ChatRoomStatus.ACTIVE, "산책", "산책", pageAfterEnd))
+                .thenReturn(Page.empty(pageAfterEnd));
+        when(meetupRepository.countPublicMeetups(ChatRoomType.GROUP, ChatRoomStatus.ACTIVE))
+                .thenReturn(0L);
+
+        var first = service(true).getMeetups(" 산책 ", " 산책 ", firstPage);
+        var second = service(true).getMeetups("산책", "산책", secondPage);
+        var afterEnd = service(true).getMeetups("산책", "산책", pageAfterEnd);
+
+        assertThat(first.getTotalElements()).isEqualTo(2);
+        assertThat(first.getTotalPages()).isEqualTo(2);
+        assertThat(first.getContent()).extracting(PublicMeetupDto::id)
+                .containsExactly("portfolio-demo-meetup-01");
+        assertThat(second.getContent()).extracting(PublicMeetupDto::id)
+                .containsExactly("portfolio-demo-meetup-04");
+        assertThat(afterEnd.getContent()).isEmpty();
+        assertThat(first.getContent().get(0).demo()).isTrue();
+        assertThat(first.getContent().get(0).scheduledAt())
+                .isAfter(LocalDateTime.now().plusDays(2));
+    }
+
+    @Test
+    void keepsAFilteredNoMatchEmptyWhenAnyRealPublicMeetupExists() {
+        PageRequest pageable = PageRequest.of(0, 20);
+        when(meetupRepository.findPublicMeetups(
+                ChatRoomType.GROUP, ChatRoomStatus.ACTIVE, "no-match", "", pageable))
+                .thenReturn(Page.empty(pageable));
+        when(meetupRepository.countPublicMeetups(ChatRoomType.GROUP, ChatRoomStatus.ACTIVE))
+                .thenReturn(1L);
+
+        assertThat(service(true).getMeetups("no-match", null, pageable).getContent()).isEmpty();
+    }
+
+    @Test
+    void leavesEmptyMeetupsEmptyWhenPortfolioDemoIsDisabled() {
+        PageRequest pageable = PageRequest.of(0, 20);
+        when(meetupRepository.findPublicMeetups(
+                ChatRoomType.GROUP, ChatRoomStatus.ACTIVE, "", "", pageable))
+                .thenReturn(Page.empty(pageable));
+
+        assertThat(service(false).getMeetups(null, null, pageable).getContent()).isEmpty();
+    }
+
     private PublicContentService service() {
+        return service(false);
+    }
+
+    private PublicContentService service(boolean portfolioDemoEnabled) {
         return new PublicContentService(
                 feedPostRepository,
                 postCommentRepository,
                 meetupRepository,
-                postLikeRepository
+                postLikeRepository,
+                portfolioDemoEnabled
         );
     }
 
