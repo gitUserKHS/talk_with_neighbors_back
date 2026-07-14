@@ -8,6 +8,7 @@ import com.talkwithneighbors.entity.Message;
 import com.talkwithneighbors.entity.MessageAttachment;
 import com.talkwithneighbors.entity.User;
 import com.talkwithneighbors.exception.ChatException;
+import com.talkwithneighbors.config.TestConfig;
 import com.talkwithneighbors.outbox.DomainEventPublisher;
 import com.talkwithneighbors.service.ChatService;
 import com.talkwithneighbors.service.NotificationService;
@@ -42,7 +43,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 @Tag("mysql")
 @ActiveProfiles("mysql-it")
 @AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
-@Import({ChatServiceImpl.class, ChatRoomDeletionRepository.class})
+@Import({ChatServiceImpl.class, ChatRoomDeletionRepository.class, TestConfig.class})
 @Transactional(propagation = Propagation.NOT_SUPPORTED)
 class ChatRoomDeletionMySqlIntegrationTest {
     @Autowired
