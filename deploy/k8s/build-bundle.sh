@@ -53,7 +53,10 @@ if [[ -n "$ACME_EMAIL" ]]; then
 else
   sed -i "/REPLACE_ACME_EMAIL_ARGUMENT/d" "$bundle/traefik-config.yaml"
 fi
-! grep -Fq "REPLACE_ACME_EMAIL_ARGUMENT" "$bundle/traefik-config.yaml"
+if grep -Fq "REPLACE_ACME_EMAIL_ARGUMENT" "$bundle/traefik-config.yaml"; then
+  echo "Traefik bundle still contains the ACME email placeholder" >&2
+  exit 1
+fi
 grep -Fq -- "host: ${PUBLIC_HOST}" "$bundle/base/ingress.yaml"
 
 jq -n \

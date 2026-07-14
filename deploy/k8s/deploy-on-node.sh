@@ -63,14 +63,19 @@ wait_for_traefik_https_config() {
     sleep 5
   done
 
-  [[ -n "${deployment_json:-}" ]] && jq -e '
+  if [[ -z "${deployment_json:-}" ]]; then
+    echo "Traefik did not render the HTTPS/ACME configuration within ten minutes" >&2
+    return 1
+  fi
+
+  if ! jq -e '
     [.spec.template.spec.containers[] | select(.name == "traefik")][0].args as $args |
     ($args | index("--certificatesresolvers.letsencrypt.acme.storage=/data/acme.json")) != null and
     (.spec.template.spec.securityContext.fsGroup == 65532)
-  ' <<<"$deployment_json" >/dev/null || {
+  ' <<<"$deployment_json" >/dev/null; then
     echo "Traefik did not render the HTTPS/ACME configuration within ten minutes" >&2
     return 1
-  }
+  fi
 
   acme_claim="$(jq -er '.spec.template.spec.volumes[] | select(.name == "data") | .persistentVolumeClaim.claimName' <<<"$deployment_json")"
   for _ in {1..60}; do
@@ -168,7 +173,10 @@ sed -i "s#REPLACE_RELEASE_ID#${RELEASE_ID}#" "$RELEASE_DIR/base/backend.yaml"
 grep -Fq "image: ${BACKEND_IMAGE}" "$RELEASE_DIR/base/backend.yaml"
 grep -Fq "image: ${FRONTEND_IMAGE}" "$RELEASE_DIR/base/frontend.yaml"
 grep -Fq "talkwithneighbors.io/release: ${RELEASE_ID}" "$RELEASE_DIR/base/backend.yaml"
-! grep -Fq "REPLACE_ACME_EMAIL_ARGUMENT" "$RELEASE_DIR/traefik-config.yaml"
+if grep -Fq "REPLACE_ACME_EMAIL_ARGUMENT" "$RELEASE_DIR/traefik-config.yaml"; then
+  echo "Rendered Traefik configuration still contains the ACME email placeholder" >&2
+  exit 1
+fi
 
 kubectl=(k3s kubectl)
 "${kubectl[@]}" wait --for=condition=Ready node --all --timeout=30s
