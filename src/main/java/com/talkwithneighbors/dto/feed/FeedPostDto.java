@@ -23,6 +23,7 @@ public class FeedPostDto {
     private List<FeedMediaDto> media;
     private String caption;
     private List<String> interestTags;
+    private boolean publicPreview;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
     private long likeCount;
@@ -58,6 +59,7 @@ public class FeedPostDto {
         dto.setMedia(List.copyOf(media));
         dto.setCaption(post.getCaption());
         dto.setInterestTags(post.getInterestTags() != null ? List.copyOf(post.getInterestTags()) : List.of());
+        dto.setPublicPreview(post.isPublicPreview());
         dto.setCreatedAt(post.getCreatedAt());
         dto.setUpdatedAt(post.getUpdatedAt());
         dto.setLikeCount(likeCount);

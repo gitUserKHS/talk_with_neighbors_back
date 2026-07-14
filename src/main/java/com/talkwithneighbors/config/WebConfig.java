@@ -1,6 +1,8 @@
 package com.talkwithneighbors.config;
 
+import com.talkwithneighbors.repository.MessageRepository;
 import com.talkwithneighbors.security.AuthInterceptor;
+import com.talkwithneighbors.security.ChatMediaAuthorizationInterceptor;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.web.servlet.config.annotation.CorsRegistry;
@@ -17,9 +19,15 @@ public class WebConfig implements WebMvcConfigurer {
     private String allowedMethods;
 
     private final AuthInterceptor authInterceptor;
+    private final ChatMediaAuthorizationInterceptor chatMediaAuthorizationInterceptor;
 
-    public WebConfig(AuthInterceptor authInterceptor) {
+    public WebConfig(
+            AuthInterceptor authInterceptor,
+            MessageRepository messageRepository
+    ) {
         this.authInterceptor = authInterceptor;
+        this.chatMediaAuthorizationInterceptor =
+                new ChatMediaAuthorizationInterceptor(messageRepository);
     }
 
     @Override
@@ -40,6 +48,10 @@ public class WebConfig implements WebMvcConfigurer {
     @Override
     public void addInterceptors(InterceptorRegistry registry) {
         registry.addInterceptor(authInterceptor)
-                .addPathPatterns("/**");
+                .addPathPatterns("/**")
+                .order(0);
+        registry.addInterceptor(chatMediaAuthorizationInterceptor)
+                .addPathPatterns("/uploads/chat/**")
+                .order(1);
     }
-} 
+}

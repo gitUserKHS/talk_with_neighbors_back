@@ -522,22 +522,9 @@ public class ChatServiceImpl implements ChatService {
         User currentUser = userRepository.findById(userId)
             .orElseThrow(() -> new RuntimeException("User not found with id: " + userId));
         
-        Page<ChatRoom> roomsPage;
         String trimmedQuery = (query != null) ? query.trim() : "";
-
-        if (trimmedQuery.isEmpty()) {
-            if (type == null) {
-                roomsPage = chatRoomRepository.findAll(pageable);
-            } else {
-                roomsPage = chatRoomRepository.findByType(type, pageable);
-            }
-        } else {
-            if (type == null) {
-                roomsPage = chatRoomRepository.findByNameContainingIgnoreCaseOrIdContainingIgnoreCase(trimmedQuery, trimmedQuery, pageable);
-            } else {
-                roomsPage = chatRoomRepository.findByTypeAndNameContainingIgnoreCaseOrTypeAndIdContainingIgnoreCase(type, trimmedQuery, type, trimmedQuery, pageable);
-            }
-        }
+        Page<ChatRoom> roomsPage = chatRoomRepository.searchParticipantRooms(
+                currentUser, type, trimmedQuery, pageable);
         return roomsPage.map(room -> ChatRoomDto.fromEntity(room, currentUser, messageRepository));
     }
 

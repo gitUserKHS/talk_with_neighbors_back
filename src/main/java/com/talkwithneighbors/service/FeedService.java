@@ -82,6 +82,7 @@ public class FeedService {
         )));
         post.setCaption(request.getCaption() != null ? request.getCaption().trim() : "");
         post.setInterestTags(cleanTags(request.getInterestTags()));
+        post.setPublicPreview(request.isPublicPreview());
 
         return toDto(feedPostRepository.save(post), author);
     }
@@ -111,6 +112,7 @@ public class FeedService {
         post.setMedia(new java.util.ArrayList<>(media));
         post.setCaption(request.getCaption() != null ? request.getCaption().trim() : "");
         post.setInterestTags(cleanTags(request.getInterestTags()));
+        post.setPublicPreview(request.isPublicPreview());
 
         return toDto(feedPostRepository.save(post), author);
     }

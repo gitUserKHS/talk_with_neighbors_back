@@ -148,7 +148,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          trap 'docker rm -f talk-with-neighbors-backend-release >/dev/null 2>&1 || true' EXIT
+          trap 'docker rm -f talk-with-neighbors-backend-release >/dev/null 2>&1 || true; rm -f /tmp/public-feed-release.json /tmp/public-meetups-release.json' EXIT
           docker run --detach --name talk-with-neighbors-backend-release --network host \
             -e SPRING_PROFILES_ACTIVE=production \
             -e 'SPRING_DATASOURCE_URL=jdbc:mysql://127.0.0.1:3306/talk_with_neighbors?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC' \
@@ -167,6 +167,18 @@ jobs:
             if curl --fail --silent --show-error http://127.0.0.1:8080/actuator/health/readiness | grep --quiet '"status":"UP"'; then
               curl --fail --silent --show-error \
                 'http://127.0.0.1:8080/api/auth/check-duplicates?email=publish%40example.invalid&username=publish-smoke' >/dev/null
+              public_feed_status="$(curl --fail --silent --show-error \
+                --output /tmp/public-feed-release.json --write-out '%{http_code}' \
+                'http://127.0.0.1:8080/api/public/feed?size=1')"
+              [[ "$public_feed_status" == "200" ]] || { echo "Public feed returned HTTP $public_feed_status" >&2; exit 1; }
+              public_meetups_status="$(curl --fail --silent --show-error \
+                --output /tmp/public-meetups-release.json --write-out '%{http_code}' \
+                'http://127.0.0.1:8080/api/public/meetups?size=1')"
+              [[ "$public_meetups_status" == "200" ]] || { echo "Public meetups returned HTTP $public_meetups_status" >&2; exit 1; }
+              protected_write_status="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
+                --request POST --header 'Content-Type: application/json' --data '{}' \
+                'http://127.0.0.1:8080/api/feed')"
+              [[ "$protected_write_status" == "401" ]] || { echo "Anonymous feed write returned HTTP $protected_write_status instead of 401" >&2; exit 1; }
               exit 0
             fi
             if [ "$(docker inspect --format '{{.State.Running}}' talk-with-neighbors-backend-release)" != "true" ]; then

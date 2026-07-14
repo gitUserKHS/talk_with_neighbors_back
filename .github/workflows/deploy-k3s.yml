@@ -457,6 +457,14 @@ jobs:
           api_status="$(curl --fail --show-error --silent --retry 12 --retry-all-errors --retry-delay 5 --output "$RUNNER_TEMP/api-smoke.json" --write-out '%{http_code}' "$PUBLIC_ORIGIN/api/auth/check-duplicates?email=deploy-smoke%40example.invalid&username=deploy-smoke")"
           [[ "$api_status" == "200" ]] || { echo "API smoke test returned HTTP $api_status" >&2; exit 1; }
           jq -e 'type == "object" and ((.emailExists | type) == "boolean") and ((.usernameExists | type) == "boolean")' "$RUNNER_TEMP/api-smoke.json" >/dev/null
+          public_feed_status="$(curl --fail --show-error --silent --retry 12 --retry-all-errors --retry-delay 5 --output "$RUNNER_TEMP/public-feed.json" --write-out '%{http_code}' "$PUBLIC_ORIGIN/api/public/feed?size=1")"
+          [[ "$public_feed_status" == "200" ]] || { echo "Public feed returned HTTP $public_feed_status" >&2; exit 1; }
+          jq -e 'type == "object" and ((.content | type) == "array")' "$RUNNER_TEMP/public-feed.json" >/dev/null
+          public_meetups_status="$(curl --fail --show-error --silent --retry 12 --retry-all-errors --retry-delay 5 --output "$RUNNER_TEMP/public-meetups.json" --write-out '%{http_code}' "$PUBLIC_ORIGIN/api/public/meetups?size=1")"
+          [[ "$public_meetups_status" == "200" ]] || { echo "Public meetups returned HTTP $public_meetups_status" >&2; exit 1; }
+          jq -e 'type == "object" and ((.content | type) == "array")' "$RUNNER_TEMP/public-meetups.json" >/dev/null
+          protected_write_status="$(curl --show-error --silent --output /dev/null --write-out '%{http_code}' --request POST --header 'Content-Type: application/json' --data '{}' "$PUBLIC_ORIGIN/api/feed")"
+          [[ "$protected_write_status" == "401" ]] || { echo "Anonymous feed write returned HTTP $protected_write_status instead of 401" >&2; exit 1; }
 
       - name: Write deployment summary
         env:
@@ -474,7 +482,7 @@ jobs:
         if: always()
         shell: bash
         run: |
-          for path in "$RUNNER_TEMP/deploy-bundle.tgz" "$RUNNER_TEMP/healthz.txt" "$RUNNER_TEMP/api-smoke.json"; do
+          for path in "$RUNNER_TEMP/deploy-bundle.tgz" "$RUNNER_TEMP/healthz.txt" "$RUNNER_TEMP/api-smoke.json" "$RUNNER_TEMP/public-feed.json" "$RUNNER_TEMP/public-meetups.json"; do
             if [[ -f "$path" ]]; then
               shred -u -- "$path" 2>/dev/null || rm -f -- "$path"
             fi

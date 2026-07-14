@@ -41,4 +41,18 @@ public interface MessageRepository extends JpaRepository<Message, String> {
     @Query("SELECT m FROM Message m WHERE m.chatRoom.id = :roomId AND m.sender.id = :userId ORDER BY m.createdAt DESC")
     List<Message> findByChatRoomIdAndSenderIdOrderByCreatedAtDesc(
             @Param("roomId") String roomId, @Param("userId") Long userId, Pageable pageable);
+
+    @Query("""
+            SELECT COUNT(DISTINCT m)
+            FROM Message m
+            JOIN m.attachments attachment
+            JOIN m.chatRoom room
+            JOIN room.participants participant
+            WHERE participant.id = :userId
+              AND (attachment.url = :mediaUrl OR attachment.thumbnailUrl = :mediaUrl)
+            """)
+    long countAccessibleChatAttachments(
+            @Param("mediaUrl") String mediaUrl,
+            @Param("userId") Long userId
+    );
 }
