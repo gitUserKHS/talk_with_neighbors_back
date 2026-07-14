@@ -2,7 +2,7 @@
 
 이 문서는 `talk_with_neighbors`를 서울 리전의 저비용 AWS 환경에 배포하는 절차를 설명한다. 대상은 실제 상용 서비스가 아니라 **DevOps·백엔드 포트폴리오와 짧은 데모**다. 관리형 EKS 대신 ARM64 EC2 한 대의 k3s를 사용하고, 미디어만 비공개 S3로 분리한다.
 
-> **현재 상태 — 2026-07-14:** 서울 리전에서 Terraform 적용을 완료해 `t4g.small` 단일 노드 EC2, 암호화된 EBS, 비공개 미디어·배포 S3 버킷, GitHub OIDC와 SSM 배포 경로가 실제로 생성되어 있다. **현재 리소스는 비용이 발생할 수 있다.** 최초 애플리케이션 배포에서 VPC `10.42.0.0/16`과 k3s 기본 Pod CIDR `10.42.0.0/16`의 충돌을 발견했으며, Pod `10.244.0.0/16`, Service `10.96.0.0/16`, DNS `10.96.0.10`으로 1회 복구하는 중이다. 네트워크 재초기화와 재배포·외부 검증이 끝나기 전까지는 애플리케이션을 정상 배포 상태로 보지 않는다.
+> **현재 상태 — 2026-07-14:** 서울 리전에서 Terraform 적용과 애플리케이션 배포를 완료했다. `t4g.small` 단일 노드 EC2, 암호화된 EBS, 비공개 미디어·배포 S3 버킷, GitHub OIDC·SSM 배포 경로가 실제로 동작한다. 최초 배포의 VPC·Pod CIDR 충돌은 보호된 1회 재초기화로 Pod `10.244.0.0/16`, Service `10.96.0.0/16`, DNS `10.96.0.10`으로 복구했으며, MySQL 복원과 정상 배포, 외부 스모크 테스트, 실제 다중 사용자 멀티미디어·채팅 E2E 및 부하 테스트까지 검증했다. 네트워크 재초기화 게이트는 다시 `false`이며 일반 배포에서는 재초기화를 사용하지 않는다. **현재 AWS 리소스는 비용이 발생할 수 있다.**
 
 이 구성은 고가용성, 무중단 배포, 자동 DB 백업을 보장하지 않는다. 실제 사용자 계정과 비밀번호를 받는 공개 서비스로 사용하기 전에는 최소한 고정 주소, 도메인, TLS, DB 백업을 추가해야 한다.
 
@@ -307,9 +307,9 @@ ghcr.io/gituserkhs/talk_with_neighbors_front@sha256:<64자리 digest>
 
 배포 번들은 secret을 포함하므로 콘솔에서 다운로드하거나 보관하지 않는다. 배포 Role은 지정 instance와 deployment prefix에만 필요한 권한을 갖고, EC2 Role은 media·deployment prefix만 접근한다. 애플리케이션에는 정적 AWS 키를 주입하지 않고 EC2 Instance Role의 임시 자격 증명을 사용한다.
 
-### 8.3 현재 노드의 1회 네트워크 복구
+### 8.3 완료된 1회 네트워크 복구 기록과 비상 절차
 
-최초 생성된 현재 노드는 k3s 기본 Pod CIDR과 VPC가 모두 `10.42.0.0/16`이라서 Pod의 외부 DNS·S3 통신과 Traefik 설치가 실패할 수 있다. Terraform은 데이터가 있는 인스턴스의 우발적 교체를 막기 위해 `ami`와 `user_data` 변경을 무시한다. 따라서 **Terraform을 다시 적용하는 것만으로 현재 노드의 k3s CIDR은 바뀌지 않는다.** 아래의 보호된 1회 복구 워크플로를 사용한다.
+최초 생성 당시 노드는 VPC와 k3s 기본 Pod CIDR이 모두 `10.42.0.0/16`이라 외부 DNS·S3 통신과 Traefik 설치가 실패했다. 2026-07-14 보호된 1회 복구로 목표 CIDR 이전과 MySQL 복원, 후속 일반 배포 검증을 완료했다. 현재 재초기화 게이트는 `false`다. Terraform은 기존 EC2의 `ami`와 `user_data` 변경을 무시하므로 동일 문제가 있는 레거시 노드는 Terraform 재적용만으로 복구되지 않는다. 아래 절차는 감사 기록과 명시적으로 승인된 비상 복구용으로만 보존하며 일반 배포에서 다시 실행하지 않는다.
 
 재초기화는 k3s 제어면과 workload 상태를 다시 만드는 파괴적 유지보수다. 실패한 포트폴리오 단일 노드를 복구하는 경우에만 실행하고, 정상 클러스터의 일반 배포 절차로 사용하지 않는다.
 
@@ -332,6 +332,8 @@ REINITIALIZE_K3S_NETWORK:<EC2_INSTANCE_ID>:pods=10.244.0.0/16:services=10.96.0.0
 2. 같은 검증된 이미지 digest로 `reinitialize_k3s_network=false`, `reinitialize_confirmation` 빈 값의 정상 배포를 한 번 더 실행한다.
 3. Pod CIDR, CoreDNS, Traefik, 백엔드 readiness, S3 미디어, 외부 `/healthz`와 사용자 시나리오를 확인한다.
 4. root 전용 백업은 복구가 불필요함을 확인한 뒤 별도 유지보수에서 보존 또는 삭제한다.
+
+실제 복구는 [Actions run 29319503838](https://github.com/gitUserKHS/talk_with_neighbors_back/actions/runs/29319503838)에서 완료했다. 채팅방 트랜잭션 삭제 수정이 포함된 백엔드 digest `ghcr.io/gituserkhs/talk_with_neighbors_back@sha256:b2e3d398f801e49c1d5b4318358508276b911297229ef6326da971c691eeb325`와 프런트엔드 digest `ghcr.io/gituserkhs/talk_with_neighbors_front@sha256:919f68e1c4a778e7aaaf1fc9a4c9ba8701e50d8baa7300855a4687d43d514c4f`의 일반 배포는 [Actions run 29322538902](https://github.com/gitUserKHS/talk_with_neighbors_back/actions/runs/29322538902)에서 외부 스모크 테스트까지 통과했다. 이어서 실제 2인 E2E가 회원·프로필·다중 이미지/동영상 게시글·댓글·좋아요·채팅 PNG/MP4/TXT·메시지 수정/삭제·방 삭제·S3 정리를 13단계 291개 assertion으로 검증했다. 3인 부하는 p95 458ms, 10인 부하는 콜드 p95 2,170ms와 워밍업 후 p95 1,477ms를 기록했으며 두 10인 실행 모두 243개 요청 오류 0건, 데이터 불일치 0건, WebSocket 유실 0건이었다. [진단 run 29322813442](https://github.com/gitUserKHS/talk_with_neighbors_back/actions/runs/29322813442)는 앱 Pod 4개와 핵심 k3s Pod의 Ready 상태, PVC 2/2 Bound, DB·Redis·Actuator, 비공개 S3 경로를 확인했다.
 
 ### 8.4 수동 확인
 
@@ -412,7 +414,7 @@ sudo tail -n 300 /var/log/talk-with-neighbors-bootstrap.log
 
 ### 11.1 OS·AMI·k3s 업그레이드
 
-MySQL과 Redis가 EC2 루트 EBS에 있기 때문에 Canonical의 `current` AMI나 bootstrap 변경만으로 인스턴스가 자동 교체되면 데이터가 사라질 수 있다. 이를 막기 위해 Terraform은 `ami`와 `user_data` 변경을 무시하고 `user_data_replace_on_change = false`를 사용한다. 따라서 새 AMI나 bootstrap 값이 plan에 바로 반영되지 않는 것은 의도된 동작이다. 특히 기존 EC2의 k3s CIDR은 Terraform 재적용으로 바뀌지 않으므로, 현재의 CIDR 충돌 복구에는 8.3절의 보호된 1회 재초기화를 사용한다.
+MySQL과 Redis가 EC2 루트 EBS에 있기 때문에 Canonical의 `current` AMI나 bootstrap 변경만으로 인스턴스가 자동 교체되면 데이터가 사라질 수 있다. 이를 막기 위해 Terraform은 `ami`와 `user_data` 변경을 무시하고 `user_data_replace_on_change = false`를 사용한다. 따라서 새 AMI나 bootstrap 값이 plan에 바로 반영되지 않는 것은 의도된 동작이다. 기존 EC2의 k3s CIDR은 Terraform 재적용만으로 바뀌지 않는다. 현재 노드는 2026-07-14 보호된 1회 복구를 완료했으며, 향후 동일한 레거시 노드 문제가 발생했을 때만 8.3절을 비상 절차로 참고한다. 일반 배포에서는 항상 네트워크 재초기화를 비활성화한다.
 
 보안 업데이트는 SSM으로 기존 노드에 적용하고, k3s 업그레이드는 DB 논리 백업과 EBS snapshot을 만든 뒤 별도의 유지보수 작업으로 수행한다. 새 AMI로 교체해야 할 때는 자동 교체에 맡기지 말고 새 노드 생성, DB 복원, S3 연결, 애플리케이션 검증, 트래픽 전환 순서를 명시적으로 계획한다.
 
