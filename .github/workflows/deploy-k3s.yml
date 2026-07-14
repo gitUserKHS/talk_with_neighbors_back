@@ -67,6 +67,14 @@ jobs:
             k3s kubectl get nodes -o wide
             k3s kubectl -n "$namespace" get pods,deployments,statefulsets,services,ingress -o wide
             k3s kubectl -n kube-system get pods,services -o wide
+            k3s kubectl -n kube-system get jobs,helmcharts.helm.cattle.io -o wide
+            echo "=== Traefik installer diagnostics ==="
+            k3s kubectl -n kube-system describe job helm-install-traefik || true
+            k3s kubectl -n kube-system describe helmchart.helm.cattle.io traefik || true
+            k3s kubectl -n kube-system logs job/helm-install-traefik \
+              --all-containers=true --tail=300 || true
+            k3s kubectl -n kube-system logs job/helm-install-traefik \
+              --all-containers=true --previous --tail=300 || true
             k3s kubectl -n "$namespace" get endpointslice \
               -l kubernetes.io/service-name=backend -o wide
             k3s kubectl -n "$namespace" get pods -o json
@@ -129,6 +137,31 @@ jobs:
               "https://${media_bucket}.s3.${media_region}.amazonaws.com/" \
               || s3_route_result="$?"
             echo "s3-pod-unsigned-route-rc=$s3_route_result"
+            echo "=== pod DNS and HTTPS route diagnostics ==="
+            k3s kubectl -n "$namespace" exec deployment/backend -- sh -ec '\''
+              cat /etc/resolv.conf
+              cat /proc/net/route
+              for hostname in "$1" "$2"; do
+                echo "dns-host=$hostname"
+                getent ahostsv4 "$hostname" || true
+              done
+            '\'' sh \
+              "${media_bucket}.s3.${media_region}.amazonaws.com" \
+              "s3.${media_region}.amazonaws.com" || true
+            for route_url in \
+              "https://${media_bucket}.s3.${media_region}.amazonaws.com/" \
+              "https://s3.${media_region}.amazonaws.com/"; do
+              echo "https-route=$route_url"
+              k3s kubectl -n "$namespace" exec deployment/backend -- \
+                wget --timeout=8 --tries=1 --server-response --spider \
+                "$route_url" 2>&1 || true
+            done
+            echo "=== node forwarding and masquerade rules ==="
+            sysctl net.ipv4.ip_forward || true
+            iptables -t nat -S POSTROUTING || true
+            iptables -t nat -S 2>/dev/null \
+              | grep -E "(FLANNEL|flannel|CNI|KUBE|MASQ)" || true
+            journalctl --unit k3s --no-pager --since "30 minutes ago" --lines 300 || true
             echo "=== backend cgroup and process resources ==="
             k3s kubectl -n "$namespace" exec deployment/backend -- sh -ec '\''
               grep -E "^(Threads|VmRSS|VmHWM|FDSize):" /proc/1/status || true
