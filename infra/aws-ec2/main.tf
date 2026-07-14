@@ -711,6 +711,20 @@ resource "aws_instance" "app" {
   ]
 }
 
+resource "aws_eip" "app" {
+  domain = "vpc"
+
+  tags = {
+    Name      = "${var.project_name}-public"
+    Component = "k3s-node"
+  }
+}
+
+resource "aws_eip_association" "app" {
+  allocation_id = aws_eip.app.id
+  instance_id   = aws_instance.app.id
+}
+
 resource "aws_iam_openid_connect_provider" "github" {
   count = var.github_oidc_provider_arn == null ? 1 : 0
 
@@ -817,8 +831,11 @@ data "aws_iam_policy_document" "github_deploy" {
   }
 
   statement {
-    sid       = "ReadNodeState"
-    actions   = ["ec2:DescribeInstances"]
+    sid = "ReadNodeState"
+    actions = [
+      "ec2:DescribeAddresses",
+      "ec2:DescribeInstances"
+    ]
     resources = ["*"]
   }
 }

@@ -48,13 +48,12 @@ flowchart TD
 | `FRONTEND_PORT` | 로컬 프론트 포트, 기본 3000 |
 | `BACKEND_PORT` | 로컬 API 포트, 기본 8080 |
 | `MYSQL_PORT`, `REDIS_PORT` | 로컬 데이터 서비스 포트 |
-| `JWT_SECRET` | 현재 설정 호환용 비밀; 인증 방식 정리 전 이름 재검토 필요 |
 | `APP_MEDIA_STORAGE_DIRECTORY` | 백엔드 미디어 저장 경로; Compose 기본 `/app/uploads` |
 | `APP_MEDIA_FFMPEG_COMMAND` | FFmpeg 실행 파일; Docker 기본 `ffmpeg` |
 | `APP_MEDIA_FFPROBE_COMMAND` | FFprobe 실행 파일; Docker 기본 `ffprobe` |
 | `APP_MEDIA_PROCESSING_TIMEOUT_SECONDS` | 한 파일 변환 제한 시간; 기본 180초 |
 | `APP_MEDIA_MAX_CONCURRENT_PROCESSES` | 동시 FFmpeg 변환 수; 기본 2, 초과 요청은 잠시 대기 후 503 |
-| `PUBLIC_ORIGIN` | 운영 CORS 허용 출처 |
+| `PUBLIC_ORIGIN` | 운영 HTTPS CORS origin; 기본 `https://talk-with-neighbors.duckdns.org` |
 | `IMAGE_TAG` | 운영 Compose의 GHCR 태그 |
 
 운영에서는 예제 기본 비밀번호를 절대 사용하지 않는다.
@@ -72,7 +71,7 @@ PR과 `main`, `codex/**` 푸시에서 다음을 실행한다.
 5. 실제 Nginx 컨테이너 `/healthz`와 SPA 응답 스모크 테스트
 6. `dist` 아티팩트 보관
 
-GitHub Pages는 공개 API 주소를 명시해야 하는 수동 미리보기다. `main`과 버전 태그의 프론트 이미지는 위 품질 검증을 통과한 뒤 GHCR에 게시된다.
+교차 사이트 쿠키 계약과 맞지 않는 GitHub Pages 배포는 제거했다. `main`과 버전 태그의 프론트 이미지는 위 품질 검증을 통과한 뒤 GHCR에 게시되고 AWS의 같은 HTTPS origin에서 제공된다.
 
 ## 백엔드 CI/CD
 
@@ -85,7 +84,9 @@ PR과 `main`, `codex/**` 푸시에서 다음을 실행한다.
 5. 실제 MySQL 8·Redis 7과 함께 컨테이너 readiness 및 DB 조회 스모크 테스트
 6. 테스트 보고서 보관
 
-`main`과 버전 태그의 백엔드 이미지는 별도 품질 작업이 성공한 뒤에만 GHCR에 게시된다. 게시 이미지에는 provenance와 SBOM attestation을 생성한다.
+`main`과 버전 태그의 백엔드 이미지는 별도 품질 작업이 성공한 뒤에만 GHCR에 게시된다. 게시 이미지에는 provenance와 SBOM attestation을 생성한다. 백엔드 `main`의 **Publish backend image**가 성공하면 배포 워크플로가 자동으로 이어지고, 검증을 통과해 승격된 백엔드·프런트엔드 `:main` 태그를 각각 OCI digest로 해석한 뒤 그 불변 주소만 k3s에 전달한다. 실패하거나 취소된 게시 실행은 배포하지 않는다.
+
+프런트와 백엔드가 함께 바뀌는 릴리스는 **프런트 `main` 병합·이미지 게시 성공 → 백엔드 `main` 병합·이미지 게시 성공 → 자동 배포** 순서로 진행한다. 따라서 백엔드 게시가 CD를 시작하는 시점에는 호환되는 프런트 `:main` 이미지가 이미 준비되어 있다. 백엔드만 바뀌는 릴리스는 현재 검증된 프런트 `:main`과 짝을 이룬다.
 
 ## AWS 인프라와 k3s 배포
 
@@ -93,7 +94,7 @@ PR과 `main`, `codex/**` 푸시에서 다음을 실행한다.
 
 2026-07-14 현재 Terraform으로 `t4g.small` EC2와 암호화된 EBS·비공개 S3 리소스를 생성했고, GitHub OIDC와 SSM을 통한 k3s 배포까지 완료했다. 최초 배포에서 VPC와 k3s 기본 Pod CIDR이 `10.42.0.0/16`으로 겹치는 문제를 발견했으나, 보호된 1회 재초기화로 Pod `10.244.0.0/16`, Service `10.96.0.0/16`, DNS `10.96.0.10`으로 이전했다. MySQL 복원, CoreDNS·Traefik, 백엔드·프런트엔드 rollout과 readiness, S3 미디어, 외부 health/API 스모크 테스트를 검증했다. Jackson `2.21.5`와 Logback `1.5.35` 보안 패치를 포함한 최종 이미지도 불변 digest로 재배포했다. 실제 2인 멀티미디어·채팅 E2E는 패치 전후 모두 13단계 291개 assertion과 정리를 통과했고, 10인 동시 부하는 요청 오류·데이터 불일치·WebSocket 유실 0건을 유지하며 워밍업 후 p95 1,477ms를 기록했다. 배포 직후 첫 10인 실행은 p95 2,170ms로 2초 기준을 넘었으므로 작은 단일 노드의 콜드 스타트 특성도 함께 운영 기록으로 남긴다. `K3S_NETWORK_REINITIALIZE_ALLOWED`는 다시 `false`로 잠갔고 일반 배포는 `reinitialize_k3s_network=false`로만 수행한다. 현재 리소스는 비용이 발생할 수 있다.
 
-`infra-ci.yml`은 Terraform 형식·스키마와 VPC·Pod·Service CIDR 비중첩, Kustomize 렌더링, Kubernetes 스키마, GitHub Actions 문법을 검증하지만 비용이 발생하는 `terraform apply`는 실행하지 않는다. `deploy-k3s.yml`은 승인된 `production` Environment에서 고정된 GHCR digest만 받아 임시 S3 번들과 SSM Run Command로 배포하고 rollout·readiness·외부 API를 확인한다. 네트워크 재초기화는 `main`, `production`, Environment 토글, boolean 입력, 인스턴스별 확인 문구를 모두 요구하며 성공 후 다시 비활성화한다. SSH 22는 열지 않는다. 자세한 생성·1회 복구·비용 관리·롤백·삭제 절차는 [AWS EC2 + S3 + k3s 배포 가이드](deployment/aws-k3s.md)를 따른다.
+`infra-ci.yml`은 Terraform 형식·스키마와 VPC·Pod·Service CIDR 비중첩, Kustomize 렌더링, Kubernetes 스키마, GitHub Actions 문법을 검증하지만 비용이 발생하는 `terraform apply`는 실행하지 않는다. `deploy-k3s.yml`은 승인된 `production` Environment에서 고정된 GHCR digest만 받아 SSM으로 배포한다. 자동 CD는 중지된 인스턴스를 시작한 뒤 Terraform 관리 Elastic IP와 DuckDNS A 레코드가 일치할 때만 Traefik ACME PVC, HTTP→HTTPS redirect, TLS Ingress를 적용하고 외부 HTTPS API를 검증한다. 기본 origin은 `https://talk-with-neighbors.duckdns.org`이며 세션 쿠키도 `Secure`로 설정된다. 네트워크 재초기화는 자동 CD에서 항상 비활성화되고 수동 비상 절차에서만 다중 확인 게이트를 요구한다. SSH 22는 열지 않는다. 자세한 생성·TLS 전환·비용 관리·롤백 절차는 [AWS EC2 + S3 + k3s 배포 가이드](deployment/aws-k3s.md)를 따른다.
 
 ## 참고용 운영 Compose
 
@@ -112,7 +113,7 @@ docker compose -f compose.production.yml up -d
 
 - `latest`만 의존하지 말고 검증된 SHA 또는 릴리스 태그로 배포한다.
 - MySQL·Redis는 외부에 공개하지 않는다.
-- HTTPS 종단과 보안 쿠키 설정을 적용한다.
+- HTTPS 종단, 인증서 자동 갱신과 보안 쿠키를 계속 검증한다.
 - CORS는 실제 프론트 출처만 허용한다.
 - DB 백업과 복구 절차를 검증한다.
 - 애플리케이션·WebSocket·Redis 지표와 로그를 수집한다.

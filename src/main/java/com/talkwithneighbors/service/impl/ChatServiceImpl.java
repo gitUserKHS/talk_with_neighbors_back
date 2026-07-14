@@ -85,7 +85,12 @@ public class ChatServiceImpl implements ChatService {
                     List<String> notFoundUsernames = distinctOtherUsernames.stream()
                                                                           .filter(reqName -> foundUsernames.stream().noneMatch(foundName -> foundName.equalsIgnoreCase(reqName)))
                                                                           .collect(Collectors.toList());
-                    log.warn("Could not find users for all requested usernames. Requested: {}, Found: {}, Not Found: {}", distinctOtherUsernames, foundUsernames, notFoundUsernames);
+                    log.warn(
+                            "Could not find all requested chat participants. requestedCount={}, foundCount={}, notFoundCount={}",
+                            distinctOtherUsernames.size(),
+                            foundUsernames.size(),
+                            notFoundUsernames.size()
+                    );
                     // 정책: 찾지 못한 사용자가 있으면 채팅방 생성 실패 처리
                     throw new ChatException("Could not find user(s): " + String.join(", ", notFoundUsernames) + ". Please check the usernames.", HttpStatus.BAD_REQUEST);
                 }
@@ -217,7 +222,7 @@ public class ChatServiceImpl implements ChatService {
             String content,
             List<MessageAttachment> attachments
     ) {
-        log.info("[SendMessage] Attempting to send message. RoomId: {}, SenderId: {}, Content: '{}'", roomId, senderId, content);
+        log.debug("[SendMessage] Attempting to send message. RoomId: {}, SenderId: {}", roomId, senderId);
 
         List<MessageAttachment> safeAttachments = attachments == null ? List.of() : List.copyOf(attachments);
         String normalizedContent = content == null ? "" : content.trim();
@@ -237,14 +242,14 @@ public class ChatServiceImpl implements ChatService {
                     log.error("[SendMessage] Chat room not found with id: {}", roomId);
                     return new ChatException("Chat room not found: " + roomId, HttpStatus.NOT_FOUND);
                 });
-        log.info("[SendMessage] Found chat room: ID={}, Name='{}'", room.getId(), room.getName());
+        log.debug("[SendMessage] Found chat room: ID={}", room.getId());
 
         User sender = userRepository.findById(senderId)
                 .orElseThrow(() -> {
                     log.error("[SendMessage] Sender not found with id: {}", senderId);
                     return new ChatException("User not found: " + senderId, HttpStatus.NOT_FOUND);
                 });
-        log.info("[SendMessage] Found sender: ID={}, Username='{}'", sender.getId(), sender.getUsername());
+        log.debug("[SendMessage] Found sender: ID={}", sender.getId());
         
         // 참여 중인 사용자만 메시지를 보낼 수 있습니다.
         if (room.getParticipants().stream().noneMatch(p -> p.getId().equals(senderId))) {
@@ -267,13 +272,13 @@ public class ChatServiceImpl implements ChatService {
         message.setType(resolveMessageType(normalizedContent, safeAttachments));
         message.setCreatedAt(LocalDateTime.now());
         message.getReadByUsers().add(sender.getId()); // 발신자는 항상 읽음 처리
-        log.info("[SendMessage] Prepared message object: ID={}, ChatRoomID={}, SenderID={}, Content='{}', CreatedAt={}", 
-                 message.getId(), message.getChatRoom().getId(), message.getSender().getId(), message.getContent(), message.getCreatedAt());
+        log.debug("[SendMessage] Prepared message object: ID={}, ChatRoomID={}, SenderID={}, CreatedAt={}",
+                 message.getId(), message.getChatRoom().getId(), message.getSender().getId(), message.getCreatedAt());
 
         Message savedMessage;
         try {
             savedMessage = messageRepository.save(message);
-            log.info("[SendMessage] Message saved to DB: ID={}, Content='{}'", savedMessage.getId(), savedMessage.getContent());
+            log.debug("[SendMessage] Message saved to DB: ID={}", savedMessage.getId());
         } catch (Exception e) {
             log.error("[SendMessage] Failed to save message to DB. RoomId: {}, SenderId: {}", roomId, senderId, e);
             throw new ChatException("Failed to save message.", HttpStatus.INTERNAL_SERVER_ERROR);
@@ -283,14 +288,14 @@ public class ChatServiceImpl implements ChatService {
             room.setLastMessage(lastMessagePreview(savedMessage));
             room.setLastMessageTime(savedMessage.getCreatedAt());
             chatRoomRepository.save(room);
-            log.info("[SendMessage] Updated chat room's last message: RoomID={}, LastMessage='{}'", room.getId(), savedMessage.getContent());
+            log.debug("[SendMessage] Updated chat room's last-message metadata: RoomID={}", room.getId());
         } catch (Exception e) {
             log.error("[SendMessage] Failed to update chat room's last message. RoomID: {}", room.getId(), e);
             // 이 오류는 메시지 전송 자체를 실패시키지는 않음 (이미 메시지는 저장됨)
         }
 
         MessageDto messageDto = MessageDto.fromEntity(savedMessage, sender.getId());
-        log.info("[SendMessage] Created MessageDto: ID={}, Content='{}', SenderId={}", messageDto.getId(), messageDto.getContent(), messageDto.getSenderId());
+        log.debug("[SendMessage] Created MessageDto: ID={}, SenderId={}", messageDto.getId(), messageDto.getSenderId());
 
         // Delivery happens only after the database transaction commits.
         applicationEventPublisher.publishEvent(
@@ -373,6 +378,25 @@ public class ChatServiceImpl implements ChatService {
             applicationEventPublisher.publishEvent(new MediaFilesDeletedEvent(mediaUrls));
         }
         return messageDto;
+    }
+
+    private ChatRoom requireParticipant(String roomId, Long userId) {
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new ChatException(
+                        "User not found with id: " + userId, HttpStatus.NOT_FOUND));
+        return chatRoomRepository.findByIdAndParticipantsContaining(roomId, user)
+                .orElseThrow(() -> new ChatException(
+                        "Chat room not found or user not a participant", HttpStatus.NOT_FOUND));
+    }
+
+    private Message requireAccessibleMessage(String roomId, String messageId, Long userId) {
+        requireParticipant(roomId, userId);
+        Message message = messageRepository.findById(messageId)
+                .orElseThrow(() -> new ChatException("Message not found: " + messageId, HttpStatus.NOT_FOUND));
+        if (message.getChatRoom() == null || !roomId.equals(message.getChatRoom().getId())) {
+            throw new ChatException("Message not found: " + messageId, HttpStatus.NOT_FOUND);
+        }
+        return message;
     }
 
     private Message requireOwnedMessage(String roomId, String messageId, Long requesterId) {
@@ -588,29 +612,34 @@ public class ChatServiceImpl implements ChatService {
 
     @Override
     @Transactional
-    public void markMessageAsRead(String messageId, String userIdString) {
+    public void markMessageAsRead(String roomId, String messageId, String userIdString) {
         Long userId = Long.parseLong(userIdString);
-        User user = userRepository.findById(userId)
-                .orElseThrow(() -> new ChatException("User not found with id: " + userIdString, HttpStatus.NOT_FOUND));
-        Message message = messageRepository.findById(messageId)
-                .orElseThrow(() -> new ChatException("Message not found: " + messageId, HttpStatus.NOT_FOUND));
+        Message message = requireAccessibleMessage(roomId, messageId, userId);
 
         if (message.getReadByUsers() == null) {
             message.setReadByUsers(new HashSet<>());
         }
 
-        if (!message.getReadByUsers().contains(user.getId())) {
-            message.getReadByUsers().add(user.getId());
+        if (!message.getReadByUsers().contains(userId)) {
+            message.getReadByUsers().add(userId);
             messageRepository.save(message);
-            log.info("Marked message {} as read for user {}", messageId, user.getId());
-            
+            log.debug("Marked message {} as read for user {}", messageId, userId);
+
             // 읽음 상태 변경 알림 전송
             try {
-                notificationService.sendMessageReadStatusUpdate(messageId, message.getChatRoom().getId(), user.getId());
+                notificationService.sendMessageReadStatusUpdate(messageId, roomId, userId);
             } catch (Exception e) {
                 log.error("Failed to send read status update for messageId {}: {}", messageId, e.getMessage(), e);
             }
         }
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public long getUnreadCount(String roomId, String userIdString) {
+        Long userId = Long.parseLong(userIdString);
+        requireParticipant(roomId, userId);
+        return messageRepository.countUnreadMessages(roomId, userId);
     }
     
     @Override
@@ -652,16 +681,7 @@ public class ChatServiceImpl implements ChatService {
     @Transactional
     public void markAllMessagesInRoomAsRead(String roomId, String userIdString) {
         Long userId = Long.parseLong(userIdString);
-        User user = userRepository.findById(userId)
-                .orElseThrow(() -> new ChatException("User not found with id: " + userIdString, HttpStatus.NOT_FOUND));
-
-        ChatRoom chatRoom = chatRoomRepository.findById(roomId)
-                .orElseThrow(() -> new ChatException("Chat room not found with id: " + roomId, HttpStatus.NOT_FOUND));
-
-        if (chatRoom.getParticipants().stream().noneMatch(p -> p.getId().equals(userId))) {
-            log.warn("User {} attempted to mark messages as read in room {} but is not a participant.", userIdString, roomId);
-            throw new ChatException("User " + userIdString + " is not a participant in chat room " + roomId + ".", HttpStatus.FORBIDDEN);
-        }
+        requireParticipant(roomId, userId);
 
         List<Message> allMessagesInRoom = messageRepository.findByChatRoomIdOrderByCreatedAtDesc(roomId, Pageable.unpaged()).getContent();
         

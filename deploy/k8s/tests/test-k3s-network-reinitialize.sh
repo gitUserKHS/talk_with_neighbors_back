@@ -133,12 +133,12 @@ full_apply_line="$(grep -n 'apply -k "$RELEASE_DIR/base"' "$SCRIPT_DIR/deploy-on
 [[ "$restore_call_line" =~ ^[0-9]+$ && "$full_apply_line" =~ ^[0-9]+$ && "$restore_call_line" -lt "$full_apply_line" ]] || \
   fail "MySQL restore must complete before the full application kustomization"
 
-PUBLIC_ORIGIN=http://127.0.0.1 \
+PUBLIC_ORIGIN=https://portfolio.example.com \
+ACME_EMAIL=portfolio-owner@example.com \
 AWS_REGION=ap-northeast-2 \
 MEDIA_BUCKET=twn-ci-media \
 MYSQL_PASSWORD=ci-mysql-password \
 MYSQL_ROOT_PASSWORD=ci-root-password \
-JWT_SECRET=ci-jwt-secret-that-is-at-least-32-characters \
 RUNNER_TEMP="$temporary" \
   bash "$SCRIPT_DIR/build-bundle.sh" "$temporary/bundle.tgz" >/dev/null
 
@@ -147,9 +147,29 @@ for required in \
   ./deploy-on-node.sh \
   ./k3s-network-common.sh \
   ./k3s-server-config.yaml \
+  ./traefik-config.yaml \
   ./reinitialize-k3s-network.sh; do
   grep -Fxq "$required" "$temporary/bundle-files.txt" || fail "Bundle is missing $required"
 done
+
+tar -xOzf "$temporary/bundle.tgz" ./traefik-config.yaml > "$temporary/traefik-with-email.yaml"
+grep -Fq -- '--certificatesresolvers.letsencrypt.acme.email=portfolio-owner@example.com' \
+  "$temporary/traefik-with-email.yaml" || fail "Configured ACME email was not rendered"
+! grep -Fq 'REPLACE_ACME_EMAIL_ARGUMENT' "$temporary/traefik-with-email.yaml" || \
+  fail "The ACME email placeholder leaked into the rendered bundle"
+
+PUBLIC_ORIGIN=https://portfolio.example.com \
+AWS_REGION=ap-northeast-2 \
+MEDIA_BUCKET=twn-ci-media \
+MYSQL_PASSWORD=ci-mysql-password \
+MYSQL_ROOT_PASSWORD=ci-root-password \
+RUNNER_TEMP="$temporary" \
+  bash "$SCRIPT_DIR/build-bundle.sh" "$temporary/bundle-no-email.tgz" >/dev/null
+tar -xOzf "$temporary/bundle-no-email.tgz" ./traefik-config.yaml > "$temporary/traefik-without-email.yaml"
+! grep -Fq -- '--certificatesresolvers.letsencrypt.acme.email=' "$temporary/traefik-without-email.yaml" || \
+  fail "An empty ACME email argument was rendered"
+! grep -Fq 'REPLACE_ACME_EMAIL_ARGUMENT' "$temporary/traefik-without-email.yaml" || \
+  fail "The optional ACME email placeholder was not removed"
 
 readonly IMAGE_SUFFIX="sha256:0000000000000000000000000000000000000000000000000000000000000000"
 if bash "$SCRIPT_DIR/deploy-via-ssm.sh" \

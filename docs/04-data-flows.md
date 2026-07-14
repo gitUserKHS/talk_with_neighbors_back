@@ -14,9 +14,9 @@ sequenceDiagram
     FE->>API: POST /api/auth/register 또는 login
     API->>DB: 사용자 조회/저장, 비밀번호 검증
     API->>Redis: session:{uuid} 저장
-    API-->>FE: UserDto + X-Session-Id 헤더
-    FE->>FE: 세션 ID와 사용자 상태 보관
-    FE->>API: 이후 요청에 X-Session-Id 첨부
+    API-->>FE: UserDto + TWN_SESSION HttpOnly 쿠키
+    FE->>FE: 사용자 상태만 보관; HttpOnly 쿠키 값은 브라우저가 관리
+    FE->>API: 이후 동일 출처 요청에 쿠키 자동 첨부
     API->>Redis: 세션 검증
 ```
 
@@ -91,7 +91,7 @@ sequenceDiagram
     participant DB as MySQL
     participant Q as 사용자별 큐
 
-    FE->>WS: X-Session-Id 기반 연결
+    FE->>WS: TWN_SESSION 쿠키 기반 연결
     FE->>Q: /user/queue/chat/room/{roomId} 구독
     FE->>Chat: /app/chat.sendMessage
     Chat->>DB: 메시지 저장, 방 마지막 메시지 갱신

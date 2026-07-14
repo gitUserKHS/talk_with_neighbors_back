@@ -86,11 +86,7 @@ public class UserSession implements Serializable {
     @Override
     public String toString() {
         return "UserSession{" +
-                "userId=" + userId +
-                ", userIdStr='" + userIdStr + '\'' +
-                ", username='" + username + '\'' +
-                ", email='" + email + '\'' +
-                ", nickname='" + nickname + '\'' +
+                "userId=" + getUserId() +
                 '}';
     }
-} 
+}

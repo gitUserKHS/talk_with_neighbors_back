@@ -6,6 +6,7 @@ import com.talkwithneighbors.entity.User;
 import com.talkwithneighbors.repository.UserSessionRepository;
 import com.talkwithneighbors.repository.UserRepository;
 import com.talkwithneighbors.security.UserSession;
+import com.talkwithneighbors.websocket.AuthenticatedWebSocketSessionRegistry;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.data.redis.core.RedisTemplate;
@@ -36,18 +37,21 @@ public class RedisSessionService implements ApplicationListener<SessionDisconnec
     private final UserSessionRepository userSessionRepository;
     private final UserRepository userRepository;
     private final UserOnlineStatusListener userOnlineStatusListener;
+    private final AuthenticatedWebSocketSessionRegistry webSocketSessionRegistry;
     
     // @Lazy를 사용하여 순환 의존성 해결
     public RedisSessionService(RedisTemplate<String, String> redisTemplate,
                               ObjectMapper objectMapper,
                               UserSessionRepository userSessionRepository,
                               UserRepository userRepository,
-                              @Lazy UserOnlineStatusListener userOnlineStatusListener) {
+                              @Lazy UserOnlineStatusListener userOnlineStatusListener,
+                              AuthenticatedWebSocketSessionRegistry webSocketSessionRegistry) {
         this.redisTemplate = redisTemplate;
         this.objectMapper = objectMapper;
         this.userSessionRepository = userSessionRepository;
         this.userRepository = userRepository;
         this.userOnlineStatusListener = userOnlineStatusListener;
+        this.webSocketSessionRegistry = webSocketSessionRegistry;
     }
     
     private static final String SESSION_PREFIX = "session:";
@@ -68,22 +72,9 @@ public class RedisSessionService implements ApplicationListener<SessionDisconnec
 
     @Transactional
     public void saveSession(String sessionId, UserSession userSession) {
-        // === UserSession의 username 로깅 추가 ===
-        if (userSession != null && userSession.getUsername() != null) {
-            log.info("Saving session for username: '{}', Original bytes: {}", 
-                     userSession.getUsername(), 
-                     java.util.Arrays.toString(userSession.getUsername().getBytes(java.nio.charset.StandardCharsets.UTF_8)));
-            try {
-                 log.info("Username (re-decoded from UTF-8 bytes): '{}'", new String(userSession.getUsername().getBytes(java.nio.charset.StandardCharsets.UTF_8), java.nio.charset.StandardCharsets.UTF_8));
-                 log.info("Username (decoded as ISO-8859-1): '{}'", new String(userSession.getUsername().getBytes(java.nio.charset.StandardCharsets.ISO_8859_1), java.nio.charset.StandardCharsets.ISO_8859_1));
-                 log.info("Username (decoded as MS949): '{}'", new String(userSession.getUsername().getBytes(java.nio.charset.Charset.forName("MS949")), java.nio.charset.Charset.forName("MS949")));
-            } catch (Exception e) {
-                 log.error("Error logging username encodings during saveSession", e);
-            }
-        } else {
-            log.warn("UserSession or its username is null when trying to save session with ID: {}", sessionId);
+        if (userSession == null || userSession.getUserId() == null) {
+            throw new IllegalArgumentException("A valid user session is required");
         }
-        // === 로깅 추가 끝 ===
         try {
             // 세션 DB를 기준 저장소로 유지합니다. Redis는 빠른 조회를 위한 보조 저장소입니다.
             LocalDateTime now = LocalDateTime.now();
@@ -104,11 +95,10 @@ public class RedisSessionService implements ApplicationListener<SessionDisconnec
                 String value = objectMapper.writeValueAsString(userSession);
                 redisTemplate.opsForValue().set(key, value, SESSION_EXPIRATION, TimeUnit.SECONDS);
             } catch (Exception redisError) {
-                log.warn("Redis is unavailable. Keeping session {} in the database only.", sessionId);
+                log.warn("Redis is unavailable. Keeping the session database-backed only.");
             }
 
             setUserOnline(userSession.getUserId().toString());
-            log.info("Session saved successfully for user: {} with sessionId: {}", userSession.getUsername(), sessionId);
         } catch (Exception e) {
             log.error("Error saving session", e);
             throw new RuntimeException("Failed to save session: " + e.getMessage(), e);
@@ -117,12 +107,9 @@ public class RedisSessionService implements ApplicationListener<SessionDisconnec
 
     @Transactional
     public UserSession getSession(String sessionId) {
-        log.info("Getting session: {}", sessionId);
-
         String key = SESSION_PREFIX + sessionId;
         Optional<Session> storedSession = userSessionRepository.findById(sessionId);
         if (storedSession.isEmpty()) {
-            log.info("Session {} is not present in the database. Ignoring any stale cache entry.", sessionId);
             return null;
         }
 
@@ -133,8 +120,9 @@ public class RedisSessionService implements ApplicationListener<SessionDisconnec
             try {
                 redisTemplate.delete(key);
             } catch (Exception redisError) {
-                log.debug("Redis is unavailable while removing expired session {}.", sessionId);
+                log.debug("Redis is unavailable while removing an expired session.");
             }
+            webSocketSessionRegistry.closeSessionsForCredential(sessionId);
             return null;
         }
 
@@ -151,10 +139,31 @@ public class RedisSessionService implements ApplicationListener<SessionDisconnec
             String userSessionJson = objectMapper.writeValueAsString(userSession);
             redisTemplate.opsForValue().set(key, userSessionJson, SESSION_EXPIRATION, TimeUnit.SECONDS);
         } catch (Exception redisError) {
-            log.debug("Redis is unavailable. Session {} remains database-backed.", sessionId);
+            log.debug("Redis is unavailable. The session remains database-backed.");
         }
         setUserOnline(user.getId().toString());
         return userSession;
+    }
+
+    /**
+     * Reads the database-backed session without extending its lifetime or
+     * updating online presence. Used by high-frequency STOMP authorization.
+     */
+    @Transactional(readOnly = true)
+    public UserSession getSessionWithoutTouch(String sessionId) {
+        Optional<Session> storedSession = userSessionRepository.findById(sessionId);
+        if (storedSession.isEmpty()) {
+            return null;
+        }
+        Session session = storedSession.get();
+        if (session.getExpiresAt() != null && !session.getExpiresAt().isAfter(LocalDateTime.now())) {
+            return null;
+        }
+        User user = session.getUser();
+        if (user == null || user.getId() == null) {
+            return null;
+        }
+        return UserSession.of(user.getId(), user.getUsername(), user.getEmail(), user.getUsername());
     }
     
     private UserSession createNewSession() {
@@ -165,7 +174,6 @@ public class RedisSessionService implements ApplicationListener<SessionDisconnec
     @Transactional
     @CacheEvict(value = "sessions", key = "#sessionId")
     public void deleteSession(String sessionId) {
-        log.info("[RedisSessionService] Deleting session: {}", sessionId);
         String sessionKey = SESSION_PREFIX + sessionId;
 
         UserSession userSession = null;
@@ -173,10 +181,9 @@ public class RedisSessionService implements ApplicationListener<SessionDisconnec
             String sessionJson = redisTemplate.opsForValue().get(sessionKey);
             if (sessionJson != null && !sessionJson.isEmpty()) {
                 userSession = objectMapper.readValue(sessionJson, UserSession.class);
-                log.info("[RedisSessionService] Found session in Redis for deletion: {}", sessionId);
             }
         } catch (Exception e) {
-            log.error("[RedisSessionService] Error reading session from Redis during deletion for sessionId {}: {}", sessionId, e.getMessage());
+            log.warn("[RedisSessionService] Could not read the session cache during deletion.");
         }
 
         String userIdToProcess = null;
@@ -188,21 +195,19 @@ public class RedisSessionService implements ApplicationListener<SessionDisconnec
                 Session rdbSession = rdbSessionOptional.get();
                 if (rdbSession.getUser() != null && rdbSession.getUser().getId() != null) {
                     userIdToProcess = rdbSession.getUser().getId().toString();
-                    log.info("[RedisSessionService] Found userId {} from RDB for session {} to process.", userIdToProcess, sessionId);
                 }
             }
         }
 
         try {
             redisTemplate.delete(sessionKey);
-            log.info("[RedisSessionService] Deleted session key {} from Redis.", sessionKey);
         } catch (Exception e) {
-            log.debug("Redis is unavailable while deleting session {}.", sessionId);
+            log.debug("Redis is unavailable while deleting a session.");
         }
 
         // RDB에서 현재 세션 삭제
         userSessionRepository.deleteById(sessionId);
-        log.info("[RedisSessionService] Deleted session from RDB: {}", sessionId);
+        webSocketSessionRegistry.closeSessionsForCredential(sessionId);
 
         if (userIdToProcess != null) {
             // 다른 활성 세션이 있는지 확인
@@ -222,7 +227,7 @@ public class RedisSessionService implements ApplicationListener<SessionDisconnec
                 try {
                     setUserOffline(userIdToProcess);
                 } catch (Exception e) {
-                    log.error("[RedisSessionService] Error setting user {} offline after session {} deletion: {}", userIdToProcess, sessionId, e.getMessage(), e);
+                    log.error("[RedisSessionService] Error setting user {} offline after session deletion: {}", userIdToProcess, e.getMessage(), e);
                 }
             } else {
                 log.info("[RedisSessionService] User {} still has {} other active session(s). Not setting to offline.", userIdToProcess, otherActiveSessions.size());
@@ -231,9 +236,8 @@ public class RedisSessionService implements ApplicationListener<SessionDisconnec
                 // 현재는 setUserOnline이 다른 세션 접근 시 호출될 것을 기대합니다.
             }
         } else {
-            log.warn("[RedisSessionService] Could not determine userId for session {}. Skipping further offline processing.", sessionId);
+            log.warn("[RedisSessionService] Could not determine the session user. Skipping offline processing.");
         }
-        log.info("[RedisSessionService] Session deletion process completed for: {}", sessionId);
     }
     
     /**
@@ -414,6 +418,8 @@ public class RedisSessionService implements ApplicationListener<SessionDisconnec
         
         // RDB에서 해당 사용자의 모든 세션 삭제
         List<Session> sessions = userSessionRepository.findByUserId(Long.parseLong(userId));
+        sessions.forEach(session ->
+                webSocketSessionRegistry.closeSessionsForCredential(session.getSessionId()));
         userSessionRepository.deleteAll(sessions);
     }
 
@@ -463,6 +469,7 @@ public class RedisSessionService implements ApplicationListener<SessionDisconnec
             
             redisTemplate.delete(sessionKey);
             redisTemplate.delete(userKey);
+            webSocketSessionRegistry.closeSessionsForCredential(session.getSessionId());
         }
         
         userSessionRepository.deleteAll(expiredSessions);
@@ -562,7 +569,7 @@ public class RedisSessionService implements ApplicationListener<SessionDisconnec
             // 온라인 상태 갱신
             setUserOnline(userId.toString());
             
-            log.info("Session updated in Redis for user: {} with sessionId: {}", user.getUsername(), sessionId);
+            log.debug("Session cache updated.");
         } catch (Exception e) {
             log.error("Error updating session in Redis", e);
             // Redis 업데이트 실패해도 데이터베이스는 업데이트되었으므로 예외는 던지지 않음
@@ -706,14 +713,13 @@ public class RedisSessionService implements ApplicationListener<SessionDisconnec
      */
     @Transactional
     public void extendSession(String sessionId) {
-        log.info("Extending session: {}", sessionId);
         
         try {
             // Redis 세션 만료 시간 연장
             String key = SESSION_PREFIX + sessionId;
             if (Boolean.TRUE.equals(redisTemplate.hasKey(key))) {
                 redisTemplate.expire(key, SESSION_EXPIRATION, TimeUnit.SECONDS);
-                log.info("Redis session extended for: {}", sessionId);
+                log.debug("Redis session expiration extended.");
             }
             
             // 데이터베이스 세션 만료 시간 연장
@@ -722,11 +728,11 @@ public class RedisSessionService implements ApplicationListener<SessionDisconnec
                         session.setLastAccessedAt(LocalDateTime.now());
                         session.setExpiresAt(LocalDateTime.now().plusSeconds(SESSION_EXPIRATION));
                         userSessionRepository.save(session);
-                        log.info("Database session extended for: {}", sessionId);
+                        log.debug("Database session expiration extended.");
                     });
                     
         } catch (Exception e) {
-            log.error("Error extending session: {}", sessionId, e);
+            log.error("Error extending session", e);
         }
     }
 
@@ -737,11 +743,11 @@ public class RedisSessionService implements ApplicationListener<SessionDisconnec
         Principal principal = headerAccessor.getUser();
         String sessionId = headerAccessor.getSessionId(); // WebSocket 세션 ID
 
-        log.info("[WebSocketDisconnectEvent] WebSocket session {} disconnected. Principal: {}", sessionId, principal);
+        log.debug("[WebSocketDisconnectEvent] WebSocket disconnected. Principal present: {}", principal != null);
 
         if (principal != null && principal.getName() != null) {
             String userId = principal.getName(); // UserPrincipal에서 반환되는 사용자 ID (문자열)
-            log.info("[WebSocketDisconnectEvent] User ID {} disconnected from WebSocket session {}. Checking if user should be set offline.", userId, sessionId);
+            log.info("[WebSocketDisconnectEvent] User ID {} disconnected. Checking offline status.", userId);
 
             // 여기에 해당 userId를 가진 다른 활성 WebSocket 세션이 있는지 확인하는 로직이 필요합니다.
             // 스프링에서는 기본적으로 개별 WebSocket 세션 목록을 직접 제공하지 않으므로,
@@ -755,11 +761,11 @@ public class RedisSessionService implements ApplicationListener<SessionDisconnec
             try {
                 // deleteSession은 RDB의 다른 활성 세션을 고려하지만,
                 // WebSocket 연결 끊김은 해당 연결에 대한 처리이므로 바로 setUserOffline 시도
-                log.info("[WebSocketDisconnectEvent] Attempting to set user {} offline due to WebSocket disconnect (session {}).", userId, sessionId);
+                log.info("[WebSocketDisconnectEvent] Attempting to set user {} offline after disconnect.", userId);
                 setUserOffline(userId);
             } catch (Exception e) {
-                log.error("[WebSocketDisconnectEvent] Error setting user {} offline after WebSocket disconnect for session {}: {}", 
-                          userId, sessionId, e.getMessage(), e);
+                log.error("[WebSocketDisconnectEvent] Error setting user {} offline after WebSocket disconnect: {}",
+                          userId, e.getMessage(), e);
             }
         } else {
             // Principal이 없거나 이름이 없는 경우 (예: 인증되지 않은 연결 또는 STOMP 이전 단계의 연결 종료)
@@ -769,7 +775,7 @@ public class RedisSessionService implements ApplicationListener<SessionDisconnec
             //    String userId = (String) simpAttributes.get("userId");
             //    ...
             // }
-            log.warn("[WebSocketDisconnectEvent] WebSocket session {} disconnected without a resolvable Principal or user ID. Cannot determine user to set offline directly from Principal.", sessionId);
+            log.warn("[WebSocketDisconnectEvent] WebSocket disconnected without a resolvable Principal.");
             // 이 경우, Redis의 세션 ID (만약 STOMP 세션 ID와 같다면)로 사용자를 찾아 오프라인 처리하는 것을 고려할 수 있으나,
             // STOMP 세션 ID와 HTTP 세션 ID는 다를 수 있습니다. 
             // CustomHandshakeHandler 등에서 attributes에 저장한 userId를 사용해야 합니다.

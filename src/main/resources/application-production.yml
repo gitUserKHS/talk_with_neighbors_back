@@ -26,7 +26,19 @@ logging:
     root: ${LOGGING_LEVEL_ROOT:WARN}
     com.talkwithneighbors: ${LOGGING_LEVEL_COM_TALKWITHNEIGHBORS:INFO}
     org.springframework.messaging: ${LOGGING_LEVEL_ORG_SPRINGFRAMEWORK_MESSAGING:WARN}
+    org.springframework.messaging.simp: WARN
+    org.springframework.messaging.simp.broker: WARN
+    org.springframework.messaging.simp.user: WARN
+    org.springframework.messaging.simp.stomp: WARN
+    org.springframework.messaging.converter: WARN
+    org.springframework.messaging.core: WARN
+    org.springframework.messaging.support: WARN
+    org.springframework.messaging.simp.broker.DefaultSubscriptionRegistry: WARN
+    org.springframework.messaging.simp.broker.SimpleBrokerMessageHandler: WARN
     org.springframework.web.socket: ${LOGGING_LEVEL_ORG_SPRINGFRAMEWORK_WEB_SOCKET:WARN}
+    org.springframework.web.socket.sockjs: WARN
+    org.springframework.web.socket.adapter: WARN
+    org.springframework.web.socket.handler: WARN
 
 app:
   media:

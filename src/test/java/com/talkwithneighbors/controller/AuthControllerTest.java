@@ -3,14 +3,11 @@ package com.talkwithneighbors.controller;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.talkwithneighbors.config.TestConfig;
 import com.talkwithneighbors.config.TestSecurityConfig;
-import com.talkwithneighbors.config.TestWebConfig;
 import com.talkwithneighbors.config.WebConfig;
 import com.talkwithneighbors.dto.UserDto;
 import com.talkwithneighbors.dto.auth.LoginRequestDto;
 import com.talkwithneighbors.dto.auth.RegisterRequestDto;
 import com.talkwithneighbors.exception.AuthException;
-import com.talkwithneighbors.security.AuthInterceptor;
-import com.talkwithneighbors.security.UserSession;
 import com.talkwithneighbors.service.AuthService;
 import com.talkwithneighbors.service.MediaStorageService;
 import com.talkwithneighbors.service.RedisSessionService;
@@ -30,6 +27,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
+import jakarta.servlet.http.Cookie;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -49,7 +47,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @TestPropertySource(properties = {
     "spring.session.store-type=none"
 })
-@Import({TestSecurityConfig.class, TestConfig.class, TestWebConfig.class})
+@Import({TestSecurityConfig.class, TestConfig.class})
 @ActiveProfiles("test")
 class AuthControllerTest {
 
@@ -71,9 +69,6 @@ class AuthControllerTest {
     @MockBean
     private RedisSessionService redisSessionService;
     
-    @MockBean
-    private AuthInterceptor authInterceptor;
-
     private RegisterRequestDto registerRequestDto;
     private LoginRequestDto loginRequestDto;
     private UserDto userDto;
@@ -93,12 +88,6 @@ class AuthControllerTest {
         userDto.setEmail("test@example.com");
         userDto.setUsername("testuser");
         
-        // AuthInterceptor 모킹 - 기본적으로 모든 요청 통과 허용
-        try {
-            when(authInterceptor.preHandle(any(), any(), any())).thenReturn(true);
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
     }
 
     @Test
@@ -137,7 +126,13 @@ class AuthControllerTest {
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(loginRequestDto)))
                 .andExpect(status().isOk())
-                .andExpect(header().exists("X-Session-Id"))
+                .andExpect(header().doesNotExist("X-Session-Id"))
+                .andExpect(header().string("Set-Cookie",
+                        org.hamcrest.Matchers.containsString("TWN_SESSION=test-session-id")))
+                .andExpect(header().string("Set-Cookie",
+                        org.hamcrest.Matchers.containsString("HttpOnly")))
+                .andExpect(header().string("Set-Cookie",
+                        org.hamcrest.Matchers.containsString("SameSite=Lax")))
                 .andExpect(jsonPath("$.email").value(userDto.getEmail()))
                 .andExpect(jsonPath("$.username").value(userDto.getUsername()));
     }
@@ -151,7 +146,7 @@ class AuthControllerTest {
 
         // when & then
         mockMvc.perform(post("/api/auth/logout")
-                .header("X-Session-Id", sessionId))
+                .cookie(new Cookie("TWN_SESSION", sessionId)))
                 .andExpect(status().isNoContent())
                 .andExpect(header().string("Set-Cookie",
                         org.hamcrest.Matchers.containsString("TWN_SESSION=;")))
@@ -170,7 +165,7 @@ class AuthControllerTest {
 
         // when & then
         mockMvc.perform(get("/api/auth/me")
-                .header("X-Session-Id", sessionId))
+                .cookie(new Cookie("TWN_SESSION", sessionId)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.email").value(userDto.getEmail()))
                 .andExpect(jsonPath("$.username").value(userDto.getUsername()));
@@ -186,7 +181,7 @@ class AuthControllerTest {
 
         // when & then
         mockMvc.perform(get("/api/auth/me")
-                .header("X-Session-Id", sessionId))
+                .cookie(new Cookie("TWN_SESSION", sessionId)))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.message").value("세션을 찾을 수 없습니다."));
     }
@@ -231,7 +226,7 @@ class AuthControllerTest {
 
         // when & then
         mockMvc.perform(post("/api/auth/logout")
-                .header("X-Session-ID", sessionId))
+                .cookie(new Cookie("TWN_SESSION", sessionId)))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.message").value("세션을 찾을 수 없습니다."));
     }
@@ -252,45 +247,19 @@ class AuthControllerTest {
     }
 
     @Test
-    @DisplayName("@RequireLogin이 적용된 프로필 수정 테스트 - 인증 성공")
+    @DisplayName("HttpOnly 세션 쿠키로 프로필 수정")
     void updateProfileWithAuthentication() throws Exception {
         // given
         String sessionId = "test-session-id";
-        UserSession validUserSession = UserSession.of(1L, "testuser", "test@example.com", "testuser");
-        
-        // 이 테스트에서만 실제 인증 로직을 사용
-        when(sessionValidationService.validateSession(sessionId)).thenReturn(validUserSession);
         when(authService.updateProfile(eq(sessionId), any(UserDto.class))).thenReturn(userDto);
-        // 이 테스트에서만 실제 인터셉터 로직을 사용
-        when(authInterceptor.preHandle(any(), any(), any())).thenCallRealMethod();
-        org.springframework.test.util.ReflectionTestUtils.setField(authInterceptor, "sessionValidationService", sessionValidationService);
 
         // when & then
         mockMvc.perform(put("/api/auth/profile")
-                .header("X-Session-Id", sessionId)
+                .cookie(new Cookie("TWN_SESSION", sessionId))
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(userDto)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.email").value(userDto.getEmail()));
     }
 
-    @Test
-    @DisplayName("@RequireLogin이 적용된 프로필 수정 테스트 - 인증 실패")
-    void updateProfileWithoutAuthentication() throws Exception {
-        // given
-        // 이 테스트에서만 실제 인증 로직을 사용
-        // 세션 검증 시 예외 발생
-        // 이번 테스트에서만 인증 실패 시나리오: preHandle(...)이 예외를 던지도록
-        when(authInterceptor.preHandle(any(), any(), any()))
-                .thenThrow(new AuthException("세션을 찾을 수 없습니다.", HttpStatus.UNAUTHORIZED));
-        when(sessionValidationService.validateSession(anyString()))
-                .thenThrow(new RuntimeException("세션이 만료되었습니다. 다시 로그인해주세요."));
-
-        // when & then
-        mockMvc.perform(put("/api/auth/profile")
-                .header("X-Session-Id", "invalid-session")
-                .contentType(MediaType.APPLICATION_JSON)
-                .content(objectMapper.writeValueAsString(userDto)))
-                .andExpect(status().isUnauthorized());
-    }
 }

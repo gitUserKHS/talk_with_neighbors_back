@@ -50,8 +50,6 @@ public class OfflineNotificationServiceImpl implements OfflineNotificationServic
         }
         log.info("=== [OfflineNotificationService] saveOfflineNotification START ===");
         log.info("[OfflineNotificationService] userId: {}, type: {}, priority: {}", userId, type, priority);
-        log.info("[OfflineNotificationService] message: {}", message);
-        log.info("[OfflineNotificationService] data: {}", data);
         
         try {
             // 중복 알림 확인 (같은 타입, 같은 데이터의 알림이 이미 있는지)
@@ -167,7 +165,6 @@ public class OfflineNotificationServiceImpl implements OfflineNotificationServic
                         log.info("  - Target userId: {}", userId.toString());
                         log.info("  - Destination: {}", destination);
                         log.info("  - Message type: {}", notification.getType());
-                        log.info("  - Message content: {}", message);
                         
                         messagingTemplate.convertAndSendToUser(
                             userId.toString(), 
@@ -258,7 +255,8 @@ public class OfflineNotificationServiceImpl implements OfflineNotificationServic
                 if (hasActiveSession) {
                     log.info("[OfflineNotificationService] ✅ Active SimpUser found for userId: {}. User details: {}", userId, simpUser);
                     simpUser.getSessions().forEach(session -> {
-                        log.info("[OfflineNotificationService]   - Active session ID: {}, Subscriptions: {}", session.getId(), session.getSubscriptions());
+                        log.debug("[OfflineNotificationService] Active WebSocket session has {} subscription(s).",
+                                session.getSubscriptions().size());
                     });
                 } else {
                     if (simpUser == null) {

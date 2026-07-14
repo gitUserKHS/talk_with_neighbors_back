@@ -5,6 +5,7 @@ import com.talkwithneighbors.dto.meetup.HobbyMeetupDto;
 import com.talkwithneighbors.domain.event.MeetupJoinedEvent;
 import com.talkwithneighbors.entity.ChatRoom;
 import com.talkwithneighbors.entity.ChatRoomType;
+import com.talkwithneighbors.entity.MeetupTimeBasis;
 import com.talkwithneighbors.entity.User;
 import com.talkwithneighbors.exception.ChatException;
 import com.talkwithneighbors.repository.ChatRoomRepository;
@@ -24,6 +25,9 @@ import org.springframework.http.HttpStatus;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -73,8 +77,14 @@ class HobbyMeetupServiceTest {
         request.setTitle("주말 독서 산책");
         request.setDescription("읽고 걸어요");
         request.setInterestTags(List.of("독서", " 독서 ", "산책"));
-        request.setLocation("서울 중구");
+        request.setLocation("서울도서관");
+        request.setLocationAddress("서울 중구 세종대로 110");
+        request.setLatitude(37.5662968);
+        request.setLongitude(126.9779451);
+        request.setKakaoPlaceId("123456789");
         request.setMaxParticipants(6);
+        request.setScheduledAt(OffsetDateTime.parse("2099-08-01T19:00:00+09:00"));
+        request.setRegistrationDeadline(OffsetDateTime.parse("2099-08-01T18:00:00+09:00"));
 
         when(userRepository.findById(creator.getId())).thenReturn(Optional.of(creator));
         when(chatRoomRepository.save(any(ChatRoom.class))).thenAnswer(invocation -> {
@@ -91,9 +101,24 @@ class HobbyMeetupServiceTest {
         assertTrue(savedRoom.isPublicRoom());
         assertEquals(ChatRoomType.GROUP, savedRoom.getType());
         assertEquals(List.of("독서", "산책"), savedRoom.getInterestTags());
+        assertEquals("서울도서관", savedRoom.getLocation());
+        assertEquals("서울 중구 세종대로 110", savedRoom.getLocationAddress());
+        assertEquals(37.5662968, savedRoom.getLatitude());
+        assertEquals(126.9779451, savedRoom.getLongitude());
+        assertEquals("123456789", savedRoom.getKakaoPlaceId());
         assertEquals(6, savedRoom.getMaxParticipants());
+        assertEquals(LocalDateTime.of(2099, 8, 1, 10, 0), savedRoom.getScheduledAt());
+        assertEquals(LocalDateTime.of(2099, 8, 1, 9, 0), savedRoom.getRegistrationDeadline());
+        assertEquals(MeetupTimeBasis.UTC, savedRoom.getMeetupTimeBasis());
         assertTrue(savedRoom.getParticipants().contains(creator));
         assertEquals(List.of("독서", "산책"), result.getSharedInterests());
+        assertEquals("서울도서관", result.getLocation());
+        assertEquals("서울 중구 세종대로 110", result.getLocationAddress());
+        assertEquals(37.5662968, result.getLatitude());
+        assertEquals(126.9779451, result.getLongitude());
+        assertEquals("123456789", result.getKakaoPlaceId());
+        assertEquals(OffsetDateTime.of(2099, 8, 1, 10, 0, 0, 0, ZoneOffset.UTC), result.getScheduledAt());
+        assertEquals(OffsetDateTime.of(2099, 8, 1, 9, 0, 0, 0, ZoneOffset.UTC), result.getRegistrationDeadline());
     }
 
     @Test

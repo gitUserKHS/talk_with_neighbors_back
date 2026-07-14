@@ -5,8 +5,8 @@ metadata:
   namespace: talk-with-neighbors
 data:
   # Use the exact browser origin. Switch cookie-secure to true with HTTPS.
-  public-origin: http://203.0.113.10
-  cookie-secure: "false"
+  public-origin: https://talk-with-neighbors.duckdns.org
+  cookie-secure: "true"
   # The EC2 instance role supplies short-lived credentials; never put AWS keys here.
   media-storage-type: s3
   media-s3-region: ap-northeast-2

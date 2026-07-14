@@ -15,6 +15,17 @@ variable "aws_region" {
   default     = "ap-northeast-2"
 }
 
+variable "application_domain" {
+  description = "Public DNS name whose A record points to the portfolio node Elastic IP."
+  type        = string
+  default     = "talk-with-neighbors.duckdns.org"
+
+  validation {
+    condition     = can(regex("^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?[.])+[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$", var.application_domain))
+    error_message = "application_domain must be a lowercase DNS name without a scheme, port, or path."
+  }
+}
+
 variable "availability_zone" {
   description = "Availability Zone for the public subnet and EC2 instance."
   type        = string

@@ -5,7 +5,6 @@ import com.talkwithneighbors.dto.matching.MatchProfileDto;
 import com.talkwithneighbors.dto.matching.MatchingPreferencesDto;
 import com.talkwithneighbors.dto.matching.RecommendationFeedbackRequest;
 import jakarta.validation.Valid;
-import com.talkwithneighbors.security.RequireLogin;
 import com.talkwithneighbors.security.UserSession;
 import com.talkwithneighbors.service.MatchingService;
 import lombok.RequiredArgsConstructor;
@@ -21,7 +20,6 @@ import java.util.List;
 @RequestMapping("/api/matching")
 @RequiredArgsConstructor
 @Slf4j
-@RequireLogin
 public class MatchingController {
 
     private final MatchingService matchingService;
@@ -40,15 +38,13 @@ public class MatchingController {
             @RequestBody MatchingPreferencesDto preferences,
             UserSession userSession
     ) {
-        log.info("[MatchingController] 매칭 시작 요청: userSession={}", userSession);
         if (userSession == null) {
             log.error("[MatchingController] userSession is null! 세션 미인증 상태");
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
         }
         Long userId = userSession.getUserId();
-        log.info("[MatchingController] 추출된 userId: {}", userId);
         if (userId == null) {
-            log.error("[MatchingController] userId가 null! userSession={}", userSession);
+            log.error("[MatchingController] userId가 null인 인증 세션");
             return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(Collections.emptyList());
         }
         List<MatchProfileDto> matchProfiles = matchingService.startMatching(preferences, userId);
@@ -75,15 +71,13 @@ public class MatchingController {
 
     @PostMapping("/stop")
     public ResponseEntity<Void> stopMatching(UserSession userSession) {
-        log.info("[MatchingController] 매칭 중지 요청: userSession={}", userSession);
         if (userSession == null) {
             log.error("[MatchingController] userSession is null! 세션 미인증 상태");
             return ResponseEntity.badRequest().build();
         }
         Long userId = userSession.getUserId();
-        log.info("[MatchingController] 추출된 userId: {}", userId);
         if (userId == null) {
-            log.error("[MatchingController] userId가 null! userSession={}", userSession);
+            log.error("[MatchingController] userId가 null인 인증 세션");
             return ResponseEntity.badRequest().build();
         }
         matchingService.stopMatching(userId);

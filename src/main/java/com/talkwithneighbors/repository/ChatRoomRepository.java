@@ -2,6 +2,7 @@ package com.talkwithneighbors.repository;
 
 import com.talkwithneighbors.entity.ChatRoom;
 import com.talkwithneighbors.entity.ChatRoomType;
+import com.talkwithneighbors.entity.MeetupTimeBasis;
 import com.talkwithneighbors.entity.User;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -141,6 +142,23 @@ public interface ChatRoomRepository extends JpaRepository<ChatRoom, String> {
 
     List<ChatRoom> findByCreator_IdAndTypeOrderByScheduledAtDesc(Long creatorId, ChatRoomType type);
 
-    List<ChatRoom> findByPublicRoomTrueAndScheduledAtBetweenAndReminderSentAtIsNull(
-            LocalDateTime start, LocalDateTime end);
+    @Query("""
+            SELECT cr FROM ChatRoom cr
+            WHERE cr.publicRoom = true
+              AND cr.reminderSentAt IS NULL
+              AND (
+                (cr.meetupTimeBasis = :utcBasis
+                  AND cr.scheduledAt BETWEEN :utcStart AND :utcEnd)
+                OR
+                ((cr.meetupTimeBasis IS NULL OR cr.meetupTimeBasis = :legacyBasis)
+                  AND cr.scheduledAt BETWEEN :legacyStart AND :legacyEnd)
+              )
+            """)
+    List<ChatRoom> findUpcomingPublicMeetups(
+            @Param("utcStart") LocalDateTime utcStart,
+            @Param("utcEnd") LocalDateTime utcEnd,
+            @Param("legacyStart") LocalDateTime legacyStart,
+            @Param("legacyEnd") LocalDateTime legacyEnd,
+            @Param("utcBasis") MeetupTimeBasis utcBasis,
+            @Param("legacyBasis") MeetupTimeBasis legacyBasis);
 }

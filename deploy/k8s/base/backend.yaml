@@ -77,11 +77,6 @@ spec:
               value: redis
             - name: APP_REDIS_ENABLED
               value: "true"
-            - name: JWT_SECRET
-              valueFrom:
-                secretKeyRef:
-                  name: app-secrets
-                  key: jwt-secret
             - name: CORS_ALLOWED_ORIGINS
               valueFrom:
                 configMapKeyRef:

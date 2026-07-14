@@ -47,13 +47,6 @@ import org.springframework.web.bind.support.WebDataBinderFactory;
 @SpringBootTest
 @WithMockUser(username = "testuser", roles = {"USER"})
 public class MatchingControllerTest {
-    @MockBean
-    private com.talkwithneighbors.security.AuthInterceptor authInterceptor;
-
-
-
-
-
     private MockMvc mockMvc;
 
     @Autowired
@@ -71,7 +64,6 @@ public class MatchingControllerTest {
 
     @BeforeEach
     void setUp() {
-        Mockito.when(authInterceptor.preHandle(any(), any(), any())).thenReturn(true);
         Mockito.when(sessionValidationService.validateSession(any())).thenReturn(
             new com.talkwithneighbors.security.UserSession(1L, "testuser", "test@test.com", "testnick")
         );

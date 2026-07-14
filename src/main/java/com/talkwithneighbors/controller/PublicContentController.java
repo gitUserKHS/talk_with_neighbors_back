@@ -2,7 +2,6 @@ package com.talkwithneighbors.controller;
 
 import com.talkwithneighbors.dto.publiccontent.PublicFeedPostDto;
 import com.talkwithneighbors.dto.publiccontent.PublicMeetupDto;
-import com.talkwithneighbors.security.PublicEndpoint;
 import com.talkwithneighbors.service.PublicContentService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
@@ -17,7 +16,6 @@ import org.springframework.web.bind.annotation.RestController;
 @RestController
 @RequestMapping("/api/public")
 @RequiredArgsConstructor
-@PublicEndpoint
 public class PublicContentController {
     private static final int MAX_PAGE_SIZE = 50;
 
