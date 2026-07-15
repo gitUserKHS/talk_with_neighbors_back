@@ -35,6 +35,8 @@ mysql_rollout="$(line_number '"${kubectl[@]}" -n "$NAMESPACE" rollout status sta
 # shellcheck disable=SC2016
 redis_rollout="$(line_number '"${kubectl[@]}" -n "$NAMESPACE" rollout status statefulset/redis --timeout=5m')"
 # shellcheck disable=SC2016
+database_migrations="$(line_number 'bash "$RELEASE_DIR/run-database-migrations.sh"')"
+# shellcheck disable=SC2016
 traefik_apply="$(line_number '"${kubectl[@]}" apply -f "$RELEASE_DIR/traefik-config.yaml"')"
 # shellcheck disable=SC2016
 traefik_ready="$(line_number 'wait_for_traefik_https_config # Gate TLS ingress creation on the rendered Traefik rollout and bound ACME PVC.')"
@@ -53,6 +55,9 @@ assert_before "$traefik_apply" "$traefik_ready" "Traefik ACME configuration must
 assert_before "$traefik_ready" "$full_apply" "Traefik HTTPS must be ready before the TLS ingress is applied"
 assert_before "$mysql_rollout" "$full_apply" "MySQL must be ready before the full kustomization"
 assert_before "$redis_rollout" "$full_apply" "Redis must be ready before the full kustomization"
+assert_before "$mysql_rollout" "$database_migrations" "MySQL must be ready before database migrations"
+assert_before "$redis_rollout" "$database_migrations" "Redis readiness must complete before database migrations"
+assert_before "$database_migrations" "$full_apply" "Database migrations must complete before the application rollout"
 assert_before "$full_apply" "$backend_rollout" "The full kustomization must precede the backend rollout"
 assert_before "$full_apply" "$frontend_rollout" "The full kustomization must precede the frontend rollout"
 

@@ -158,11 +158,16 @@ for required in \
   "$RELEASE_DIR/traefik-config.yaml" \
   "$RELEASE_DIR/k3s-network-common.sh" \
   "$RELEASE_DIR/k3s-server-config.yaml" \
+  "$RELEASE_DIR/run-database-migrations.sh" \
   "$RELEASE_DIR/runtime-config.json" \
   "$RELEASE_DIR/app-secrets.json" \
   "$RELEASE_DIR/ghcr-pull.json"; do
   [[ -s "$required" ]] || { echo "Missing deployment file: $required" >&2; exit 1; }
 done
+[[ -d "$RELEASE_DIR/database-migrations" && ! -L "$RELEASE_DIR/database-migrations" ]] || {
+  echo "Missing or unsafe database migration directory" >&2
+  exit 1
+}
 
 grep -Fq "$BACKEND_PLACEHOLDER" "$RELEASE_DIR/base/backend.yaml"
 grep -Fq "$FRONTEND_PLACEHOLDER" "$RELEASE_DIR/base/frontend.yaml"
@@ -201,6 +206,8 @@ elif [[ -f "$NETWORK_MIGRATION_DONE" && ! -f "$MYSQL_RESTORE_DONE" ]]; then
   echo "The network migration completed without a pending or completed MySQL restore marker" >&2
   exit 1
 fi
+
+bash "$RELEASE_DIR/run-database-migrations.sh"
 
 "${kubectl[@]}" apply -k "$RELEASE_DIR/base"
 "${kubectl[@]}" -n "$NAMESPACE" rollout status deployment/backend --timeout=10m
