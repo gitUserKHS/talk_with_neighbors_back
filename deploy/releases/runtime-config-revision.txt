@@ -1,0 +1,2 @@
+revision=2026-07-15T07:03:04.867Z
+reason=kakao-oauth-runtime-secrets
