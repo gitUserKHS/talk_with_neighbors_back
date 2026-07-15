@@ -45,11 +45,13 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 cp -R "$SCRIPT_DIR/base" "$bundle/base"
+cp -R "$SCRIPT_DIR/database-migrations" "$bundle/database-migrations"
 cp \
   "$SCRIPT_DIR/deploy-on-node.sh" \
   "$SCRIPT_DIR/k3s-network-common.sh" \
   "$SCRIPT_DIR/k3s-server-config.yaml" \
   "$SCRIPT_DIR/reinitialize-k3s-network.sh" \
+  "$SCRIPT_DIR/run-database-migrations.sh" \
   "$SCRIPT_DIR/traefik-config.yaml" \
   "$bundle/"
 

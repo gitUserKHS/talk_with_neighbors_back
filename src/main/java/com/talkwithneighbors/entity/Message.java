@@ -62,8 +62,10 @@ public class Message {
     /**
      * 메시지 타입
      */
-    @Enumerated(EnumType.STRING)
-    @Column(nullable = false)
+    @Convert(converter = MessageTypeConverter.class)
+    // Keep the database representation extensible. Hibernate's MySQL native ENUM
+    // does not notice newly added Java enum values during ddl-auto=update.
+    @Column(nullable = false, length = 20, columnDefinition = "varchar(20)")
     private MessageType type;
 
     /**
