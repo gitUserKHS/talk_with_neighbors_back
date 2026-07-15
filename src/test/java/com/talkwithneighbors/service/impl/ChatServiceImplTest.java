@@ -13,6 +13,9 @@ import com.talkwithneighbors.repository.ChatRoomDeletionRepository;
 import com.talkwithneighbors.repository.ChatRoomRepository;
 import com.talkwithneighbors.repository.MessageRepository;
 import com.talkwithneighbors.repository.UserRepository;
+import com.talkwithneighbors.repository.ChatScheduleRepository;
+import com.talkwithneighbors.repository.ChatScheduleRsvpRepository;
+import com.talkwithneighbors.entity.ChatScheduleStatus;
 import com.talkwithneighbors.service.NotificationService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -27,6 +30,7 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.mockito.ArgumentCaptor;
 
 import java.time.LocalDateTime;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
@@ -63,6 +67,12 @@ class ChatServiceImplTest {
 
     @Mock
     private NotificationService notificationService;
+
+    @Mock
+    private ChatScheduleRepository chatScheduleRepository;
+
+    @Mock
+    private ChatScheduleRsvpRepository chatScheduleRsvpRepository;
 
     @InjectMocks
     private ChatServiceImpl chatService;
@@ -376,6 +386,41 @@ class ChatServiceImplTest {
 
         assertEquals(HttpStatus.INTERNAL_SERVER_ERROR, exception.getStatus());
         verifyNoInteractions(applicationEventPublisher, domainEventPublisher);
+    }
+
+    @Test
+    void leavingRoomRemovesScheduleRsvps() {
+        when(userRepository.findById(participant.getId())).thenReturn(Optional.of(participant));
+        when(chatRoomRepository.findById(room.getId())).thenReturn(Optional.of(room));
+
+        chatService.leaveRoom(room.getId(), participant.getId().toString());
+
+        assertFalse(room.getParticipants().contains(participant));
+        verify(chatScheduleRsvpRepository)
+                .deleteBySchedule_Room_IdAndUser_Id(room.getId(), participant.getId());
+        verify(chatRoomRepository).save(room);
+    }
+
+    @Test
+    void scheduleCreatorCannotLeaveBeforeCancellingFutureSchedule() {
+        when(userRepository.findById(participant.getId())).thenReturn(Optional.of(participant));
+        when(chatRoomRepository.findById(room.getId())).thenReturn(Optional.of(room));
+        when(chatScheduleRepository.existsByRoom_IdAndCreator_IdAndStatusAndStartsAtAfter(
+                eq(room.getId()),
+                eq(participant.getId()),
+                eq(ChatScheduleStatus.SCHEDULED),
+                any(Instant.class)))
+                .thenReturn(true);
+
+        ChatException exception = assertThrows(
+                ChatException.class,
+                () -> chatService.leaveRoom(room.getId(), participant.getId().toString()));
+
+        assertEquals(HttpStatus.CONFLICT, exception.getStatus());
+        assertTrue(room.getParticipants().contains(participant));
+        verify(chatScheduleRsvpRepository, never())
+                .deleteBySchedule_Room_IdAndUser_Id(anyString(), any());
+        verify(chatRoomRepository, never()).save(room);
     }
 
     @Test

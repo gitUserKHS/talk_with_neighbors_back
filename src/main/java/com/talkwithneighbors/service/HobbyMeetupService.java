@@ -13,7 +13,10 @@ import com.talkwithneighbors.repository.ChatRoomRepository;
 import com.talkwithneighbors.repository.UserRepository;
 import com.talkwithneighbors.repository.UserBlockRepository;
 import com.talkwithneighbors.repository.MeetupWaitlistRepository;
+import com.talkwithneighbors.repository.ChatScheduleRepository;
+import com.talkwithneighbors.repository.ChatScheduleRsvpRepository;
 import com.talkwithneighbors.entity.MeetupWaitlistEntry;
+import com.talkwithneighbors.entity.ChatScheduleStatus;
 import com.talkwithneighbors.outbox.DomainEventPublisher;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
@@ -47,6 +50,8 @@ public class HobbyMeetupService {
     private final DomainEventPublisher domainEventPublisher;
     private final UserBlockRepository userBlockRepository;
     private final MeetupWaitlistRepository meetupWaitlistRepository;
+    private final ChatScheduleRepository chatScheduleRepository;
+    private final ChatScheduleRsvpRepository chatScheduleRsvpRepository;
     private final OfflineNotificationService offlineNotificationService;
     private final ObjectMapper objectMapper;
 
@@ -161,6 +166,12 @@ public class HobbyMeetupService {
     public void leaveMeetup(Long userId, String roomId) {
         User user = getUser(userId);
         ChatRoom room = getPublicMeetup(roomId);
+        if (chatScheduleRepository.existsByRoom_IdAndCreator_IdAndStatusAndStartsAtAfter(
+                roomId, userId, ChatScheduleStatus.SCHEDULED, Instant.now())) {
+            throw new ChatException(
+                    "먼저 이 채팅방에서 만든 예정 일정을 취소해 줘.",
+                    HttpStatus.CONFLICT);
+        }
         if (meetupWaitlistRepository.existsByRoom_IdAndUser_Id(roomId, userId)) {
             meetupWaitlistRepository.deleteByRoom_IdAndUser_Id(roomId, userId);
             return;
@@ -168,6 +179,7 @@ public class HobbyMeetupService {
         if (!room.getParticipants().remove(user)) {
             throw new ChatException("You are not a participant in this hobby meetup.", HttpStatus.BAD_REQUEST);
         }
+        chatScheduleRsvpRepository.deleteBySchedule_Room_IdAndUser_Id(roomId, userId);
         meetupWaitlistRepository.findFirstByRoom_IdOrderByCreatedAtAsc(roomId).ifPresent(entry -> {
             room.getParticipants().add(entry.getUser());
             meetupWaitlistRepository.delete(entry);

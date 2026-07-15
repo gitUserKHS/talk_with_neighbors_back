@@ -18,6 +18,9 @@ import com.talkwithneighbors.entity.User;
 import com.talkwithneighbors.exception.ChatException;
 import com.talkwithneighbors.repository.ChatRoomRepository;
 import com.talkwithneighbors.repository.ChatRoomDeletionRepository;
+import com.talkwithneighbors.repository.ChatScheduleRepository;
+import com.talkwithneighbors.repository.ChatScheduleRsvpRepository;
+import com.talkwithneighbors.entity.ChatScheduleStatus;
 import com.talkwithneighbors.repository.MessageRepository;
 import com.talkwithneighbors.repository.UserRepository;
 import com.talkwithneighbors.repository.UserBlockRepository;
@@ -56,6 +59,8 @@ public class ChatServiceImpl implements ChatService {
     private final UserBlockRepository userBlockRepository;
     private final ApplicationEventPublisher applicationEventPublisher;
     private final ChatRoomDeletionRepository chatRoomDeletionRepository;
+    private final ChatScheduleRepository chatScheduleRepository;
+    private final ChatScheduleRsvpRepository chatScheduleRsvpRepository;
     private final DomainEventPublisher domainEventPublisher;
 
     @Override
@@ -200,7 +205,14 @@ public class ChatServiceImpl implements ChatService {
                 .orElseThrow(() -> new RuntimeException("User not found with id: " + userId));
         ChatRoom chatRoom = chatRoomRepository.findById(roomId)
                 .orElseThrow(() -> new RuntimeException("Chat room not found"));
+        if (chatScheduleRepository.existsByRoom_IdAndCreator_IdAndStatusAndStartsAtAfter(
+                roomId, userId, ChatScheduleStatus.SCHEDULED, java.time.Instant.now())) {
+            throw new ChatException(
+                    "먼저 이 채팅방에서 만든 예정 일정을 취소해 줘.",
+                    HttpStatus.CONFLICT);
+        }
         if (chatRoom.getParticipants().remove(user)) {
+            chatScheduleRsvpRepository.deleteBySchedule_Room_IdAndUser_Id(roomId, userId);
             chatRoomRepository.save(chatRoom);
             log.info("User {} left room {}", user.getId(), roomId);
         } else {
@@ -592,14 +604,17 @@ public class ChatServiceImpl implements ChatService {
                     ChatRoomDeletedEvent.create(roomId, participantIds));
 
             log.info(
-                    "[deleteRoom] Deleted room graph. roomId={}, messages={}, attachments={}, "
-                            + "readStatuses={}, participants={}, waitlistEntries={}",
+                "[deleteRoom] Deleted room graph. roomId={}, messages={}, attachments={}, "
+                            + "readStatuses={}, participants={}, waitlistEntries={}, "
+                            + "schedules={}, scheduleRsvps={}",
                     roomId,
                     result.messages(),
                     result.attachments(),
                     result.readStatuses(),
                     result.participants(),
-                    result.waitlistEntries()
+                    result.waitlistEntries(),
+                    result.schedules(),
+                    result.scheduleRsvps()
             );
         } catch (ChatException exception) {
             throw exception;

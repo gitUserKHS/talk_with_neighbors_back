@@ -66,6 +66,14 @@ public class Message {
     @Column(nullable = false)
     private MessageType type;
 
+    /**
+     * Structured schedule card payload. Only SCHEDULE messages reference a row,
+     * and the unique key keeps one stable chat card per schedule.
+     */
+    @OneToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "schedule_id", unique = true)
+    private ChatSchedule schedule;
+
     @ElementCollection(fetch = FetchType.LAZY)
     @CollectionTable(
         name = "message_attachments",
@@ -136,6 +144,7 @@ public class Message {
         IMAGE,      // 이미지
         VIDEO,      // 동영상
         FILE,       // 파일
+        SCHEDULE,   // 채팅방 일정 카드
         SYSTEM      // 시스템 메시지
     }
 }
