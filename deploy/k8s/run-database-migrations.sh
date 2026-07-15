@@ -26,6 +26,42 @@ mysql_root_apply_file() {
     sh "$DATABASE" < "$migration_file"
 }
 
+require_calendar_backfill_schema() {
+  local fingerprint
+  fingerprint="$(mysql_root_execute "
+    SELECT CONCAT(
+      SUM(CASE WHEN table_name = 'chat_rooms' AND column_name IN (
+        'id', 'creator_id', 'name', 'description', 'scheduled_at',
+        'meetup_time_basis', 'duration_minutes', 'location',
+        'location_address', 'latitude', 'longitude', 'kakao_place_id',
+        'last_message_time', 'is_public'
+      ) THEN 1 ELSE 0 END), ':',
+      SUM(CASE WHEN table_name = 'chat_schedules' AND column_name IN (
+        'id', 'room_id', 'creator_id', 'title', 'description', 'starts_at',
+        'duration_minutes', 'time_zone', 'location', 'location_address',
+        'latitude', 'longitude', 'kakao_place_id', 'status', 'version',
+        'created_at', 'updated_at', 'cancelled_at'
+      ) THEN 1 ELSE 0 END), ':',
+      SUM(CASE WHEN table_name = 'chat_schedule_rsvps' AND column_name IN (
+        'schedule_id', 'user_id', 'status', 'responded_at'
+      ) THEN 1 ELSE 0 END), ':',
+      SUM(CASE WHEN table_name = 'messages' AND column_name IN (
+        'id', 'chat_room_id', 'sender_id', 'content', 'created_at',
+        'updated_at', 'type', 'schedule_id', 'is_deleted'
+      ) THEN 1 ELSE 0 END), ':',
+      SUM(CASE WHEN table_name = 'message_read_by' AND column_name IN (
+        'message_id', 'user_id'
+      ) THEN 1 ELSE 0 END)
+    )
+    FROM INFORMATION_SCHEMA.COLUMNS
+    WHERE table_schema = DATABASE()
+  ")"
+  if [[ "$fingerprint" != "14:18:4:9:2" ]]; then
+    echo "Calendar backfill requires the existing application schema; restore a verified schema+data backup first (fingerprint: ${fingerprint:-missing})" >&2
+    return 1
+  fi
+}
+
 [[ "$EUID" -eq 0 ]] || { echo "run-database-migrations.sh must run as root" >&2; exit 1; }
 [[ -d "$MIGRATIONS_DIR" && ! -L "$MIGRATIONS_DIR" ]] || {
   echo "Database migration directory is missing or unsafe" >&2
@@ -77,6 +113,10 @@ for migration_file in "${migration_files[@]}"; do
     }
     echo "Database migration already applied: $filename"
     continue
+  fi
+
+  if [[ "$version" == "V2026071601" ]]; then
+    require_calendar_backfill_schema
   fi
 
   mysql_root_apply_file "$migration_file"
