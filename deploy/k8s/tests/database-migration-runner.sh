@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# This test intentionally matches the production runner's literal EUID guard.
+# shellcheck disable=SC2016
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"

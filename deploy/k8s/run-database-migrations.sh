@@ -10,6 +10,8 @@ readonly LEDGER_TABLE="app_schema_migrations"
 
 mysql_root_execute() {
   local statement="$1"
+  # MYSQL_ROOT_PASSWORD and positional arguments expand inside the MySQL container.
+  # shellcheck disable=SC2016
   k3s kubectl -n "$NAMESPACE" exec statefulset/mysql -- sh -ec \
     'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" exec mysql --user=root --database="$1" --batch --skip-column-names --raw --execute="$2"' \
     sh "$DATABASE" "$statement"
@@ -17,6 +19,8 @@ mysql_root_execute() {
 
 mysql_root_apply_file() {
   local migration_file="$1"
+  # MYSQL_ROOT_PASSWORD and the database argument expand inside the MySQL container.
+  # shellcheck disable=SC2016
   k3s kubectl -n "$NAMESPACE" exec -i statefulset/mysql -- sh -ec \
     'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" exec mysql --user=root --database="$1" --binary-mode=1' \
     sh "$DATABASE" < "$migration_file"

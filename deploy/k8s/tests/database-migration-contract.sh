@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# The grep expressions below intentionally match unexpanded shell source code.
+# shellcheck disable=SC2016
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
