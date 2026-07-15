@@ -160,7 +160,7 @@ class ChatRoomDeletionMySqlIntegrationTest {
                 meetupWaitlistRepository.saveAndFlush(new MeetupWaitlistEntry(room, peer));
 
                 ChatSchedule schedule = new ChatSchedule();
-                schedule.setId("schedule-" + suffix);
+                schedule.setId(UUID.randomUUID().toString());
                 schedule.setRoom(room);
                 schedule.setCreator(owner);
                 schedule.setTitle("Deletion-linked schedule");
