@@ -2,7 +2,6 @@
 set -euo pipefail
 
 readonly NAMESPACE="talk-with-neighbors"
-readonly DATABASE="talk_with_neighbors"
 readonly STATUS_ROOT="/var/lib/talk-with-neighbors/backup-status"
 readonly DEPLOY_LOCK="/run/lock/talk-with-neighbors-deploy.lock"
 readonly BACKUP_LOCK="/run/lock/talk-with-neighbors-mysql-backup.lock"

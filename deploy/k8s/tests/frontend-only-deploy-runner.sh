@@ -95,10 +95,15 @@ bash "$DEPLOY_DIR/deploy-frontend-via-ssm.sh" \
 jq -e '(.commands | type == "array" and length > 10) and .executionTimeout == ["900"]' "$state/parameters.json" >/dev/null
 jq -r '.commands[]' "$state/parameters.json" > "$state/commands.sh"
 grep -Fq 'Frontend-only deployment requires the existing backend deployment' "$state/commands.sh"
+# The assertion intentionally matches the literal on-node shell variable.
+# shellcheck disable=SC2016
 grep -Fq 'set image deployment/frontend frontend="$frontend_image"' "$state/commands.sh"
 grep -Fq 'rollout status deployment/frontend --timeout=5m' "$state/commands.sh"
 grep -Fq "frontend_image='$FRONTEND_IMAGE'" "$state/commands.sh"
-! grep -Eq 'kubectl .* apply|rollout status deployment/backend|run-database-migrations|mysql-backup|app-secrets|deployment/redis|statefulset/(mysql|redis)' "$state/commands.sh"
+if grep -Eq 'kubectl .* apply|rollout status deployment/backend|run-database-migrations|mysql-backup|app-secrets|deployment/redis|statefulset/(mysql|redis)' "$state/commands.sh"; then
+  echo "The rendered frontend-only command must not contain full-stack operations" >&2
+  exit 1
+fi
 grep -Fxq "backend_image=$BACKEND_IMAGE" "$output_file"
 grep -Fxq "frontend_image=$FRONTEND_IMAGE" "$output_file"
 

@@ -27,7 +27,10 @@ grep -Fq 'flock -n 9' "$BACKUP"
 grep -Fq -- '--single-transaction' "$BACKUP"
 grep -Fq -- '--set-gtid-purged=OFF' "$BACKUP"
 grep -Fq -- '--no-tablespaces' "$BACKUP"
-! grep -Eq -- '--databases|--add-drop-database' < <(grep -v '^#' "$BACKUP")
+if grep -Eq -- '--databases|--add-drop-database' < <(grep -v '^#' "$BACKUP"); then
+  echo "The backup must remain portable across isolated restore schemas" >&2
+  exit 1
+fi
 grep -Fq 'gzip -t "$dump_path"' "$BACKUP"
 grep -Fq '.ServerSideEncryption == "AES256"' "$BACKUP"
 dump_upload_line="$(grep -nF -m1 'aws s3 cp "$dump_path"' "$BACKUP" | cut -d: -f1)"
@@ -53,6 +56,9 @@ grep -Fxq 'NoNewPrivileges=true' "$UNITS/talk-with-neighbors-mysql-backup.servic
 grep -Fq 'monitor-started-at' "$INSTALLER"
 grep -Fq 'install_age="$((now - installed_at))"' "$MONITOR_WORKFLOW"
 grep -Fq 'elif test "$install_age" -le 691200; then' "$MONITOR_WORKFLOW"
-! grep -Fq 'elif test "$backup_age" -le 691200; then' "$MONITOR_WORKFLOW"
+if grep -Fq 'elif test "$backup_age" -le 691200; then' "$MONITOR_WORKFLOW"; then
+  echo "Daily backups must not renew the initial restore-verification grace period" >&2
+  exit 1
+fi
 
 echo "MySQL backups are encrypted, committed manifest-last, serialized, and restore-verified"

@@ -21,7 +21,10 @@ grep -Fq 'set image deployment/frontend frontend=' "$FRONTEND_DEPLOY"
 grep -Fq 'rollout status deployment/frontend --timeout=5m' "$FRONTEND_DEPLOY"
 grep -Fq 'FRONTEND_ONLY_BACKEND_IMAGE=' "$FRONTEND_DEPLOY"
 grep -Fq 'Existing backend deployment is not pinned to the expected immutable digest' "$FRONTEND_DEPLOY"
-! grep -Eq 'kubectl .* apply|rollout status deployment/backend|run-database-migrations|mysql-backup|app-secrets|deployment/redis|statefulset/(mysql|redis)' "$FRONTEND_DEPLOY"
+if grep -Eq 'kubectl .* apply|rollout status deployment/backend|run-database-migrations|mysql-backup|app-secrets|deployment/redis|statefulset/(mysql|redis)' "$FRONTEND_DEPLOY"; then
+  echo "The frontend-only runner must not contain full-stack deployment operations" >&2
+  exit 1
+fi
 
 frontend_job="$(mktemp "${TMPDIR:-/tmp}/twn-frontend-job.XXXXXX")"
 normal_job="$(mktemp "${TMPDIR:-/tmp}/twn-normal-job.XXXXXX")"
@@ -49,8 +52,14 @@ aws_line="$(grep -nF 'uses: aws-actions/configure-aws-credentials@' "$frontend_j
 grep -Fq 'bash deploy/k8s/deploy-frontend-via-ssm.sh' "$frontend_job"
 grep -Fq '"frontend_only"' "$frontend_job"
 grep -Fq 'BACKEND_IMAGE: ${{ steps.frontend.outputs.backend_image }}' "$frontend_job"
-! grep -Eq 'build-bundle[.]sh|deploy-via-ssm[.]sh|MYSQL_(PASSWORD|ROOT_PASSWORD|BACKUP_BUCKET)|APP_AUTH_|RUN_DATABASE_MIGRATIONS' "$frontend_job"
-! grep -Fq "github.event_name == 'repository_dispatch'" "$normal_job"
+if grep -Eq 'build-bundle[.]sh|deploy-via-ssm[.]sh|MYSQL_(PASSWORD|ROOT_PASSWORD|BACKUP_BUCKET)|APP_AUTH_|RUN_DATABASE_MIGRATIONS' "$frontend_job"; then
+  echo "The frontend-only workflow job must not receive full-stack deployment inputs" >&2
+  exit 1
+fi
+if grep -Fq "github.event_name == 'repository_dispatch'" "$normal_job"; then
+  echo "Repository dispatch must never enter the full-stack deployment job" >&2
+  exit 1
+fi
 
 [[ "$(grep -Fc 'run: bash deploy/k8s/public-smoke.sh "$PUBLIC_ORIGIN"' "$WORKFLOW")" == "2" ]] || {
   echo "Normal and frontend-only deployments must call the same strict public smoke runner" >&2
