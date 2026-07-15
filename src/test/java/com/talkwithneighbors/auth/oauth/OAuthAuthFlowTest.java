@@ -17,6 +17,7 @@ import org.springframework.security.oauth2.core.oidc.OidcIdToken;
 import org.springframework.security.oauth2.core.oidc.OidcUserInfo;
 import org.springframework.security.oauth2.core.oidc.user.DefaultOidcUser;
 import org.springframework.security.oauth2.core.user.DefaultOAuth2User;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.time.Instant;
 import java.util.List;
@@ -52,6 +53,80 @@ class OAuthAuthFlowTest {
         assertSame(user, service.resolveOrCreate(
                 OAuthProvider.GOOGLE, "stable-sub", "changed@example.com", true));
         verifyNoInteractions(users, encoder);
+    }
+
+    @Test
+    void legacyGeneratedOAuthNicknameIsMarkedForSetupOnNextLogin() {
+        UserIdentityRepository identities = mock(UserIdentityRepository.class);
+        UserRepository users = mock(UserRepository.class);
+        PasswordEncoder encoder = mock(PasswordEncoder.class);
+        OAuthIdentityService service = new OAuthIdentityService(identities, users, encoder);
+        User user = User.builder()
+                .id(8L)
+                .email("dayun@example.com")
+                .username("kakao_legacysub")
+                .nicknameSetupRequired(false)
+                .build();
+        UserIdentity identity = UserIdentity.create(
+                OAuthProvider.KAKAO, "legacy-sub", user, user.getEmail(), Instant.now());
+        ReflectionTestUtils.setField(identity, "nicknameSetupAssessed", false);
+        when(identities.findByProviderAndProviderSubject(OAuthProvider.KAKAO, "legacy-sub"))
+                .thenReturn(Optional.of(identity));
+
+        assertSame(user, service.resolveOrCreate(
+                OAuthProvider.KAKAO, "legacy-sub", user.getEmail(), true));
+        assertTrue(user.getNicknameSetupRequired());
+        assertTrue(identity.isNicknameSetupAssessed());
+        verifyNoInteractions(users, encoder);
+    }
+
+    @Test
+    void assessedGeneratedShapedNicknameIsNotChallengedAgain() {
+        UserIdentityRepository identities = mock(UserIdentityRepository.class);
+        UserRepository users = mock(UserRepository.class);
+        PasswordEncoder encoder = mock(PasswordEncoder.class);
+        OAuthIdentityService service = new OAuthIdentityService(identities, users, encoder);
+        User user = User.builder()
+                .id(9L)
+                .email("dayun@example.com")
+                .username("kakao_stablesub_1")
+                .nicknameSetupRequired(false)
+                .build();
+        UserIdentity identity = UserIdentity.create(
+                OAuthProvider.KAKAO, "stable-sub", user, user.getEmail(), Instant.now());
+        when(identities.findByProviderAndProviderSubject(OAuthProvider.KAKAO, "stable-sub"))
+                .thenReturn(Optional.of(identity));
+
+        service.resolveOrCreate(OAuthProvider.KAKAO, "stable-sub", user.getEmail(), true);
+
+        assertFalse(user.getNicknameSetupRequired());
+        verifyNoInteractions(users, encoder);
+    }
+
+    @Test
+    void newOAuthIdentityReceivesGeneratedNicknameThatMustBeChanged() {
+        UserIdentityRepository identities = mock(UserIdentityRepository.class);
+        UserRepository users = mock(UserRepository.class);
+        PasswordEncoder encoder = mock(PasswordEncoder.class);
+        OAuthIdentityService service = new OAuthIdentityService(identities, users, encoder);
+        when(identities.findByProviderAndProviderSubject(OAuthProvider.KAKAO, "new-subject"))
+                .thenReturn(Optional.empty());
+        when(users.existsByEmail("dayun@example.com")).thenReturn(false);
+        when(users.existsByUsername(anyString())).thenReturn(false);
+        when(encoder.encode(anyString())).thenReturn("encoded-random-password");
+        when(users.save(any(User.class))).thenAnswer(invocation -> {
+            User saved = invocation.getArgument(0);
+            saved.setId(9L);
+            return saved;
+        });
+
+        User user = service.resolveOrCreate(
+                OAuthProvider.KAKAO, "new-subject", "dayun@example.com", true);
+
+        assertEquals("kakao_newsubject", user.getUsername());
+        assertTrue(user.getNicknameSetupRequired());
+        assertFalse(user.getPasswordLoginEnabled());
+        verify(identities).save(any(UserIdentity.class));
     }
 
     @Test

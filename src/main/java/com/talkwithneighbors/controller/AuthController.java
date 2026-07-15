@@ -3,6 +3,7 @@ package com.talkwithneighbors.controller;
 import com.talkwithneighbors.dto.UserDto;
 import com.talkwithneighbors.dto.auth.LoginRequestDto;
 import com.talkwithneighbors.dto.auth.RegisterRequestDto;
+import com.talkwithneighbors.dto.auth.UpdateNicknameRequest;
 import com.talkwithneighbors.security.UserSession;
 import com.talkwithneighbors.service.AuthService;
 import com.talkwithneighbors.service.AuthService.AuthResponse;
@@ -97,6 +98,14 @@ public class AuthController {
         String actualSessionId = sessionId.split(",")[0].trim();
         UserDto updatedUser = authService.updateProfile(actualSessionId, request);
         return ResponseEntity.ok(updatedUser);
+    }
+
+    @PutMapping("/profile/nickname")
+    public ResponseEntity<UserDto> updateNickname(
+            @Valid @RequestBody UpdateNicknameRequest request,
+            HttpServletRequest httpRequest) {
+        return ResponseEntity.ok(authService.updateNickname(
+                requireSessionId(httpRequest), request.nickname()));
     }
 
     @PostMapping(value = "/profile/image", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)

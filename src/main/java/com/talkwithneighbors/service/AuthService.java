@@ -7,6 +7,7 @@ import com.talkwithneighbors.domain.event.MediaFilesDeletedEvent;
 import com.talkwithneighbors.entity.User;
 import com.talkwithneighbors.entity.UserAccountType;
 import com.talkwithneighbors.auth.email.EmailVerificationService;
+import com.talkwithneighbors.auth.nickname.NicknameException;
 import com.talkwithneighbors.auth.session.SessionIssuer;
 import com.talkwithneighbors.exception.AuthException;
 import com.talkwithneighbors.repository.UserRepository;
@@ -16,6 +17,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -143,6 +145,17 @@ public class AuthService {
     }
 
     @Transactional(rollbackFor = Exception.class)
+    public UserDto updateNickname(String sessionId, String rawNickname) {
+        User user = requireSessionUser(sessionId);
+        boolean changed = applyNickname(user, rawNickname, true);
+        if (!changed) return UserDto.fromEntity(user);
+
+        User updatedUser = saveNicknameChange(user);
+        redisSessionService.updateSession(sessionId, updatedUser.getId(), updatedUser.getUsername());
+        return UserDto.fromEntity(updatedUser);
+    }
+
+    @Transactional(rollbackFor = Exception.class)
     public UserDto updateProfile(String sessionId, UserDto request) {
         UserSession userSession = redisSessionService.getSession(sessionId);
         if (userSession == null) {
@@ -151,7 +164,8 @@ public class AuthService {
         User user = userRepository.findById(userSession.getUserId())
                 .orElseThrow(() -> new AuthException("사용자를 찾을 수 없습니다.", HttpStatus.NOT_FOUND));
 
-        user.setUsername(request.getUsername());
+        boolean nicknameChanged = request.getUsername() != null
+                && applyNickname(user, request.getUsername(), false);
         user.setAge(request.getAge());
         user.setGender(request.getGender());
         user.setBio(request.getBio());
@@ -161,8 +175,76 @@ public class AuthService {
         user.setAddress(request.getAddress());
         user.setInterests(request.getInterests());
 
-        User updatedUser = userRepository.save(user);
+        User updatedUser = nicknameChanged ? saveNicknameChange(user) : userRepository.save(user);
+        if (nicknameChanged) {
+            redisSessionService.updateSession(sessionId, updatedUser.getId(), updatedUser.getUsername());
+        }
         return UserDto.fromEntity(updatedUser);
+    }
+
+    private User requireSessionUser(String sessionId) {
+        UserSession userSession = redisSessionService.getSession(sessionId);
+        if (userSession == null) {
+            throw new AuthException("세션을 찾을 수 없습니다.", HttpStatus.NOT_FOUND);
+        }
+        return userRepository.findById(userSession.getUserId())
+                .orElseThrow(() -> new AuthException("사용자를 찾을 수 없습니다.", HttpStatus.NOT_FOUND));
+    }
+
+    private boolean applyNickname(User user, String rawNickname, boolean requireChange) {
+        String nickname = normalizeNickname(rawNickname);
+        if (nickname.equals(user.getUsername())) {
+            if (requireChange && Boolean.TRUE.equals(user.getNicknameSetupRequired())) {
+                throw new NicknameException(
+                        "NICKNAME_CHANGE_REQUIRED",
+                        "자동 생성된 닉네임과 다른 닉네임을 입력해 주세요.",
+                        HttpStatus.BAD_REQUEST);
+            }
+            return false;
+        }
+        if (userRepository.existsByUsernameAndIdNot(nickname, user.getId())) {
+            throw duplicateNickname();
+        }
+        user.setUsername(nickname);
+        user.setNicknameSetupRequired(false);
+        return true;
+    }
+
+    private String normalizeNickname(String rawNickname) {
+        String nickname = rawNickname == null ? "" : rawNickname.strip();
+        int length = nickname.codePointCount(0, nickname.length());
+        boolean invalid = length < 2
+                || length > 30
+                || nickname.codePoints().anyMatch(AuthService::isForbiddenNicknameCodePoint);
+        if (invalid) {
+            throw new NicknameException(
+                    "NICKNAME_INVALID",
+                    "닉네임은 공백 없이 2자 이상 30자 이하로 입력해 주세요.",
+                    HttpStatus.BAD_REQUEST);
+        }
+        return nickname;
+    }
+
+    private static boolean isForbiddenNicknameCodePoint(int codePoint) {
+        return Character.isWhitespace(codePoint)
+                || Character.isSpaceChar(codePoint)
+                || Character.isISOControl(codePoint)
+                || Character.getType(codePoint) == Character.FORMAT;
+    }
+
+    private User saveNicknameChange(User user) {
+        try {
+            return userRepository.saveAndFlush(user);
+        } catch (DataIntegrityViolationException exception) {
+            throw duplicateNickname();
+        }
+    }
+
+    private NicknameException duplicateNickname() {
+        return new NicknameException(
+                "USERNAME_ALREADY_IN_USE",
+                "이미 사용 중인 닉네임이에요.",
+                HttpStatus.CONFLICT);
     }
 
     @Transactional(rollbackFor = Exception.class)

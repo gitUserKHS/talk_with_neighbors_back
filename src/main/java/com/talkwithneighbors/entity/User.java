@@ -69,6 +69,11 @@ public class User {
     @Builder.Default
     private Boolean passwordLoginEnabled = true;
 
+    @Column(name = "nickname_setup_required", nullable = false,
+            columnDefinition = "boolean default false")
+    @Builder.Default
+    private Boolean nicknameSetupRequired = false;
+
     /**
      * 사용자의 프로필 이미지 URL
      */
@@ -186,6 +191,9 @@ public class User {
         }
         if (passwordLoginEnabled == null) {
             passwordLoginEnabled = true;
+        }
+        if (nicknameSetupRequired == null) {
+            nicknameSetupRequired = false;
         }
     }
 }
