@@ -17,6 +17,8 @@ aws_cli_version             = "2.35.22"
 aws_cli_aarch64_sha256      = "022e392e079ada523be29cdbb45061a74be6344179f8fddf2b8183f1898683f1"
 media_bucket_force_destroy = false
 media_noncurrent_version_expiration_days = 30
+mysql_backup_retention_days               = 30
+release_history_retention_days            = 90
 
 github_owner       = "gitUserKHS"
 github_repository  = "talk_with_neighbors_back"

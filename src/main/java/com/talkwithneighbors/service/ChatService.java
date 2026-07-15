@@ -44,7 +44,7 @@ public interface ChatService {
     Page<ChatRoomDto> getAllRooms(Pageable pageable);
 
     // 채팅방 삭제
-    void deleteRoom(String roomId);
+    void deleteRoom(String roomId, Long requesterId);
 
     // 메시지 읽음 처리
     void markMessageAsRead(String roomId, String messageId, String userId);

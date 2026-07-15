@@ -6,6 +6,7 @@ import com.talkwithneighbors.domain.event.MeetupJoinedEvent;
 import com.talkwithneighbors.entity.ChatRoom;
 import com.talkwithneighbors.entity.ChatRoomType;
 import com.talkwithneighbors.entity.MeetupTimeBasis;
+import com.talkwithneighbors.entity.MeetupWaitlistEntry;
 import com.talkwithneighbors.entity.User;
 import com.talkwithneighbors.exception.ChatException;
 import com.talkwithneighbors.repository.ChatRoomRepository;
@@ -69,6 +70,9 @@ class HobbyMeetupServiceTest {
 
     @Mock
     private ObjectMapper objectMapper;
+
+    @Mock
+    private ChatService chatService;
 
     @InjectMocks
     private HobbyMeetupService hobbyMeetupService;
@@ -139,7 +143,7 @@ class HobbyMeetupServiceTest {
         room.getParticipants().add(user(2L, "member", "독서"));
 
         when(userRepository.findById(currentUser.getId())).thenReturn(Optional.of(currentUser));
-        when(chatRoomRepository.findById(room.getId())).thenReturn(Optional.of(room));
+        when(chatRoomRepository.findByIdForUpdate(room.getId())).thenReturn(Optional.of(room));
 
         HobbyMeetupDto result = hobbyMeetupService.joinMeetup(currentUser.getId(), room.getId());
 
@@ -153,7 +157,7 @@ class HobbyMeetupServiceTest {
         User joiningUser = user(2L, "joining-user", "산책", "서울");
         ChatRoom room = publicMeetup("meetup-1", 4);
         when(userRepository.findById(joiningUser.getId())).thenReturn(Optional.of(joiningUser));
-        when(chatRoomRepository.findById(room.getId())).thenReturn(Optional.of(room));
+        when(chatRoomRepository.findByIdForUpdate(room.getId())).thenReturn(Optional.of(room));
         when(chatRoomRepository.save(room)).thenReturn(room);
 
         hobbyMeetupService.joinMeetup(joiningUser.getId(), room.getId());
@@ -169,7 +173,7 @@ class HobbyMeetupServiceTest {
         room.getParticipants().add(member);
 
         when(userRepository.findById(member.getId())).thenReturn(Optional.of(member));
-        when(chatRoomRepository.findById(room.getId())).thenReturn(Optional.of(room));
+        when(chatRoomRepository.findByIdForUpdate(room.getId())).thenReturn(Optional.of(room));
 
         hobbyMeetupService.leaveMeetup(member.getId(), room.getId());
 
@@ -188,7 +192,7 @@ class HobbyMeetupServiceTest {
         room.getParticipants().add(member);
 
         when(userRepository.findById(member.getId())).thenReturn(Optional.of(member));
-        when(chatRoomRepository.findById(room.getId())).thenReturn(Optional.of(room));
+        when(chatRoomRepository.findByIdForUpdate(room.getId())).thenReturn(Optional.of(room));
         when(chatScheduleRepository.existsByRoom_IdAndCreator_IdAndStatusAndStartsAtAfter(
                 org.mockito.ArgumentMatchers.eq(room.getId()),
                 org.mockito.ArgumentMatchers.eq(member.getId()),
@@ -205,6 +209,159 @@ class HobbyMeetupServiceTest {
         verify(chatScheduleRsvpRepository, never())
                 .deleteBySchedule_Room_IdAndUser_Id(any(), any());
         verify(chatRoomRepository, never()).save(room);
+    }
+
+    @Test
+    void detailIncludesHostManagementFlagAndParticipantSummaries() {
+        User member = user(2L, "member", "coffee");
+        ChatRoom room = publicMeetup("meetup-detail", 5);
+        room.getParticipants().add(creator);
+        room.getParticipants().add(member);
+        when(userRepository.findById(creator.getId())).thenReturn(Optional.of(creator));
+        when(chatRoomRepository.findById(room.getId())).thenReturn(Optional.of(room));
+
+        HobbyMeetupDto result = hobbyMeetupService.getMeetup(creator.getId(), room.getId());
+
+        assertTrue(result.isCanManage());
+        assertEquals(creator.getId(), result.getCreatorId());
+        assertEquals(2, result.getParticipants().size());
+        assertTrue(result.getParticipants().get(0).host());
+        assertEquals("creator", result.getParticipants().get(0).nickname());
+        assertEquals("member", result.getParticipants().get(1).nickname());
+    }
+
+    @Test
+    void hostUpdatesFullMeetupForm() {
+        ChatRoom room = publicMeetup("meetup-update", 5);
+        room.getParticipants().add(creator);
+        CreateHobbyMeetupRequest request = validRequest();
+        request.setTitle("Updated meetup");
+        request.setInterestTags(List.of("coffee", "walk"));
+        request.setMaxParticipants(8);
+        when(userRepository.findById(creator.getId())).thenReturn(Optional.of(creator));
+        when(chatRoomRepository.findByIdForUpdate(room.getId())).thenReturn(Optional.of(room));
+        when(chatRoomRepository.save(room)).thenReturn(room);
+
+        HobbyMeetupDto result = hobbyMeetupService.updateMeetup(
+                creator.getId(), room.getId(), request);
+
+        assertEquals("Updated meetup", room.getName());
+        assertEquals(List.of("coffee", "walk"), room.getInterestTags());
+        assertEquals(8, room.getMaxParticipants());
+        assertTrue(result.isCanManage());
+        verify(chatRoomRepository).save(room);
+    }
+
+    @Test
+    void leavingMeetupPromotesOldestWaitlistedUserWhileHoldingRoomLock() {
+        User member = user(2L, "member", "coffee");
+        User waiting = user(3L, "waiting", "coffee");
+        ChatRoom room = publicMeetup("meetup-leave-promote", 2);
+        room.getParticipants().add(creator);
+        room.getParticipants().add(member);
+        MeetupWaitlistEntry waitingEntry = new MeetupWaitlistEntry(room, waiting);
+
+        when(userRepository.findById(member.getId())).thenReturn(Optional.of(member));
+        when(chatRoomRepository.findByIdForUpdate(room.getId())).thenReturn(Optional.of(room));
+        when(meetupWaitlistRepository.findByRoom_IdOrderByCreatedAtAsc(room.getId()))
+                .thenReturn(List.of(waitingEntry));
+
+        hobbyMeetupService.leaveMeetup(member.getId(), room.getId());
+
+        assertFalse(room.getParticipants().contains(member));
+        assertTrue(room.getParticipants().contains(waiting));
+        assertEquals(2, room.getParticipants().size());
+        verify(chatRoomRepository).findByIdForUpdate(room.getId());
+        verify(meetupWaitlistRepository).delete(waitingEntry);
+        verify(chatRoomRepository).save(room);
+    }
+
+    @Test
+    void increasingCapacityPromotesOldestWaitlistedUser() {
+        User member = user(2L, "member", "coffee");
+        User first = user(3L, "first-waiting", "coffee");
+        User second = user(4L, "second-waiting", "coffee");
+        ChatRoom room = publicMeetup("meetup-capacity", 2);
+        room.getParticipants().add(creator);
+        room.getParticipants().add(member);
+        MeetupWaitlistEntry firstEntry = new MeetupWaitlistEntry(room, first);
+        MeetupWaitlistEntry secondEntry = new MeetupWaitlistEntry(room, second);
+        CreateHobbyMeetupRequest request = validRequest();
+        request.setMaxParticipants(3);
+        when(userRepository.findById(creator.getId())).thenReturn(Optional.of(creator));
+        when(chatRoomRepository.findByIdForUpdate(room.getId())).thenReturn(Optional.of(room));
+        when(meetupWaitlistRepository.findByRoom_IdOrderByCreatedAtAsc(room.getId()))
+                .thenReturn(List.of(firstEntry, secondEntry));
+        when(chatRoomRepository.save(room)).thenReturn(room);
+
+        HobbyMeetupDto result = hobbyMeetupService.updateMeetup(
+                creator.getId(), room.getId(), request);
+
+        assertTrue(room.getParticipants().contains(first));
+        assertFalse(room.getParticipants().contains(second));
+        assertEquals(3, result.getParticipantCount());
+        verify(meetupWaitlistRepository).delete(firstEntry);
+        verify(meetupWaitlistRepository, never()).delete(secondEntry);
+    }
+
+    @Test
+    void nonHostCannotUpdateMeetup() {
+        User member = user(2L, "member", "coffee");
+        ChatRoom room = publicMeetup("meetup-update", 5);
+        room.getParticipants().add(creator);
+        room.getParticipants().add(member);
+        when(userRepository.findById(member.getId())).thenReturn(Optional.of(member));
+        when(chatRoomRepository.findByIdForUpdate(room.getId())).thenReturn(Optional.of(room));
+
+        ChatException exception = assertThrows(
+                ChatException.class,
+                () -> hobbyMeetupService.updateMeetup(member.getId(), room.getId(), validRequest()));
+
+        assertEquals(HttpStatus.FORBIDDEN, exception.getStatus());
+        verify(chatRoomRepository, never()).save(room);
+    }
+
+    @Test
+    void hostDeletesMeetupThroughAuthorizedGraphDeletion() {
+        ChatRoom room = publicMeetup("meetup-delete", 5);
+        room.getParticipants().add(creator);
+        when(chatRoomRepository.findByIdForUpdate(room.getId())).thenReturn(Optional.of(room));
+
+        hobbyMeetupService.deleteMeetup(creator.getId(), room.getId());
+
+        verify(chatService).deleteRoom(room.getId(), creator.getId());
+    }
+
+    @Test
+    void hostCannotLeaveAndOrphanMeetup() {
+        ChatRoom room = publicMeetup("meetup-host-leave", 5);
+        room.getParticipants().add(creator);
+        when(userRepository.findById(creator.getId())).thenReturn(Optional.of(creator));
+        when(chatRoomRepository.findByIdForUpdate(room.getId())).thenReturn(Optional.of(room));
+
+        ChatException exception = assertThrows(
+                ChatException.class,
+                () -> hobbyMeetupService.leaveMeetup(creator.getId(), room.getId()));
+
+        assertEquals(HttpStatus.CONFLICT, exception.getStatus());
+        assertTrue(room.getParticipants().contains(creator));
+        verify(chatRoomRepository, never()).save(room);
+    }
+
+    private CreateHobbyMeetupRequest validRequest() {
+        CreateHobbyMeetupRequest request = new CreateHobbyMeetupRequest();
+        request.setTitle("Meetup");
+        request.setDescription("Description");
+        request.setInterestTags(List.of("coffee"));
+        request.setLocation("Cafe");
+        request.setLocationAddress("Seoul");
+        request.setLatitude(37.5);
+        request.setLongitude(127.0);
+        request.setMaxParticipants(5);
+        request.setScheduledAt(OffsetDateTime.parse("2099-08-01T19:00:00+09:00"));
+        request.setRegistrationDeadline(OffsetDateTime.parse("2099-08-01T18:00:00+09:00"));
+        request.setDurationMinutes(120);
+        return request;
     }
 
     private ChatRoom publicMeetup(String id, int maxParticipants) {

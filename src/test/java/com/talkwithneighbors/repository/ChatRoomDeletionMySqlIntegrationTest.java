@@ -91,12 +91,12 @@ class ChatRoomDeletionMySqlIntegrationTest {
     void deletesOneToOneRoomAfterMessageWasSoftDeletedAndReadByBothUsers() {
         Fixture fixture = createFixture(ChatRoomType.ONE_ON_ONE, true, false);
 
-        assertDoesNotThrow(() -> chatService.deleteRoom(fixture.roomId()));
+        assertDoesNotThrow(() -> chatService.deleteRoom(fixture.roomId(), fixture.ownerId()));
 
         assertRoomGraphDeleted(fixture);
         ChatException secondDelete = assertThrows(
                 ChatException.class,
-                () -> chatService.deleteRoom(fixture.roomId())
+                () -> chatService.deleteRoom(fixture.roomId(), fixture.ownerId())
         );
         assertEquals(HttpStatus.NOT_FOUND, secondDelete.getStatus());
     }
@@ -105,9 +105,23 @@ class ChatRoomDeletionMySqlIntegrationTest {
     void deletesGroupRoomWithAttachmentInterestTagAndWaitlist() {
         Fixture fixture = createFixture(ChatRoomType.GROUP, false, true);
 
-        assertDoesNotThrow(() -> chatService.deleteRoom(fixture.roomId()));
+        assertDoesNotThrow(() -> chatService.deleteRoom(fixture.roomId(), fixture.ownerId()));
 
         assertRoomGraphDeleted(fixture);
+    }
+
+    @Test
+    void nonOwnerCannotDeleteRoomGraph() {
+        Fixture fixture = createFixture(ChatRoomType.GROUP, false, true);
+
+        ChatException exception = assertThrows(
+                ChatException.class,
+                () -> chatService.deleteRoom(fixture.roomId(), fixture.peerId()));
+
+        assertEquals(HttpStatus.FORBIDDEN, exception.getStatus());
+        assertCount(1, "SELECT COUNT(*) FROM chat_rooms WHERE id = ?", fixture.roomId());
+        assertCount(1, "SELECT COUNT(*) FROM messages WHERE id = ?", fixture.messageId());
+        assertCount(2, "SELECT COUNT(*) FROM chat_room_participants WHERE chat_room_id = ?", fixture.roomId());
     }
 
     private Fixture createFixture(

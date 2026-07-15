@@ -56,6 +56,11 @@ spec:
           env:
             - name: SPRING_PROFILES_ACTIVE
               value: production
+            # The deployment migration gate is the only production schema writer.
+            # Keep this explicit in Kubernetes so rollback images cannot fall back
+            # to an older application's ddl-auto=update default.
+            - name: SPRING_JPA_HIBERNATE_DDL_AUTO
+              value: none
             - name: SPRING_DATASOURCE_URL
               value: jdbc:mysql://mysql:3306/talk_with_neighbors?useUnicode=true&characterEncoding=UTF-8&useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true&rewriteBatchedStatements=true
             - name: SPRING_DATASOURCE_USERNAME

@@ -10,6 +10,7 @@ readonly FRONTEND_IMAGE="${6:?frontend digest is required}"
 readonly RELEASE_ID="${7:?release id is required}"
 readonly REINITIALIZE_K3S_NETWORK="${8:-false}"
 readonly REINITIALIZE_CONFIRMATION="${9:-}"
+readonly RUN_DATABASE_MIGRATIONS="${10:-true}"
 readonly OBJECT_URI="s3://${DEPLOY_BUCKET}/${OBJECT_KEY}"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 readonly SCRIPT_DIR
@@ -25,6 +26,7 @@ source "$SCRIPT_DIR/k3s-network-common.sh"
 [[ "$RELEASE_ID" =~ ^[0-9]+-[0-9]+$ ]] || { echo "Invalid release id" >&2; exit 1; }
 [[ -s "$BUNDLE_ARCHIVE" ]] || { echo "Deployment bundle is missing" >&2; exit 1; }
 [[ "$REINITIALIZE_K3S_NETWORK" == "true" || "$REINITIALIZE_K3S_NETWORK" == "false" ]] || { echo "Invalid k3s reinitialize flag" >&2; exit 1; }
+[[ "$RUN_DATABASE_MIGRATIONS" == "true" || "$RUN_DATABASE_MIGRATIONS" == "false" ]] || { echo "Invalid database migration mode" >&2; exit 1; }
 expected_confirmation="$(k3s_expected_reinitialize_confirmation "$INSTANCE_ID")"
 if [[ "$REINITIALIZE_K3S_NETWORK" == "true" ]]; then
   [[ "$REINITIALIZE_CONFIRMATION" == "$expected_confirmation" ]] || { echo "The k3s network confirmation is invalid" >&2; exit 1; }
@@ -72,6 +74,7 @@ jq -n \
   --arg instance "$INSTANCE_ID" \
   --arg reset "$REINITIALIZE_K3S_NETWORK" \
   --arg confirmation "$REINITIALIZE_CONFIRMATION" \
+  --arg migrations "$RUN_DATABASE_MIGRATIONS" \
   '{commands:[
     "set -eu",
     "umask 077",
@@ -92,7 +95,7 @@ jq -n \
     "shred -u -- /tmp/twn-deploy.tgz 2>/dev/null || rm -f -- /tmp/twn-deploy.tgz",
     "chmod 0700 \"$release_dir/deploy-on-node.sh\" \"$release_dir/reinitialize-k3s-network.sh\"",
     ("if [ " + ($reset | @sh) + " = true ]; then /bin/bash \"$release_dir/reinitialize-k3s-network.sh\" " + ($instance | @sh) + " " + ($confirmation | @sh) + " " + ($release | @sh) + "; fi"),
-    ("/bin/bash \"$release_dir/deploy-on-node.sh\" \"" + $backend + "\" \"" + $frontend + "\" \"" + $release + "\"")
+    ("/bin/bash \"$release_dir/deploy-on-node.sh\" \"" + $backend + "\" \"" + $frontend + "\" \"" + $release + "\" \"" + $migrations + "\"")
   ],executionTimeout:["9000"]}' > "$parameters_file"
 
 command_id="$(aws ssm send-command \

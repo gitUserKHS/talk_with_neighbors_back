@@ -20,6 +20,7 @@ import com.talkwithneighbors.repository.UserBlockRepository;
 import com.talkwithneighbors.domain.event.ChatMessageCommittedEvent;
 import com.talkwithneighbors.domain.event.ChatMessageChangedEvent;
 import com.talkwithneighbors.domain.event.MediaFilesDeletedEvent;
+import com.talkwithneighbors.outbox.DomainEventPublisher;
 import com.talkwithneighbors.service.impl.ChatServiceImpl;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -66,6 +67,9 @@ class ChatServiceTest {
 
     @Mock
     private ApplicationEventPublisher applicationEventPublisher;
+
+    @Mock
+    private DomainEventPublisher domainEventPublisher;
 
     @InjectMocks
     private ChatServiceImpl chatService;
@@ -306,7 +310,7 @@ class ChatServiceTest {
         assertNotNull(result.getDeletedAt());
         assertNull(testChatRoom.getLastMessage());
         verify(applicationEventPublisher).publishEvent(any(ChatMessageChangedEvent.class));
-        verify(applicationEventPublisher).publishEvent(argThat((Object event) ->
+        verify(domainEventPublisher).publish(argThat(event ->
                 event instanceof MediaFilesDeletedEvent deletedEvent
                         && deletedEvent.mediaUrls().contains("/uploads/chat/photo.webp")
                         && deletedEvent.mediaUrls().contains("/uploads/chat/photo-thumbnail.webp")));
@@ -350,7 +354,7 @@ class ChatServiceTest {
         request.setTitle("Updated room");
         request.setStatus(ChatRoomStatus.CLOSED);
         request.setMaxMembers(4);
-        when(chatRoomRepository.findById(testChatRoom.getId())).thenReturn(Optional.of(testChatRoom));
+        when(chatRoomRepository.findByIdForUpdate(testChatRoom.getId())).thenReturn(Optional.of(testChatRoom));
         when(userRepository.findById(testUser.getId())).thenReturn(Optional.of(testUser));
         when(chatRoomRepository.save(testChatRoom)).thenReturn(testChatRoom);
 
@@ -367,13 +371,45 @@ class ChatServiceTest {
         nonCreator.setId(99L);
         UpdateChatRoomRequest request = new UpdateChatRoomRequest();
         request.setTitle("Blocked update");
-        when(chatRoomRepository.findById(testChatRoom.getId())).thenReturn(Optional.of(testChatRoom));
+        when(chatRoomRepository.findByIdForUpdate(testChatRoom.getId())).thenReturn(Optional.of(testChatRoom));
         when(userRepository.findById(nonCreator.getId())).thenReturn(Optional.of(nonCreator));
 
         ChatException exception = assertThrows(ChatException.class,
                 () -> chatService.updateRoom(testChatRoom.getId(), nonCreator.getId(), request));
 
         assertEquals(HttpStatus.FORBIDDEN, exception.getStatus());
+        verify(chatRoomRepository, never()).save(any(ChatRoom.class));
+    }
+
+    @Test
+    void genericPatchCannotChangePublicMeetupCapacity() {
+        testChatRoom.setType(ChatRoomType.GROUP);
+        testChatRoom.setPublicRoom(true);
+        UpdateChatRoomRequest request = new UpdateChatRoomRequest();
+        request.setMaxParticipants(8);
+        when(chatRoomRepository.findByIdForUpdate(testChatRoom.getId()))
+                .thenReturn(Optional.of(testChatRoom));
+        when(userRepository.findById(testUser.getId())).thenReturn(Optional.of(testUser));
+
+        ChatException exception = assertThrows(ChatException.class,
+                () -> chatService.updateRoom(testChatRoom.getId(), testUser.getId(), request));
+
+        assertEquals(HttpStatus.BAD_REQUEST, exception.getStatus());
+        verify(chatRoomRepository, never()).save(any(ChatRoom.class));
+    }
+
+    @Test
+    void genericPatchCannotChangeRoomType() {
+        UpdateChatRoomRequest request = new UpdateChatRoomRequest();
+        request.setType(ChatRoomType.GROUP);
+        when(chatRoomRepository.findByIdForUpdate(testChatRoom.getId()))
+                .thenReturn(Optional.of(testChatRoom));
+        when(userRepository.findById(testUser.getId())).thenReturn(Optional.of(testUser));
+
+        ChatException exception = assertThrows(ChatException.class,
+                () -> chatService.updateRoom(testChatRoom.getId(), testUser.getId(), request));
+
+        assertEquals(HttpStatus.BAD_REQUEST, exception.getStatus());
         verify(chatRoomRepository, never()).save(any(ChatRoom.class));
     }
 }

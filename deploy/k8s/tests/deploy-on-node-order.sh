@@ -37,6 +37,10 @@ redis_rollout="$(line_number '"${kubectl[@]}" -n "$NAMESPACE" rollout status sta
 # shellcheck disable=SC2016
 database_migrations="$(line_number 'bash "$RELEASE_DIR/run-database-migrations.sh"')"
 # shellcheck disable=SC2016
+backup_install="$(line_number 'bash "$RELEASE_DIR/install-mysql-backup.sh" "$RELEASE_DIR"')"
+# shellcheck disable=SC2016
+pre_migration_backup="$(line_number 'talk-with-neighbors-mysql-backup')"
+# shellcheck disable=SC2016
 traefik_apply="$(line_number '"${kubectl[@]}" apply -f "$RELEASE_DIR/traefik-config.yaml"')"
 # shellcheck disable=SC2016
 traefik_ready="$(line_number 'wait_for_traefik_https_config # Gate TLS ingress creation on the rendered Traefik rollout and bound ACME PVC.')"
@@ -57,6 +61,9 @@ assert_before "$mysql_rollout" "$full_apply" "MySQL must be ready before the ful
 assert_before "$redis_rollout" "$full_apply" "Redis must be ready before the full kustomization"
 assert_before "$mysql_rollout" "$database_migrations" "MySQL must be ready before database migrations"
 assert_before "$redis_rollout" "$database_migrations" "Redis readiness must complete before database migrations"
+assert_before "$mysql_rollout" "$backup_install" "MySQL must be ready before backup automation is installed"
+assert_before "$backup_install" "$pre_migration_backup" "Backup automation must be installed before the pre-migration backup"
+assert_before "$pre_migration_backup" "$database_migrations" "A verified S3 backup must complete before database migrations"
 assert_before "$database_migrations" "$full_apply" "Database migrations must complete before the application rollout"
 assert_before "$full_apply" "$backend_rollout" "The full kustomization must precede the backend rollout"
 assert_before "$full_apply" "$frontend_rollout" "The full kustomization must precede the frontend rollout"

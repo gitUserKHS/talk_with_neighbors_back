@@ -181,6 +181,31 @@ class MediaStorageServiceTest {
         assertEquals(2, remoteStorage.deletedKeys.size());
     }
 
+    @Test
+    void durableDeletionPropagatesObjectStorageFailureForOutboxRetry() {
+        MediaObjectStorage failingStorage = new MediaObjectStorage() {
+            @Override
+            public void store(String relativeKey, Path source, String contentType) {
+                // No-op for this deletion-only test.
+            }
+
+            @Override
+            public void delete(String relativeKey) {
+                throw new IllegalStateException("temporary object storage failure");
+            }
+
+            @Override
+            public void checkHealth() {
+                // No-op for this deletion-only test.
+            }
+        };
+        MediaStorageService service = new MediaStorageService(
+                tempDirectory.toString(), processorWithThumbnail(), failingStorage);
+
+        assertThrows(IllegalStateException.class,
+                () -> service.deleteMediaOrThrow(List.of("/uploads/feed/image.webp")));
+    }
+
     private Path resolve(String publicUrl) {
         return tempDirectory.resolve("feed").resolve(publicUrl.substring("/uploads/feed/".length()));
     }

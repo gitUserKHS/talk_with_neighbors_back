@@ -54,4 +54,4 @@ docker compose -f compose.local.yml up --build -d
 
 종료는 `docker compose -f compose.local.yml down`으로 해. PR과 `main`, `codex/**`, `agent/**` 브랜치에서는 GitHub Actions가 테스트, `bootJar`, 프로덕션 이미지, MySQL·Redis 연동 컨테이너 스모크 테스트를 검증해. `main`과 버전 태그의 이미지는 같은 품질 검증을 통과한 뒤 GHCR에 게시돼.
 
-AWS 포트폴리오 환경은 서울 리전의 ARM64 EC2 한 대, 비공개 S3, 단일 노드 k3s로 실제 구성되어 있어. 배포는 GitHub OIDC와 SSM을 통해 검증된 GHCR 이미지 digest만 사용해. 리소스는 비용이 발생할 수 있으며, `terraform apply`는 자동화하지 않고 명시적 검토 후 수동 실행해. 운영·중지·삭제 절차는 [EC2 + S3 + k3s 가이드](docs/deployment/aws-k3s.md)를 따라.
+AWS 포트폴리오 환경은 서울 리전의 ARM64 EC2 한 대, 비공개 S3, 단일 노드 k3s로 실제 구성되어 있어. 백엔드 `main` 이미지가 품질 게이트를 통과하면 GitHub OIDC와 SSM으로 전체 스택을 불변 digest에 고정해 배포하고, 프런트엔드 `main` 게시 이벤트는 DB·백엔드·Redis·시크릿을 건드리지 않은 채 기존 프런트 Deployment만 새 digest로 교체해. 성공 조합은 S3 릴리스 이력에 기록해 최근 또는 직전 성공 버전으로 안전하게 재배포할 수 있어. DB migration 전과 매일 별도 S3 버킷에 검증된 논리 백업을 만들며 주간 격리 스키마 복원 시험과 전용 최소 권한 OIDC 역할의 GitHub 모니터링도 수행해. DB migration은 롤백 때 역적용하지 않고 Hibernate 자동 스키마 변경도 끈 채 하위 호환 가능한 스키마만 사용해. 리소스는 비용이 발생할 수 있으며, `terraform apply`는 자동화하지 않고 명시적 검토 후 수동 실행해. 운영·중지·백업·복구·삭제 절차는 [EC2 + S3 + k3s 가이드](docs/deployment/aws-k3s.md)를 따라.

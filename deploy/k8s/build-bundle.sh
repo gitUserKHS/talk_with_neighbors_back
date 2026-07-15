@@ -8,6 +8,7 @@ readonly PUBLIC_ORIGIN="${PUBLIC_ORIGIN:?PUBLIC_ORIGIN is required}"
 readonly ACME_EMAIL="${ACME_EMAIL:-}"
 readonly AWS_REGION="${AWS_REGION:?AWS_REGION is required}"
 readonly MEDIA_BUCKET="${MEDIA_BUCKET:?MEDIA_BUCKET is required}"
+readonly MYSQL_BACKUP_BUCKET="${MYSQL_BACKUP_BUCKET:?MYSQL_BACKUP_BUCKET is required}"
 readonly MYSQL_PASSWORD="${MYSQL_PASSWORD:?MYSQL_PASSWORD is required}"
 readonly MYSQL_ROOT_PASSWORD="${MYSQL_ROOT_PASSWORD:?MYSQL_ROOT_PASSWORD is required}"
 readonly AUTH_EMAIL_REQUIRED="${AUTH_EMAIL_REQUIRED:-false}"
@@ -18,6 +19,7 @@ readonly EMAIL_VERIFICATION_FROM="${EMAIL_VERIFICATION_FROM:-}"
 [[ -z "$ACME_EMAIL" || "$ACME_EMAIL" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,63}$ ]] || { echo "ACME_EMAIL must be empty or a valid ACME contact address" >&2; exit 1; }
 [[ "$AWS_REGION" =~ ^[a-z]{2}(-gov)?-[a-z]+-[0-9]+$ ]] || { echo "Invalid AWS region" >&2; exit 1; }
 [[ "$MEDIA_BUCKET" =~ ^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$ ]] || { echo "Invalid S3 bucket name" >&2; exit 1; }
+[[ "$MYSQL_BACKUP_BUCKET" =~ ^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$ ]] || { echo "Invalid MySQL backup bucket name" >&2; exit 1; }
 (( ${#MYSQL_PASSWORD} >= 16 )) || { echo "MYSQL_PASSWORD must contain at least 16 characters" >&2; exit 1; }
 (( ${#MYSQL_ROOT_PASSWORD} >= 16 )) || { echo "MYSQL_ROOT_PASSWORD must contain at least 16 characters" >&2; exit 1; }
 [[ "$AUTH_EMAIL_REQUIRED" == "true" || "$AUTH_EMAIL_REQUIRED" == "false" ]] || { echo "AUTH_EMAIL_REQUIRED must be true or false" >&2; exit 1; }
@@ -46,14 +48,23 @@ trap 'exit 143' TERM
 
 cp -R "$SCRIPT_DIR/base" "$bundle/base"
 cp -R "$SCRIPT_DIR/database-migrations" "$bundle/database-migrations"
+cp -R "$SCRIPT_DIR/systemd" "$bundle/systemd"
 cp \
   "$SCRIPT_DIR/deploy-on-node.sh" \
+  "$SCRIPT_DIR/install-mysql-backup.sh" \
   "$SCRIPT_DIR/k3s-network-common.sh" \
   "$SCRIPT_DIR/k3s-server-config.yaml" \
   "$SCRIPT_DIR/reinitialize-k3s-network.sh" \
   "$SCRIPT_DIR/run-database-migrations.sh" \
+  "$SCRIPT_DIR/mysql-backup.sh" \
+  "$SCRIPT_DIR/mysql-backup-restore-verify.sh" \
   "$SCRIPT_DIR/traefik-config.yaml" \
   "$bundle/"
+
+{
+  printf 'MYSQL_BACKUP_BUCKET=%s\n' "$MYSQL_BACKUP_BUCKET"
+  printf 'MYSQL_BACKUP_PREFIX=mysql\n'
+} > "$bundle/mysql-backup.conf"
 
 readonly PUBLIC_HOST="${PUBLIC_ORIGIN#https://}"
 grep -Fq "talk-with-neighbors.duckdns.org" "$bundle/base/ingress.yaml"

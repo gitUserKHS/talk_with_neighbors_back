@@ -5,6 +5,7 @@ import com.talkwithneighbors.entity.ChatRoom;
 import com.talkwithneighbors.entity.Message;
 import com.talkwithneighbors.entity.User;
 import com.talkwithneighbors.entity.ChatRoomType;
+import com.talkwithneighbors.entity.MeetupTimeBasis;
 import com.talkwithneighbors.domain.event.ChatRoomDeletedEvent;
 import com.talkwithneighbors.domain.event.MediaFilesDeletedEvent;
 import com.talkwithneighbors.exception.ChatException;
@@ -12,6 +13,8 @@ import com.talkwithneighbors.outbox.DomainEventPublisher;
 import com.talkwithneighbors.repository.ChatRoomDeletionRepository;
 import com.talkwithneighbors.repository.ChatRoomRepository;
 import com.talkwithneighbors.repository.MessageRepository;
+import com.talkwithneighbors.repository.MeetupWaitlistRepository;
+import com.talkwithneighbors.repository.UserBlockRepository;
 import com.talkwithneighbors.repository.UserRepository;
 import com.talkwithneighbors.repository.ChatScheduleRepository;
 import com.talkwithneighbors.repository.ChatScheduleRsvpRepository;
@@ -31,6 +34,7 @@ import org.mockito.ArgumentCaptor;
 
 import java.time.LocalDateTime;
 import java.time.Instant;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
@@ -73,6 +77,12 @@ class ChatServiceImplTest {
 
     @Mock
     private ChatScheduleRsvpRepository chatScheduleRsvpRepository;
+
+    @Mock
+    private UserBlockRepository userBlockRepository;
+
+    @Mock
+    private MeetupWaitlistRepository meetupWaitlistRepository;
 
     @InjectMocks
     private ChatServiceImpl chatService;
@@ -329,6 +339,60 @@ class ChatServiceImplTest {
     }
 
     @Test
+    void genericMeetupJoinRejectsBlockedUserAtServiceBoundary() {
+        User outsider = createUser(3L, "outsider");
+        room.setPublicRoom(true);
+        room.setParticipants(new HashSet<>(List.of(creator)));
+        when(userRepository.findById(outsider.getId())).thenReturn(Optional.of(outsider));
+        when(chatRoomRepository.findByIdForUpdate(room.getId())).thenReturn(Optional.of(room));
+        when(userBlockRepository.existsBetween(outsider.getId(), creator.getId())).thenReturn(true);
+
+        ChatException exception = assertThrows(ChatException.class,
+                () -> chatService.joinRoom(room.getId(), outsider.getId().toString()));
+
+        assertEquals(HttpStatus.FORBIDDEN, exception.getStatus());
+        verify(chatRoomRepository, never()).save(room);
+        verifyNoInteractions(domainEventPublisher);
+    }
+
+    @Test
+    void genericMeetupJoinRejectsExpiredRegistration() {
+        User outsider = createUser(3L, "outsider");
+        room.setPublicRoom(true);
+        room.setParticipants(new HashSet<>(List.of(creator)));
+        room.setMeetupTimeBasis(MeetupTimeBasis.UTC);
+        room.setRegistrationDeadline(LocalDateTime.now(ZoneOffset.UTC).minusMinutes(1));
+        when(userRepository.findById(outsider.getId())).thenReturn(Optional.of(outsider));
+        when(chatRoomRepository.findByIdForUpdate(room.getId())).thenReturn(Optional.of(room));
+
+        ChatException exception = assertThrows(ChatException.class,
+                () -> chatService.joinRoom(room.getId(), outsider.getId().toString()));
+
+        assertEquals(HttpStatus.CONFLICT, exception.getStatus());
+        verify(chatRoomRepository, never()).save(room);
+    }
+
+    @Test
+    void genericMeetupJoinUsesLockedLookupAndCannotLeapfrogWaitlist() {
+        User outsider = createUser(3L, "outsider");
+        room.setPublicRoom(true);
+        room.setMaxParticipants(4);
+        room.setParticipants(new HashSet<>(List.of(creator)));
+        when(userRepository.findById(outsider.getId())).thenReturn(Optional.of(outsider));
+        when(chatRoomRepository.findByIdForUpdate(room.getId())).thenReturn(Optional.of(room));
+        when(meetupWaitlistRepository.countByRoom_Id(room.getId())).thenReturn(1L);
+
+        ChatException exception = assertThrows(ChatException.class,
+                () -> chatService.joinRoom(room.getId(), outsider.getId().toString()));
+
+        assertEquals(HttpStatus.CONFLICT, exception.getStatus());
+        verify(chatRoomRepository).findByIdForUpdate(room.getId());
+        verify(chatRoomRepository, never()).findById(room.getId());
+        verify(chatRoomRepository, never()).save(room);
+        verifyNoInteractions(domainEventPublisher);
+    }
+
+    @Test
     void deleteRoomDeletesTheCompleteGraphAndPublishesAfterCommitEvents() {
         String roomId = room.getId();
         List<String> mediaUrls = List.of(
@@ -342,20 +406,18 @@ class ChatServiceImplTest {
         when(chatRoomDeletionRepository.findMediaUrlsByRoomId(roomId)).thenReturn(mediaUrls);
         when(chatRoomDeletionRepository.deleteByRoomId(roomId)).thenReturn(deletionResult);
 
-        chatService.deleteRoom(roomId);
+        chatService.deleteRoom(roomId, creator.getId());
 
         verify(chatRoomDeletionRepository).deleteByRoomId(roomId);
-        ArgumentCaptor<MediaFilesDeletedEvent> mediaEvent =
-                ArgumentCaptor.forClass(MediaFilesDeletedEvent.class);
-        verify(applicationEventPublisher).publishEvent(mediaEvent.capture());
-        assertEquals(mediaUrls, mediaEvent.getValue().mediaUrls());
-
-        ArgumentCaptor<ChatRoomDeletedEvent> roomEvent =
-                ArgumentCaptor.forClass(ChatRoomDeletedEvent.class);
-        verify(domainEventPublisher).publish(roomEvent.capture());
-        assertEquals(roomId, roomEvent.getValue().roomId());
-        assertEquals(Set.of(creator.getId(), participant.getId()),
-                Set.copyOf(roomEvent.getValue().participantIds()));
+        verify(domainEventPublisher).publish(argThat(event ->
+                event instanceof MediaFilesDeletedEvent mediaEvent
+                        && mediaEvent.mediaUrls().equals(mediaUrls)
+                        && mediaEvent.aggregateId().equals(roomId)));
+        verify(domainEventPublisher).publish(argThat(event ->
+                event instanceof ChatRoomDeletedEvent roomEvent
+                        && roomEvent.roomId().equals(roomId)
+                        && Set.copyOf(roomEvent.participantIds())
+                                .equals(Set.of(creator.getId(), participant.getId()))));
     }
 
     @Test
@@ -364,7 +426,7 @@ class ChatServiceImplTest {
 
         ChatException exception = assertThrows(
                 ChatException.class,
-                () -> chatService.deleteRoom(testRoomId)
+                () -> chatService.deleteRoom(testRoomId, creator.getId())
         );
 
         assertEquals(HttpStatus.NOT_FOUND, exception.getStatus());
@@ -381,11 +443,23 @@ class ChatServiceImplTest {
 
         ChatException exception = assertThrows(
                 ChatException.class,
-                () -> chatService.deleteRoom(roomId)
+                () -> chatService.deleteRoom(roomId, creator.getId())
         );
 
         assertEquals(HttpStatus.INTERNAL_SERVER_ERROR, exception.getStatus());
         verifyNoInteractions(applicationEventPublisher, domainEventPublisher);
+    }
+
+    @Test
+    void nonCreatorCannotDeleteRoomAtServiceBoundary() {
+        when(chatRoomRepository.findByIdForUpdate(room.getId())).thenReturn(Optional.of(room));
+
+        ChatException exception = assertThrows(
+                ChatException.class,
+                () -> chatService.deleteRoom(room.getId(), participant.getId()));
+
+        assertEquals(HttpStatus.FORBIDDEN, exception.getStatus());
+        verifyNoInteractions(chatRoomDeletionRepository, applicationEventPublisher, domainEventPublisher);
     }
 
     @Test

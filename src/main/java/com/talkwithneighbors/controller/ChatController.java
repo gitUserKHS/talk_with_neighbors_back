@@ -204,7 +204,7 @@ public class ChatController extends BaseController {
             roomId, user.getId().toString());
         if (roomDto.getCreatorId() != null &&
             roomDto.getCreatorId().equals(user.getId().toString())) {
-            chatService.deleteRoom(roomId);
+            chatService.deleteRoom(roomId, user.getId());
         } else {
             chatService.leaveRoom(roomId, user.getId().toString());
         }
@@ -303,14 +303,7 @@ public class ChatController extends BaseController {
             User user = getCurrentUser(request);
             log.info("[ChatController] User {} attempting to delete roomId: {}", user.getId(), roomId);
             
-            ChatRoomDto roomDto = chatService.getRoomById(roomId, user.getId().toString());
-
-            if (roomDto == null || roomDto.getCreatorId() == null || !roomDto.getCreatorId().equals(user.getId().toString())) {
-                log.warn("[ChatController] User {} does not have permission to delete roomId: {}", user.getId(), roomId);
-                throw new ChatException("No permission to delete room.", HttpStatus.FORBIDDEN);
-            }
-            
-            chatService.deleteRoom(roomId);
+            chatService.deleteRoom(roomId, user.getId());
             log.info("[ChatController] Successfully deleted roomId: {} by user: {}", roomId, user.getId());
             return ResponseEntity.ok(Map.of("success", true, "message", "Chat room deleted."));
             
@@ -340,22 +333,18 @@ public class ChatController extends BaseController {
                 log.warn("[ChatController] Missing roomId or userId in WebSocket deleteRoom request");
                 return;
             }
-            
+
             ChatRoomDto roomDto = chatService.getRoomById(roomId, userIdString);
-            
-            if (roomDto == null || roomDto.getCreatorId() == null || !roomDto.getCreatorId().equals(userIdString)) {
-                log.warn("[ChatController] User {} does not have permission to delete roomId: {} via WebSocket", userIdString, roomId);
-                // 에러 알림을 해당 사용자에게 전송
-                Map<String, Object> errorNotification = Map.of(
-                    "type", "DELETE_ROOM_ERROR",
-                    "roomId", roomId,
-                    "message", "채팅방을 삭제할 권한이 없습니다."
-                );
-                messagingTemplate.convertAndSendToUser(userIdString, "/queue/chat-errors", errorNotification);
+            if (roomDto.getCreatorId() == null || !roomDto.getCreatorId().equals(userIdString)) {
+                messagingTemplate.convertAndSendToUser(userIdString, "/queue/chat-errors", Map.of(
+                        "type", "DELETE_ROOM_ERROR",
+                        "roomId", roomId,
+                        "message", "채팅방을 만든 사람만 삭제할 수 있어."
+                ));
                 return;
             }
-            
-            chatService.deleteRoom(roomId);
+
+            chatService.deleteRoom(roomId, Long.parseLong(userIdString));
             log.info("[ChatController] Successfully deleted roomId: {} by user: {} via WebSocket", roomId, userIdString);
             
         } catch (Exception e) {

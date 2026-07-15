@@ -282,9 +282,7 @@ class ChatControllerTest {
 
     @Test
     void deleteRoomSuccess() throws Exception {
-        when(chatService.getRoomById(eq("room-1"), anyString()))
-                .thenReturn(room("room-1", "Room 1", ChatRoomType.GROUP, "1"));
-        doNothing().when(chatService).deleteRoom("room-1");
+        doNothing().when(chatService).deleteRoom("room-1", 1L);
 
         mockMvc.perform(delete("/api/chat/rooms/{roomId}", "room-1")
                         .cookie(new jakarta.servlet.http.Cookie("TWN_SESSION", SESSION_ID)))
@@ -293,15 +291,15 @@ class ChatControllerTest {
 
     @Test
     void deleteMissingRoomReturnsNotFound() throws Exception {
-        when(chatService.getRoomById(eq("missing-room"), anyString()))
-                .thenThrow(new ChatException("Chat room not found", HttpStatus.NOT_FOUND));
+        doThrow(new ChatException("Chat room not found", HttpStatus.NOT_FOUND))
+                .when(chatService).deleteRoom("missing-room", 1L);
 
         mockMvc.perform(delete("/api/chat/rooms/{roomId}", "missing-room")
                         .cookie(new jakarta.servlet.http.Cookie("TWN_SESSION", SESSION_ID)))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.success").value(false));
 
-        verify(chatService, never()).deleteRoom(anyString());
+        verify(chatService).deleteRoom("missing-room", 1L);
     }
 
     @Test
@@ -356,8 +354,8 @@ class ChatControllerTest {
 
     @Test
     void deleteRoomWithoutPermissionReturnsForbidden() throws Exception {
-        when(chatService.getRoomById(eq("room-1"), anyString()))
-                .thenReturn(room("room-1", "Room 1", ChatRoomType.GROUP, "2"));
+        doThrow(new ChatException("Only the room creator can delete this room.", HttpStatus.FORBIDDEN))
+                .when(chatService).deleteRoom("room-1", 1L);
 
         mockMvc.perform(delete("/api/chat/rooms/{roomId}", "room-1")
                         .cookie(new jakarta.servlet.http.Cookie("TWN_SESSION", SESSION_ID)))

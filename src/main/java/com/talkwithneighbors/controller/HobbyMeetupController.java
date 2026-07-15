@@ -11,6 +11,8 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.DeleteMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -43,6 +45,33 @@ public class HobbyMeetupController {
             UserSession userSession
     ) {
         return ResponseEntity.ok(hobbyMeetupService.createMeetup(userSession.getUserId(), request));
+    }
+
+    @GetMapping("/{roomId}")
+    public ResponseEntity<HobbyMeetupDto> getMeetup(
+            @PathVariable String roomId,
+            UserSession userSession
+    ) {
+        return ResponseEntity.ok(hobbyMeetupService.getMeetup(userSession.getUserId(), roomId));
+    }
+
+    @PatchMapping("/{roomId}")
+    public ResponseEntity<HobbyMeetupDto> updateMeetup(
+            @PathVariable String roomId,
+            @Valid @RequestBody CreateHobbyMeetupRequest request,
+            UserSession userSession
+    ) {
+        return ResponseEntity.ok(hobbyMeetupService.updateMeetup(
+                userSession.getUserId(), roomId, request));
+    }
+
+    @DeleteMapping("/{roomId}")
+    public ResponseEntity<Void> deleteMeetup(
+            @PathVariable String roomId,
+            UserSession userSession
+    ) {
+        hobbyMeetupService.deleteMeetup(userSession.getUserId(), roomId);
+        return ResponseEntity.noContent().build();
     }
 
     @PostMapping("/{roomId}/join")

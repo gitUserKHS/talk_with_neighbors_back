@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily Talk With Neighbors MySQL backup schedule
+
+[Timer]
+OnCalendar=*-*-* 18:15:00 UTC
+RandomizedDelaySec=20m
+Persistent=true
+Unit=talk-with-neighbors-mysql-backup.service
+
+[Install]
+WantedBy=timers.target

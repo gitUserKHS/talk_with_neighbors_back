@@ -25,9 +25,13 @@ for script in \
   "$SCRIPT_DIR/build-bundle.sh" \
   "$SCRIPT_DIR/deploy-on-node.sh" \
   "$SCRIPT_DIR/deploy-via-ssm.sh" \
+  "$SCRIPT_DIR/install-mysql-backup.sh" \
   "$SCRIPT_DIR/k3s-network-common.sh" \
+  "$SCRIPT_DIR/mysql-backup.sh" \
+  "$SCRIPT_DIR/mysql-backup-restore-verify.sh" \
+  "$SCRIPT_DIR/release-history.sh" \
   "$SCRIPT_DIR/reinitialize-k3s-network.sh"; do
-  bash -n "$script"
+  "$BASH" -n "$script"
 done
 
 if grep -Fq 'k3s-uninstall.sh' "$SCRIPT_DIR/reinitialize-k3s-network.sh"; then
@@ -137,14 +141,16 @@ PUBLIC_ORIGIN=https://portfolio.example.com \
 ACME_EMAIL=portfolio-owner@example.com \
 AWS_REGION=ap-northeast-2 \
 MEDIA_BUCKET=twn-ci-media \
+MYSQL_BACKUP_BUCKET=twn-ci-mysql-backup \
 MYSQL_PASSWORD=ci-mysql-password \
 MYSQL_ROOT_PASSWORD=ci-root-password \
 RUNNER_TEMP="$temporary" \
-  bash "$SCRIPT_DIR/build-bundle.sh" "$temporary/bundle.tgz" >/dev/null
+  "$BASH" "$SCRIPT_DIR/build-bundle.sh" "$temporary/bundle.tgz" >/dev/null
 
 tar -tzf "$temporary/bundle.tgz" > "$temporary/bundle-files.txt"
 for required in \
   ./deploy-on-node.sh \
+  ./install-mysql-backup.sh \
   ./k3s-network-common.sh \
   ./k3s-server-config.yaml \
   ./traefik-config.yaml \
@@ -163,10 +169,11 @@ grep -Fq -- '--entrypoints.web.http.redirections.entrypoint.to=:443' \
 PUBLIC_ORIGIN=https://portfolio.example.com \
 AWS_REGION=ap-northeast-2 \
 MEDIA_BUCKET=twn-ci-media \
+MYSQL_BACKUP_BUCKET=twn-ci-mysql-backup \
 MYSQL_PASSWORD=ci-mysql-password \
 MYSQL_ROOT_PASSWORD=ci-root-password \
 RUNNER_TEMP="$temporary" \
-  bash "$SCRIPT_DIR/build-bundle.sh" "$temporary/bundle-no-email.tgz" >/dev/null
+  "$BASH" "$SCRIPT_DIR/build-bundle.sh" "$temporary/bundle-no-email.tgz" >/dev/null
 tar -xOzf "$temporary/bundle-no-email.tgz" ./traefik-config.yaml > "$temporary/traefik-without-email.yaml"
 ! grep -Fq -- '--certificatesresolvers.letsencrypt.acme.email=' "$temporary/traefik-without-email.yaml" || \
   fail "An empty ACME email argument was rendered"
@@ -174,14 +181,14 @@ tar -xOzf "$temporary/bundle-no-email.tgz" ./traefik-config.yaml > "$temporary/t
   fail "The optional ACME email placeholder was not removed"
 
 readonly IMAGE_SUFFIX="sha256:0000000000000000000000000000000000000000000000000000000000000000"
-if bash "$SCRIPT_DIR/deploy-via-ssm.sh" \
+if "$BASH" "$SCRIPT_DIR/deploy-via-ssm.sh" \
   "$INSTANCE_ID" twn-ci-deploy deployments/1-1/bundle.tgz "$temporary/bundle.tgz" \
   "ghcr.io/gituserkhs/talk_with_neighbors_back@$IMAGE_SUFFIX" \
   "ghcr.io/gituserkhs/talk_with_neighbors_front@$IMAGE_SUFFIX" \
   1-1 true WRONG >/dev/null 2>&1; then
   fail "An invalid destructive confirmation passed runner validation"
 fi
-if bash "$SCRIPT_DIR/deploy-via-ssm.sh" \
+if "$BASH" "$SCRIPT_DIR/deploy-via-ssm.sh" \
   "$INSTANCE_ID" twn-ci-deploy deployments/1-1/bundle.tgz "$temporary/bundle.tgz" \
   "ghcr.io/gituserkhs/talk_with_neighbors_back@$IMAGE_SUFFIX" \
   "ghcr.io/gituserkhs/talk_with_neighbors_front@$IMAGE_SUFFIX" \
