@@ -10,16 +10,22 @@ import org.springframework.core.type.AnnotatedTypeMetadata;
 import org.springframework.security.oauth2.client.registration.ClientRegistration;
 import org.springframework.security.oauth2.client.registration.ClientRegistrationRepository;
 import org.springframework.security.oauth2.client.registration.InMemoryClientRegistrationRepository;
+import org.springframework.security.oauth2.client.oidc.userinfo.OidcUserService;
 import org.springframework.security.oauth2.core.AuthorizationGrantType;
 import org.springframework.security.oauth2.core.ClientAuthenticationMethod;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
+import java.util.Set;
 import org.springframework.boot.web.servlet.FilterRegistrationBean;
 
 @Configuration
 @EnableConfigurationProperties(OAuthProperties.class)
 public class OAuthClientConfig {
+    private static final Set<String> STANDARD_USER_INFO_SCOPES =
+            Set.of("profile", "email", "address", "phone");
+
     @Bean
     FilterRegistrationBean<OAuthReturnToCaptureFilter> oauthReturnToContainerRegistration(
             OAuthReturnToCaptureFilter filter) {
@@ -35,6 +41,27 @@ public class OAuthClientConfig {
         if (properties.googleEnabled()) registrations.add(google(properties));
         if (properties.kakaoEnabled()) registrations.add(kakao(properties));
         return new InMemoryClientRegistrationRepository(registrations);
+    }
+
+    @Bean
+    OidcUserService oidcUserService() {
+        OidcUserService service = new OidcUserService();
+        service.setRetrieveUserInfo(request -> {
+            ClientRegistration registration = request.getClientRegistration();
+            String userInfoUri = registration.getProviderDetails().getUserInfoEndpoint().getUri();
+            if (!AuthorizationGrantType.AUTHORIZATION_CODE.equals(registration.getAuthorizationGrantType())
+                    || userInfoUri == null || userInfoUri.isBlank()) {
+                return false;
+            }
+            if ("kakao".equals(registration.getRegistrationId())) {
+                // Kakao grants account_email instead of the standard email scope.
+                // email_verified is exposed by Kakao UserInfo, not its ID token.
+                return true;
+            }
+            Set<String> scopes = request.getAccessToken().getScopes();
+            return scopes.isEmpty() || !Collections.disjoint(scopes, STANDARD_USER_INFO_SCOPES);
+        });
+        return service;
     }
 
     private ClientRegistration google(OAuthProperties properties) {

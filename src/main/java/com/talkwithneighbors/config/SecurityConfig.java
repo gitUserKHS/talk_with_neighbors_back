@@ -19,6 +19,7 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 import org.springframework.security.oauth2.client.registration.ClientRegistrationRepository;
+import org.springframework.security.oauth2.client.oidc.userinfo.OidcUserService;
 import org.springframework.security.oauth2.client.web.OAuth2AuthorizationRequestRedirectFilter;
 import static org.springframework.security.config.Customizer.withDefaults;
 
@@ -33,6 +34,7 @@ public class SecurityConfig {
     private final OAuthLoginFailureHandler oauthFailureHandler;
     private final TransientAuthorizedClientRepository authorizedClients;
     private final OAuthReturnToCaptureFilter oauthReturnToCaptureFilter;
+    private final OidcUserService oidcUserService;
 
     @Bean
     public static PasswordEncoder passwordEncoder() {
@@ -81,6 +83,7 @@ public class SecurityConfig {
             http.oauth2Login(oauth -> oauth
                     .authorizationEndpoint(endpoint -> endpoint.baseUri("/api/oauth2/authorization"))
                     .redirectionEndpoint(endpoint -> endpoint.baseUri("/api/login/oauth2/code/*"))
+                    .userInfoEndpoint(endpoint -> endpoint.oidcUserService(oidcUserService))
                     .authorizedClientRepository(authorizedClients)
                     .successHandler(oauthSuccessHandler)
                     .failureHandler(oauthFailureHandler));
