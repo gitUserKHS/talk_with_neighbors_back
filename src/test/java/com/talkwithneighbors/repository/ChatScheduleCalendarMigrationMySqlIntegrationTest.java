@@ -70,6 +70,8 @@ class ChatScheduleCalendarMigrationMySqlIntegrationTest {
 
     @Test
     void backfillRepairsDependentsForPreexistingDeterministicScheduleAndIsRetrySafe() {
+        useProductionMessageContentCollation();
+
         String suffix = UUID.randomUUID().toString().replace("-", "").substring(0, 12);
         User host = userRepository.saveAndFlush(user("calendar-migration-" + suffix));
 
@@ -87,6 +89,17 @@ class ChatScheduleCalendarMigrationMySqlIntegrationTest {
         stalePartialSchedule.setTitle("stale partial title");
         stalePartialSchedule.setDurationMinutes(30);
         chatScheduleRepository.saveAndFlush(stalePartialSchedule);
+        String partialMessageId = deterministicId(
+                "legacy-chat-schedule-message:", partialScheduleId);
+        Message stalePartialCard = new Message();
+        stalePartialCard.setId(partialMessageId);
+        stalePartialCard.setChatRoom(partialRoom);
+        stalePartialCard.setSender(host);
+        stalePartialCard.setContent("Stale schedule card");
+        stalePartialCard.setCreatedAt(LocalDateTime.now(ZoneOffset.UTC));
+        stalePartialCard.setType(Message.MessageType.SCHEDULE);
+        stalePartialCard.setSchedule(stalePartialSchedule);
+        messageRepository.saveAndFlush(stalePartialCard);
 
         Instant representedStart = Instant.parse("2099-08-03T10:00:00Z");
         ChatRoom representedRoom = chatRoomRepository.saveAndFlush(
@@ -128,7 +141,10 @@ class ChatScheduleCalendarMigrationMySqlIntegrationTest {
         assertCompleteBackfill(cleanRoom.getId(), cleanScheduleId,
                 deterministicId("legacy-chat-schedule-message:", cleanScheduleId), host.getId());
         assertCompleteBackfill(partialRoom.getId(), partialScheduleId,
-                deterministicId("legacy-chat-schedule-message:", partialScheduleId), host.getId());
+                partialMessageId, host.getId());
+        assertThat(messageRepository.findById(partialMessageId)).get().satisfies(message ->
+                assertThat(message.getContent()).isEqualTo(
+                        "일정: Calendar migration meetup"));
         assertThat(chatScheduleRepository.findById(partialScheduleId)).get().satisfies(schedule -> {
             assertThat(schedule.getStartsAt()).isEqualTo(partialStart.minusSeconds(86_400));
             assertThat(schedule.getTitle()).isEqualTo("stale partial title");
@@ -230,6 +246,22 @@ class ChatScheduleCalendarMigrationMySqlIntegrationTest {
                 Integer.class,
                 messageId,
                 userId);
+    }
+
+    private void useProductionMessageContentCollation() {
+        jdbcTemplate.execute("""
+                ALTER TABLE messages
+                MODIFY COLUMN content TEXT
+                CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL
+                """);
+        assertThat(jdbcTemplate.queryForObject("""
+                        SELECT COLLATION_NAME
+                        FROM INFORMATION_SCHEMA.COLUMNS
+                        WHERE TABLE_SCHEMA = DATABASE()
+                          AND TABLE_NAME = 'messages'
+                          AND COLUMN_NAME = 'content'
+                        """, String.class))
+                .isEqualTo("utf8mb4_unicode_ci");
     }
 
     private void applyMigration() {

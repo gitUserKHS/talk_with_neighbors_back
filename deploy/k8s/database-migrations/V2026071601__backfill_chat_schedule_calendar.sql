@@ -180,14 +180,16 @@ JOIN chat_rooms room
   ON room.id = pending.room_id
 SET message.sender_id = room.creator_id,
     message.content = CONCAT(
-        CONVERT(0xEC9DBCECA0953A20 USING utf8mb4), LEFT(room.name, 80)),
+        CONVERT(0xEC9DBCECA0953A20 USING utf8mb4), LEFT(room.name, 80)
+    ) COLLATE utf8mb4_unicode_ci,
     message.updated_at = UTC_TIMESTAMP(6)
 WHERE message.chat_room_id = room.id
   AND message.type = 'SCHEDULE'
   AND NOT (
     message.sender_id <=> room.creator_id
     AND message.content <=> CONCAT(
-        CONVERT(0xEC9DBCECA0953A20 USING utf8mb4), LEFT(room.name, 80))
+        CONVERT(0xEC9DBCECA0953A20 USING utf8mb4), LEFT(room.name, 80)
+    ) COLLATE utf8mb4_unicode_ci
   );
 
 -- Join by schedule_id rather than the generated ID: an earlier application
