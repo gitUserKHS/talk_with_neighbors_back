@@ -22,6 +22,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
+import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
 import org.springframework.http.HttpStatus;
@@ -64,6 +65,9 @@ class HobbyMeetupServiceTest {
 
     @Mock
     private ChatScheduleRsvpRepository chatScheduleRsvpRepository;
+
+    @Mock
+    private ChatScheduleService chatScheduleService;
 
     @Mock
     private OfflineNotificationService offlineNotificationService;
@@ -124,6 +128,7 @@ class HobbyMeetupServiceTest {
         assertEquals(LocalDateTime.of(2099, 8, 1, 10, 0), savedRoom.getScheduledAt());
         assertEquals(LocalDateTime.of(2099, 8, 1, 9, 0), savedRoom.getRegistrationDeadline());
         assertEquals(MeetupTimeBasis.UTC, savedRoom.getMeetupTimeBasis());
+        assertEquals(120, savedRoom.getDurationMinutes());
         assertTrue(savedRoom.getParticipants().contains(creator));
         assertEquals(List.of("독서", "산책"), result.getSharedInterests());
         assertEquals("서울도서관", result.getLocation());
@@ -131,8 +136,9 @@ class HobbyMeetupServiceTest {
         assertEquals(37.5662968, result.getLatitude());
         assertEquals(126.9779451, result.getLongitude());
         assertEquals("123456789", result.getKakaoPlaceId());
-        assertEquals(OffsetDateTime.of(2099, 8, 1, 10, 0, 0, 0, ZoneOffset.UTC), result.getScheduledAt());
-        assertEquals(OffsetDateTime.of(2099, 8, 1, 9, 0, 0, 0, ZoneOffset.UTC), result.getRegistrationDeadline());
+        assertEquals(OffsetDateTime.parse("2099-08-01T10:00:00Z"), result.getScheduledAt());
+        assertEquals(OffsetDateTime.parse("2099-08-01T09:00:00Z"), result.getRegistrationDeadline());
+        verify(chatScheduleService).synchronizeLegacyProfileSchedule(savedRoom);
     }
 
     @Test
@@ -163,6 +169,40 @@ class HobbyMeetupServiceTest {
         hobbyMeetupService.joinMeetup(joiningUser.getId(), room.getId());
 
         verify(domainEventPublisher).publish(any(MeetupJoinedEvent.class));
+    }
+
+    @Test
+    void canonicalCalendarIgnoresPreservedLegacyRegistrationDeadline() {
+        User joiningUser = user(2L, "joining-user", "coffee");
+        ChatRoom room = publicMeetup("canonical-deadline", 4);
+        room.getParticipants().add(creator);
+        room.setRegistrationDeadline(LocalDateTime.now(ZoneOffset.UTC).minusHours(1));
+        room.setMeetupTimeBasis(MeetupTimeBasis.UTC);
+        when(userRepository.findById(joiningUser.getId())).thenReturn(Optional.of(joiningUser));
+        when(chatRoomRepository.findByIdForUpdate(room.getId())).thenReturn(Optional.of(room));
+        when(chatScheduleRepository.existsByRoom_Id(room.getId())).thenReturn(true);
+
+        hobbyMeetupService.joinMeetup(joiningUser.getId(), room.getId());
+
+        assertTrue(room.getParticipants().contains(joiningUser));
+    }
+
+    @Test
+    void legacyOnlyMeetupStillEnforcesRegistrationDeadline() {
+        User joiningUser = user(2L, "joining-user", "coffee");
+        ChatRoom room = publicMeetup("legacy-deadline", 4);
+        room.getParticipants().add(creator);
+        room.setRegistrationDeadline(LocalDateTime.now(ZoneOffset.UTC).minusHours(1));
+        room.setMeetupTimeBasis(MeetupTimeBasis.UTC);
+        when(userRepository.findById(joiningUser.getId())).thenReturn(Optional.of(joiningUser));
+        when(chatRoomRepository.findByIdForUpdate(room.getId())).thenReturn(Optional.of(room));
+
+        ChatException exception = assertThrows(
+                ChatException.class,
+                () -> hobbyMeetupService.joinMeetup(joiningUser.getId(), room.getId()));
+
+        assertEquals(HttpStatus.CONFLICT, exception.getStatus());
+        assertFalse(room.getParticipants().contains(joiningUser));
     }
 
     @Test
@@ -234,10 +274,21 @@ class HobbyMeetupServiceTest {
     void hostUpdatesFullMeetupForm() {
         ChatRoom room = publicMeetup("meetup-update", 5);
         room.getParticipants().add(creator);
+        LocalDateTime projectedStart = LocalDateTime.of(2099, 9, 2, 3, 0);
+        LocalDateTime projectedDeadline = LocalDateTime.of(2099, 9, 1, 3, 0);
+        LocalDateTime reminderSentAt = LocalDateTime.of(2099, 9, 1, 4, 0);
+        room.setScheduledAt(projectedStart);
+        room.setMeetupTimeBasis(MeetupTimeBasis.UTC);
+        room.setDurationMinutes(90);
+        room.setRegistrationDeadline(projectedDeadline);
+        room.setReminderSentAt(reminderSentAt);
         CreateHobbyMeetupRequest request = validRequest();
         request.setTitle("Updated meetup");
         request.setInterestTags(List.of("coffee", "walk"));
         request.setMaxParticipants(8);
+        request.setScheduledAt(null);
+        request.setRegistrationDeadline(null);
+        request.setDurationMinutes(null);
         when(userRepository.findById(creator.getId())).thenReturn(Optional.of(creator));
         when(chatRoomRepository.findByIdForUpdate(room.getId())).thenReturn(Optional.of(room));
         when(chatRoomRepository.save(room)).thenReturn(room);
@@ -248,8 +299,41 @@ class HobbyMeetupServiceTest {
         assertEquals("Updated meetup", room.getName());
         assertEquals(List.of("coffee", "walk"), room.getInterestTags());
         assertEquals(8, room.getMaxParticipants());
+        assertEquals(projectedStart, room.getScheduledAt());
+        assertEquals(MeetupTimeBasis.UTC, room.getMeetupTimeBasis());
+        assertEquals(90, room.getDurationMinutes());
+        assertEquals(projectedDeadline, room.getRegistrationDeadline());
+        assertEquals(reminderSentAt, room.getReminderSentAt());
         assertTrue(result.isCanManage());
         verify(chatRoomRepository).save(room);
+    }
+
+    @Test
+    void oldFrontendScheduleEditSynchronizesCanonicalEventAfterMaterializingPreviousProjection() {
+        ChatRoom room = publicMeetup("legacy-form-update", 5);
+        room.getParticipants().add(creator);
+        room.setScheduledAt(LocalDateTime.of(2099, 7, 1, 10, 0));
+        room.setMeetupTimeBasis(MeetupTimeBasis.UTC);
+        room.setDurationMinutes(60);
+        room.setRegistrationDeadline(LocalDateTime.of(2099, 7, 1, 9, 0));
+        CreateHobbyMeetupRequest request = validRequest();
+        request.setScheduledAt(OffsetDateTime.parse("2099-09-01T19:30:00+09:00"));
+        request.setRegistrationDeadline(OffsetDateTime.parse("2099-09-01T18:00:00+09:00"));
+        request.setDurationMinutes(150);
+        when(userRepository.findById(creator.getId())).thenReturn(Optional.of(creator));
+        when(chatRoomRepository.findByIdForUpdate(room.getId())).thenReturn(Optional.of(room));
+        when(chatRoomRepository.save(room)).thenReturn(room);
+
+        hobbyMeetupService.updateMeetup(creator.getId(), room.getId(), request);
+
+        assertEquals(LocalDateTime.of(2099, 9, 1, 10, 30), room.getScheduledAt());
+        assertEquals(LocalDateTime.of(2099, 9, 1, 9, 0), room.getRegistrationDeadline());
+        assertEquals(MeetupTimeBasis.UTC, room.getMeetupTimeBasis());
+        assertEquals(150, room.getDurationMinutes());
+        InOrder order = org.mockito.Mockito.inOrder(chatScheduleService);
+        order.verify(chatScheduleService).materializeLegacyProfileSchedule(room);
+        order.verify(chatScheduleService).synchronizeLegacyProfileSchedule(
+                room, Instant.parse("2099-07-01T10:00:00Z"), 60);
     }
 
     @Test

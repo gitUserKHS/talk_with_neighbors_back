@@ -385,7 +385,8 @@ public class ChatController extends BaseController {
             
             Map<String, Long> unreadCounts = new HashMap<>();
             for (ChatRoomDto room : chatRooms.getContent()) {
-                long unreadCount = messageRepository.countUnreadMessages(room.getId(), user.getId());
+                long unreadCount = messageRepository.countVisibleUnreadMessages(
+                        room.getId(), user.getId(), Message.MessageType.SCHEDULE);
                 unreadCounts.put(room.getId(), unreadCount);
             }
             

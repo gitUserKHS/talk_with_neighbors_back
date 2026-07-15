@@ -155,18 +155,19 @@ public class ChatServiceImpl implements ChatService {
     }
 
     @Override
-    @Transactional(readOnly = true)
+    @Transactional
     public Page<ChatRoomDto> getChatRoomsForUser(String userIdString, Pageable pageable) {
         Long userId = Long.parseLong(userIdString);
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new RuntimeException("User not found with id: " + userId));
+        repairSchedulePreviewsForUser(user);
         // 최근 활동 순으로 정렬된 채팅방 목록 조회 (카카오톡과 같은 방식)
         Page<ChatRoom> roomsPage = chatRoomRepository.findByParticipantsContainingOrderByLastMessageTimeDesc(user, pageable);
         return roomsPage.map(room -> ChatRoomDto.fromEntity(room, user, messageRepository));
     }
 
     @Override
-    @Transactional(readOnly = true)
+    @Transactional
     public ChatRoomDto getRoomById(String roomId, String userIdString) {
         Long userId = Long.parseLong(userIdString);
         User currentUser = userRepository.findById(userId)
@@ -174,6 +175,7 @@ public class ChatServiceImpl implements ChatService {
         ChatRoom chatRoom = chatRoomRepository.findByIdAndParticipantsContaining(roomId, currentUser)
                 .orElseThrow(() -> new ChatException(
                         "Chat room not found or user not a participant", HttpStatus.NOT_FOUND));
+        repairSchedulePreview(roomId);
         return ChatRoomDto.fromEntity(chatRoom, currentUser, messageRepository);
     }
 
@@ -193,7 +195,7 @@ public class ChatServiceImpl implements ChatService {
                 && userBlockRepository.existsBetween(userId, chatRoom.getCreator().getId())) {
             throw new ChatException("차단 관계인 사용자의 모임에는 참여할 수 없어.", HttpStatus.FORBIDDEN);
         }
-        if (MeetupTimePolicy.isPast(
+        if (!chatScheduleRepository.existsByRoom_Id(roomId) && MeetupTimePolicy.isPast(
                 chatRoom.getRegistrationDeadline(), chatRoom.getMeetupTimeBasis(), Instant.now())) {
             throw new ChatException("모임 신청이 마감되었어.", HttpStatus.CONFLICT);
         }
@@ -468,8 +470,9 @@ public class ChatServiceImpl implements ChatService {
     }
 
     private Message refreshRoomLastMessage(ChatRoom room) {
-        List<Message> latestMessages = messageRepository.findActiveByChatRoomIdOrderByCreatedAtDesc(
-                room.getId(), PageRequest.of(0, 1));
+        List<Message> latestMessages = messageRepository
+                .findVisibleActiveByChatRoomIdOrderByCreatedAtDesc(
+                        room.getId(), MessageType.SCHEDULE, PageRequest.of(0, 1));
         Message latestMessage = null;
         if (latestMessages == null || latestMessages.isEmpty()) {
             room.setLastMessage(null);
@@ -481,6 +484,25 @@ public class ChatServiceImpl implements ChatService {
         }
         chatRoomRepository.save(room);
         return latestMessage;
+    }
+
+    private void repairSchedulePreviewsForUser(User user) {
+        List<String> affectedRoomIds = messageRepository
+                .findParticipantRoomIdsWithSchedulePreview(user, MessageType.SCHEDULE);
+        if (affectedRoomIds == null || affectedRoomIds.isEmpty()) {
+            return;
+        }
+        affectedRoomIds.forEach(this::repairSchedulePreview);
+    }
+
+    private void repairSchedulePreview(String roomId) {
+        ChatRoom room = chatRoomRepository.findByIdForUpdate(roomId).orElse(null);
+        if (room == null || room.getLastMessageTime() == null
+                || !messageRepository.existsByChatRoom_IdAndTypeAndCreatedAt(
+                        roomId, MessageType.SCHEDULE, room.getLastMessageTime())) {
+            return;
+        }
+        refreshRoomLastMessage(room);
     }
 
     private void publishChangedMessage(MessageDto messageDto, ChatRoom room, Message latestMessage) {
@@ -541,7 +563,9 @@ public class ChatServiceImpl implements ChatService {
             throw new ChatException("Access denied to chat room " + roomId, HttpStatus.FORBIDDEN);
         }
 
-        Page<Message> messagesPage = messageRepository.findByChatRoomIdOrderByCreatedAtDesc(roomId, pageable);
+        Page<Message> messagesPage = messageRepository
+                .findVisibleByChatRoomIdOrderByCreatedAtDesc(
+                        roomId, MessageType.SCHEDULE, pageable);
         
         List<Message> messagesToUpdate = new java.util.ArrayList<>();
         List<String> readMessageIds = new java.util.ArrayList<>();
@@ -686,7 +710,8 @@ public class ChatServiceImpl implements ChatService {
     public long getUnreadCount(String roomId, String userIdString) {
         Long userId = Long.parseLong(userIdString);
         requireParticipant(roomId, userId);
-        return messageRepository.countUnreadMessages(roomId, userId);
+        return messageRepository.countVisibleUnreadMessages(
+                roomId, userId, MessageType.SCHEDULE);
     }
     
     @Override

@@ -181,7 +181,8 @@ class ChatServiceImplTest {
 
         when(userRepository.findById(testUserIdLong)).thenReturn(Optional.of(participantUser));
         when(chatRoomRepository.findById(testRoomId)).thenReturn(Optional.of(testRoom));
-        when(messageRepository.findByChatRoomIdOrderByCreatedAtDesc(testRoomId, pageable)).thenReturn(messagePage);
+        when(messageRepository.findVisibleByChatRoomIdOrderByCreatedAtDesc(
+                testRoomId, Message.MessageType.SCHEDULE, pageable)).thenReturn(messagePage);
         when(messageRepository.saveAll(anyList())).thenAnswer(invocation -> invocation.getArgument(0));
 
 
@@ -194,7 +195,8 @@ class ChatServiceImplTest {
 
         verify(userRepository).findById(testUserIdLong);
         verify(chatRoomRepository).findById(testRoomId);
-        verify(messageRepository).findByChatRoomIdOrderByCreatedAtDesc(testRoomId, pageable);
+        verify(messageRepository).findVisibleByChatRoomIdOrderByCreatedAtDesc(
+                testRoomId, Message.MessageType.SCHEDULE, pageable);
     }
     
     @Test
@@ -211,7 +213,8 @@ class ChatServiceImplTest {
 
         when(userRepository.findById(testUserIdLong)).thenReturn(Optional.of(currentUser));
         when(chatRoomRepository.findById(testRoomId)).thenReturn(Optional.of(testRoom));
-        when(messageRepository.findByChatRoomIdOrderByCreatedAtDesc(testRoomId, pageable)).thenReturn(messagePage);
+        when(messageRepository.findVisibleByChatRoomIdOrderByCreatedAtDesc(
+                testRoomId, Message.MessageType.SCHEDULE, pageable)).thenReturn(messagePage);
         when(messageRepository.saveAll(anyList())).thenAnswer(invocation -> invocation.getArgument(0));
 
         Page<MessageDto> result = chatService.getMessagesByRoomId(testRoomId, testUserIdString, pageable);
@@ -325,7 +328,7 @@ class ChatServiceImplTest {
                 () -> chatService.getUnreadCount(room.getId(), "9"));
 
         assertEquals(HttpStatus.NOT_FOUND, exception.getStatus());
-        verify(messageRepository, never()).countUnreadMessages(anyString(), any());
+        verify(messageRepository, never()).countVisibleUnreadMessages(anyString(), any(), any());
     }
 
     @Test
@@ -333,7 +336,8 @@ class ChatServiceImplTest {
         when(userRepository.findById(creator.getId())).thenReturn(Optional.of(creator));
         when(chatRoomRepository.findByIdAndParticipantsContaining(room.getId(), creator))
                 .thenReturn(Optional.of(room));
-        when(messageRepository.countUnreadMessages(room.getId(), creator.getId())).thenReturn(3L);
+        when(messageRepository.countVisibleUnreadMessages(
+                room.getId(), creator.getId(), Message.MessageType.SCHEDULE)).thenReturn(3L);
 
         assertEquals(3L, chatService.getUnreadCount(room.getId(), creator.getId().toString()));
     }
