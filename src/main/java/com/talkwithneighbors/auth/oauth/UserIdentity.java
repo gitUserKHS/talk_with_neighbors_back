@@ -53,6 +53,15 @@ public class UserIdentity {
     @Column(name = "last_login_at", nullable = false)
     private Instant lastLoginAt;
 
+    /**
+     * Durable marker for the one-time legacy nickname assessment. Without this
+     * marker a user-selected nickname that resembles the old generated format
+     * could be incorrectly challenged again on every login or restart.
+     */
+    @Column(name = "nickname_setup_assessed", nullable = false,
+            columnDefinition = "boolean default false")
+    private boolean nicknameSetupAssessed;
+
     public static UserIdentity create(
             OAuthProvider provider, String subject, User user, String email, Instant now) {
         UserIdentity identity = new UserIdentity();
@@ -63,10 +72,15 @@ public class UserIdentity {
         identity.providerEmailVerified = true;
         identity.createdAt = now;
         identity.lastLoginAt = now;
+        identity.nicknameSetupAssessed = true;
         return identity;
     }
 
     public void recordLogin(Instant now) {
         this.lastLoginAt = now;
+    }
+
+    public void markNicknameSetupAssessed() {
+        this.nicknameSetupAssessed = true;
     }
 }

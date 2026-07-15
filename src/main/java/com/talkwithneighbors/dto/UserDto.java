@@ -21,6 +21,7 @@ public class UserDto {
     private Double longitude;
     private String address;
     private List<String> interests;
+    private boolean nicknameSetupRequired;
     private boolean profileComplete;
     private int profileCompletion;
 
@@ -37,7 +38,9 @@ public class UserDto {
         dto.setLongitude(user.getLongitude());
         dto.setAddress(user.getAddress());
         dto.setInterests(user.getInterests());
-        dto.setProfileComplete(user.isProfileComplete());
+        boolean nicknameSetupRequired = Boolean.TRUE.equals(user.getNicknameSetupRequired());
+        dto.setNicknameSetupRequired(nicknameSetupRequired);
+        dto.setProfileComplete(user.isProfileComplete() && !nicknameSetupRequired);
         int completed = 0;
         if (user.getAge() != null) completed++;
         if (user.getGender() != null && !user.getGender().isBlank()) completed++;

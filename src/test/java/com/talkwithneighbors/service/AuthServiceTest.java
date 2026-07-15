@@ -9,6 +9,7 @@ import com.talkwithneighbors.exception.AuthException;
 import com.talkwithneighbors.repository.UserRepository;
 import com.talkwithneighbors.security.UserSession;
 import com.talkwithneighbors.auth.email.EmailVerificationService;
+import com.talkwithneighbors.auth.nickname.NicknameException;
 import com.talkwithneighbors.auth.session.SessionIssuer;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -18,6 +19,8 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.http.HttpStatus;
 
 import java.util.Optional;
 
@@ -190,5 +193,105 @@ class AuthServiceTest {
 
         // when & then
         assertThrows(AuthException.class, () -> authService.getCurrentUser(sessionId));
+    }
+
+    @Test
+    void requiredNicknameCanBeReplacedWithoutResettingTheSession() {
+        testUser.setUsername("kakao_defaultname");
+        testUser.setNicknameSetupRequired(true);
+        UserSession session = UserSession.of(
+                testUser.getId(), testUser.getUsername(), testUser.getEmail(), testUser.getUsername());
+        when(redisSessionService.getSession("test-session-id")).thenReturn(session);
+        when(userRepository.findById(testUser.getId())).thenReturn(Optional.of(testUser));
+        when(userRepository.existsByUsernameAndIdNot("다윤이웃", testUser.getId())).thenReturn(false);
+        when(userRepository.saveAndFlush(testUser)).thenReturn(testUser);
+
+        UserDto updated = authService.updateNickname("test-session-id", "  다윤이웃  ");
+
+        assertEquals("다윤이웃", updated.getUsername());
+        assertFalse(updated.isNicknameSetupRequired());
+        verify(redisSessionService).updateSession("test-session-id", testUser.getId(), "다윤이웃");
+    }
+
+    @Test
+    void requiredNicknameCannotConfirmTheGeneratedValueUnchanged() {
+        testUser.setUsername("kakao_defaultname");
+        testUser.setNicknameSetupRequired(true);
+        UserSession session = UserSession.of(
+                testUser.getId(), testUser.getUsername(), testUser.getEmail(), testUser.getUsername());
+        when(redisSessionService.getSession("test-session-id")).thenReturn(session);
+        when(userRepository.findById(testUser.getId())).thenReturn(Optional.of(testUser));
+
+        NicknameException exception = assertThrows(NicknameException.class, () ->
+                authService.updateNickname("test-session-id", "kakao_defaultname"));
+
+        assertEquals("NICKNAME_CHANGE_REQUIRED", exception.getCode());
+        verify(userRepository, never()).saveAndFlush(any());
+    }
+
+    @Test
+    void nicknameRejectsWhitespaceAndInvisibleFormatCharacters() {
+        testUser.setNicknameSetupRequired(true);
+        UserSession session = UserSession.of(
+                testUser.getId(), testUser.getUsername(), testUser.getEmail(), testUser.getUsername());
+        when(redisSessionService.getSession("test-session-id")).thenReturn(session);
+        when(userRepository.findById(testUser.getId())).thenReturn(Optional.of(testUser));
+
+        NicknameException spaced = assertThrows(NicknameException.class, () ->
+                authService.updateNickname("test-session-id", "다 윤"));
+        NicknameException invisible = assertThrows(NicknameException.class, () ->
+                authService.updateNickname("test-session-id", "다\u200B윤"));
+
+        assertEquals("NICKNAME_INVALID", spaced.getCode());
+        assertEquals("NICKNAME_INVALID", invisible.getCode());
+        verify(userRepository, never()).saveAndFlush(any());
+    }
+
+    @Test
+    void duplicateNicknameReturnsStableConflict() {
+        testUser.setNicknameSetupRequired(true);
+        UserSession session = UserSession.of(
+                testUser.getId(), testUser.getUsername(), testUser.getEmail(), testUser.getUsername());
+        when(redisSessionService.getSession("test-session-id")).thenReturn(session);
+        when(userRepository.findById(testUser.getId())).thenReturn(Optional.of(testUser));
+        when(userRepository.existsByUsernameAndIdNot("이미사용중", testUser.getId())).thenReturn(true);
+
+        NicknameException exception = assertThrows(NicknameException.class, () ->
+                authService.updateNickname("test-session-id", "이미사용중"));
+
+        assertEquals("USERNAME_ALREADY_IN_USE", exception.getCode());
+        assertEquals(HttpStatus.CONFLICT, exception.getStatus());
+    }
+
+    @Test
+    void databaseNicknameRaceAlsoReturnsStableConflict() {
+        testUser.setNicknameSetupRequired(true);
+        UserSession session = UserSession.of(
+                testUser.getId(), testUser.getUsername(), testUser.getEmail(), testUser.getUsername());
+        when(redisSessionService.getSession("test-session-id")).thenReturn(session);
+        when(userRepository.findById(testUser.getId())).thenReturn(Optional.of(testUser));
+        when(userRepository.existsByUsernameAndIdNot("동시요청", testUser.getId())).thenReturn(false);
+        when(userRepository.saveAndFlush(testUser)).thenThrow(new DataIntegrityViolationException("duplicate"));
+
+        NicknameException exception = assertThrows(NicknameException.class, () ->
+                authService.updateNickname("test-session-id", "동시요청"));
+
+        assertEquals("USERNAME_ALREADY_IN_USE", exception.getCode());
+    }
+
+    @Test
+    void nicknameSetupKeepsAnOtherwiseCompleteProfileIncomplete() {
+        testUser.setNicknameSetupRequired(true);
+        testUser.setAge(24);
+        testUser.setGender("female");
+        testUser.setInterests(java.util.List.of("산책"));
+        testUser.setLatitude(37.5);
+        testUser.setLongitude(127.0);
+        testUser.setAddress("서울시");
+
+        UserDto dto = UserDto.fromEntity(testUser);
+
+        assertTrue(dto.isNicknameSetupRequired());
+        assertFalse(dto.isProfileComplete());
     }
 }

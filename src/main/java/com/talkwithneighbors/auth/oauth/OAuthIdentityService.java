@@ -13,6 +13,7 @@ import java.security.SecureRandom;
 import java.time.Instant;
 import java.util.Base64;
 import java.util.Locale;
+import java.util.regex.Pattern;
 
 @Service
 public class OAuthIdentityService {
@@ -38,8 +39,16 @@ public class OAuthIdentityService {
         Instant now = Instant.now();
         UserIdentity existing = identities.findByProviderAndProviderSubject(provider, subject).orElse(null);
         if (existing != null) {
+            User user = existing.getUser();
+            if (!existing.isNicknameSetupAssessed()) {
+                if (!Boolean.TRUE.equals(user.getNicknameSetupRequired())
+                        && isGeneratedUsername(provider, subject, user.getUsername())) {
+                    user.setNicknameSetupRequired(true);
+                }
+                existing.markNicknameSetupAssessed();
+            }
             existing.recordLogin(now);
-            return existing.getUser();
+            return user;
         }
         if (!emailVerified || rawEmail == null || rawEmail.isBlank()) {
             throw new OAuthLoginException(
@@ -64,6 +73,7 @@ public class OAuthIdentityService {
         user.setPassword(passwordEncoder.encode(Base64.getUrlEncoder().withoutPadding().encodeToString(passwordBytes)));
         user.setAccountType(UserAccountType.MEMBER);
         user.setPasswordLoginEnabled(false);
+        user.setNicknameSetupRequired(true);
         user.setAge(0);
         user.setGender("");
         user.setLatitude(0.0);
@@ -75,13 +85,23 @@ public class OAuthIdentityService {
     }
 
     private String uniqueUsername(OAuthProvider provider, String subject) {
-        String compact = subject.replaceAll("[^A-Za-z0-9]", "");
-        if (compact.isBlank()) compact = Integer.toUnsignedString(subject.hashCode(), 36);
-        compact = compact.substring(0, Math.min(12, compact.length())).toLowerCase(Locale.ROOT);
-        String base = provider.name().toLowerCase(Locale.ROOT) + "_" + compact;
+        String base = usernameBase(provider, subject);
         String candidate = base;
         int suffix = 1;
         while (users.existsByUsername(candidate)) candidate = base + "_" + suffix++;
         return candidate;
+    }
+
+    static boolean isGeneratedUsername(OAuthProvider provider, String subject, String username) {
+        if (username == null) return false;
+        String base = usernameBase(provider, subject);
+        return username.equals(base) || username.matches(Pattern.quote(base) + "_[1-9][0-9]*");
+    }
+
+    private static String usernameBase(OAuthProvider provider, String subject) {
+        String compact = subject.replaceAll("[^A-Za-z0-9]", "");
+        if (compact.isBlank()) compact = Integer.toUnsignedString(subject.hashCode(), 36);
+        compact = compact.substring(0, Math.min(12, compact.length())).toLowerCase(Locale.ROOT);
+        return provider.name().toLowerCase(Locale.ROOT) + "_" + compact;
     }
 }

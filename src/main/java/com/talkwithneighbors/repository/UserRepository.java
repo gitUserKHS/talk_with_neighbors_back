@@ -39,6 +39,8 @@ public interface UserRepository extends JpaRepository<User, Long> {
      */
     boolean existsByUsername(String username);
 
+    boolean existsByUsernameAndIdNot(String username, Long id);
+
     /**
      * 특정 위치 주변의 사용자들을 조회합니다.
      * Haversine 공식을 사용하여 지구 표면의 거리를 계산합니다.
@@ -102,4 +104,4 @@ public interface UserRepository extends JpaRepository<User, Long> {
      * @return 사용자 목록
      */
     List<User> findAllByUsernameIn(List<String> usernames);
-} 
+}

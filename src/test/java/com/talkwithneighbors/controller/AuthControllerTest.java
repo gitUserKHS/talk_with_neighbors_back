@@ -15,6 +15,7 @@ import com.talkwithneighbors.service.SessionValidationService;
 import com.talkwithneighbors.auth.email.EmailVerificationCookieFactory;
 import com.talkwithneighbors.auth.session.SessionCookieFactory;
 import com.talkwithneighbors.auth.email.EmailVerificationProperties;
+import com.talkwithneighbors.auth.nickname.NicknameException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -279,6 +280,46 @@ class AuthControllerTest {
                 .content(objectMapper.writeValueAsString(userDto)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.email").value(userDto.getEmail()));
+    }
+
+    @Test
+    void updateNicknameUsesTheAuthenticatedSession() throws Exception {
+        userDto.setUsername("다윤이웃");
+        userDto.setNicknameSetupRequired(false);
+        when(authService.updateNickname("test-session-id", "다윤이웃")).thenReturn(userDto);
+
+        mockMvc.perform(put("/api/auth/profile/nickname")
+                .cookie(new Cookie("TWN_SESSION", "test-session-id"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"nickname\":\"다윤이웃\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.username").value("다윤이웃"))
+                .andExpect(jsonPath("$.nicknameSetupRequired").value(false));
+    }
+
+    @Test
+    void shortNicknameReturnsValidationError() throws Exception {
+        mockMvc.perform(put("/api/auth/profile/nickname")
+                .cookie(new Cookie("TWN_SESSION", "test-session-id"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"nickname\":\"한\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("validation_failed"))
+                .andExpect(jsonPath("$.fields.nickname").exists());
+    }
+
+    @Test
+    void duplicateNicknameReturnsStableConflictCode() throws Exception {
+        when(authService.updateNickname("test-session-id", "이미사용중"))
+                .thenThrow(new NicknameException(
+                        "USERNAME_ALREADY_IN_USE", "이미 사용 중인 닉네임이에요.", HttpStatus.CONFLICT));
+
+        mockMvc.perform(put("/api/auth/profile/nickname")
+                .cookie(new Cookie("TWN_SESSION", "test-session-id"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"nickname\":\"이미사용중\"}"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("USERNAME_ALREADY_IN_USE"));
     }
 
     @Test
