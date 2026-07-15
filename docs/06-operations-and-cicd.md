@@ -86,7 +86,9 @@ PR과 `main`, `codex/**` 푸시에서 다음을 실행한다.
 
 `main`과 버전 태그의 백엔드 이미지는 별도 품질 작업이 성공한 뒤에만 GHCR에 게시된다. 게시 이미지에는 provenance와 SBOM attestation을 생성한다. 백엔드 `main`의 **Publish backend image**가 성공하면 배포 워크플로가 자동으로 이어지고, 검증을 통과해 승격된 백엔드·프런트엔드 `:main` 태그를 각각 OCI digest로 해석한 뒤 그 불변 주소만 k3s에 전달한다. 실패하거나 취소된 게시 실행은 배포하지 않는다.
 
-백엔드 `main` 게시 성공은 백엔드 저장소 안에서 전체 배포를 시작한다. 프런트 `main` 게시 성공은 최소 권한 GitHub App 토큰으로 백엔드 저장소에 `frontend_image_published` 이벤트를 보낸다. 이 경로는 이벤트의 출처·SHA·run ID와 현재 검증된 프런트 `:main` digest를 다시 확인한 뒤, 기존 k3s의 프런트 Deployment만 교체한다. DB·Redis·백엔드·Kubernetes Secret·migration·백업은 실행하지 않으며, 실제 배포 중인 백엔드 digest와 새 프런트 digest를 릴리스 이력에 기록한다. 늦게 도착한 이벤트도 최신 프런트를 이전 버전으로 되돌리지 않는다. 두 저장소가 함께 바뀌고 API 호환 순서가 필요한 릴리스는 프런트 게시 성공 뒤 백엔드를 병합한다.
+백엔드 `main` 게시 성공은 백엔드 저장소 안에서 전체 배포를 시작한다. 프런트 `main` 게시 성공은 최소 권한 GitHub App 토큰으로 백엔드 저장소에 `frontend_image_published` 이벤트를 보낸다. 이 경로는 이벤트의 출처·SHA·run ID와 현재 검증된 프런트 `:main` digest를 다시 확인한 뒤, 기존 k3s의 프런트 Deployment만 교체한다. DB·Redis·백엔드·Kubernetes Secret·migration·백업은 실행하지 않으며, 실제 배포 중인 백엔드 digest와 새 프런트 digest를 릴리스 이력에 기록한다. 늦게 도착한 이벤트도 최신 프런트를 이전 버전으로 되돌리지 않는다.
+
+모임 달력처럼 기존 쓰기를 canonical 데이터로 흡수해야 하는 릴리스는 세 번으로 나눈다. **PR A**에는 호환 백엔드 코드와 테스트만 넣고 migration 파일은 제외한 채 먼저 배포하여 모든 이전 Pod가 교체됐는지 검증한다. 이 버전은 이전 프런트의 프로필 일정 쓰기를 같은 트랜잭션에서 canonical calendar에도 동기화한다. **PR B**는 그 `main` 위에 `V2026071601`과 migration gate·테스트·운영 문서만 추가해 backfill을 실행한다. migration은 후보 방을 `FOR UPDATE`로 잠그고 하나의 트랜잭션에서 변환하므로 이미 배포된 호환 백엔드 쓰기와 경합해도 중간 snapshot을 덮어쓰지 않는다. 마지막으로 새 프런트를 병합·배포한다. PR A와 PR B를 합치면 현재 배포 스크립트가 새 backend rollout보다 migration을 먼저 실행하므로 허용하지 않는다.
 
 ## AWS 인프라와 k3s 배포
 
