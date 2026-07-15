@@ -9,6 +9,8 @@ locals {
   ubuntu_arm64_ami_id = nonsensitive(data.aws_ssm_parameter.ubuntu_arm64_ami.value)
   media_prefix        = "media/"
   deployment_prefix   = "deployments/"
+  mysql_backup_prefix = "mysql/"
+  release_prefix      = "releases/successful/"
   k3s_version_url     = replace(var.k3s_version, "+", "%2B")
 
   github_oidc_provider_arn = coalesce(
@@ -428,6 +430,80 @@ resource "aws_s3_bucket_lifecycle_configuration" "deployment" {
       days_after_initiation = 1
     }
   }
+
+  rule {
+    id     = "expire-release-history"
+    status = "Enabled"
+
+    filter {
+      prefix = local.release_prefix
+    }
+
+    expiration {
+      days = var.release_history_retention_days
+    }
+
+    abort_incomplete_multipart_upload {
+      days_after_initiation = 1
+    }
+  }
+}
+
+resource "random_id" "mysql_backup_bucket_suffix" {
+  byte_length = 6
+
+  keepers = {
+    project_name = var.project_name
+  }
+}
+
+resource "aws_s3_bucket" "mysql_backup" {
+  bucket        = "${var.project_name}-mysql-backup-${random_id.mysql_backup_bucket_suffix.hex}"
+  force_destroy = false
+
+  tags = {
+    Name      = "${var.project_name}-mysql-backup"
+    Component = "database-backup"
+  }
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+resource "aws_s3_bucket_versioning" "mysql_backup" {
+  bucket = aws_s3_bucket.mysql_backup.id
+
+  versioning_configuration {
+    status = "Enabled"
+  }
+}
+
+resource "aws_s3_bucket_lifecycle_configuration" "mysql_backup" {
+  bucket = aws_s3_bucket.mysql_backup.id
+
+  rule {
+    id     = "expire-verified-mysql-backups"
+    status = "Enabled"
+
+    filter {
+      prefix = local.mysql_backup_prefix
+    }
+
+    expiration {
+      days = var.mysql_backup_retention_days
+    }
+
+    noncurrent_version_expiration {
+      noncurrent_days = var.mysql_backup_retention_days
+    }
+
+    abort_incomplete_multipart_upload {
+      days_after_initiation = 1
+    }
+  }
+
+  depends_on = [aws_s3_bucket_versioning.mysql_backup]
 }
 
 resource "aws_s3_bucket_ownership_controls" "media" {
@@ -440,6 +516,14 @@ resource "aws_s3_bucket_ownership_controls" "media" {
 
 resource "aws_s3_bucket_ownership_controls" "deployment" {
   bucket = aws_s3_bucket.deployment.id
+
+  rule {
+    object_ownership = "BucketOwnerEnforced"
+  }
+}
+
+resource "aws_s3_bucket_ownership_controls" "mysql_backup" {
+  bucket = aws_s3_bucket.mysql_backup.id
 
   rule {
     object_ownership = "BucketOwnerEnforced"
@@ -464,6 +548,15 @@ resource "aws_s3_bucket_public_access_block" "deployment" {
   restrict_public_buckets = true
 }
 
+resource "aws_s3_bucket_public_access_block" "mysql_backup" {
+  bucket = aws_s3_bucket.mysql_backup.id
+
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
 resource "aws_s3_bucket_server_side_encryption_configuration" "media" {
   bucket = aws_s3_bucket.media.id
 
@@ -476,6 +569,16 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "media" {
 
 resource "aws_s3_bucket_server_side_encryption_configuration" "deployment" {
   bucket = aws_s3_bucket.deployment.id
+
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
+  }
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "mysql_backup" {
+  bucket = aws_s3_bucket.mysql_backup.id
 
   rule {
     apply_server_side_encryption_by_default {
@@ -542,6 +645,35 @@ resource "aws_s3_bucket_policy" "deployment_tls" {
   policy = data.aws_iam_policy_document.deployment_bucket_tls.json
 }
 
+data "aws_iam_policy_document" "mysql_backup_bucket_tls" {
+  statement {
+    sid    = "DenyInsecureTransport"
+    effect = "Deny"
+
+    actions = ["s3:*"]
+    resources = [
+      aws_s3_bucket.mysql_backup.arn,
+      "${aws_s3_bucket.mysql_backup.arn}/*"
+    ]
+
+    principals {
+      type        = "*"
+      identifiers = ["*"]
+    }
+
+    condition {
+      test     = "Bool"
+      variable = "aws:SecureTransport"
+      values   = ["false"]
+    }
+  }
+}
+
+resource "aws_s3_bucket_policy" "mysql_backup_tls" {
+  bucket = aws_s3_bucket.mysql_backup.id
+  policy = data.aws_iam_policy_document.mysql_backup_bucket_tls.json
+}
+
 resource "aws_budgets_budget" "monthly" {
   count = var.budget_alert_email == null ? 0 : 1
 
@@ -596,9 +728,13 @@ resource "aws_iam_role_policy_attachment" "ssm_core" {
 
 data "aws_iam_policy_document" "instance_s3" {
   statement {
-    sid       = "ReadBucketLocations"
-    actions   = ["s3:GetBucketLocation"]
-    resources = [aws_s3_bucket.media.arn, aws_s3_bucket.deployment.arn]
+    sid     = "ReadBucketLocations"
+    actions = ["s3:GetBucketLocation"]
+    resources = [
+      aws_s3_bucket.media.arn,
+      aws_s3_bucket.deployment.arn,
+      aws_s3_bucket.mysql_backup.arn
+    ]
   }
 
   statement {
@@ -637,6 +773,29 @@ data "aws_iam_policy_document" "instance_s3" {
       "s3:GetObject"
     ]
     resources = ["${aws_s3_bucket.deployment.arn}/${local.deployment_prefix}*"]
+  }
+
+  statement {
+    sid       = "ListMysqlBackupPrefix"
+    actions   = ["s3:ListBucket"]
+    resources = [aws_s3_bucket.mysql_backup.arn]
+
+    condition {
+      test     = "StringLike"
+      variable = "s3:prefix"
+      values   = ["mysql", "mysql/*"]
+    }
+  }
+
+  statement {
+    sid = "ReadAndWriteMysqlBackupsWithoutDelete"
+    actions = [
+      "s3:AbortMultipartUpload",
+      "s3:GetObject",
+      "s3:ListMultipartUploadParts",
+      "s3:PutObject"
+    ]
+    resources = ["${aws_s3_bucket.mysql_backup.arn}/${local.mysql_backup_prefix}*"]
   }
 }
 
@@ -797,14 +956,19 @@ data "aws_iam_policy_document" "github_deploy" {
   }
 
   statement {
-    sid       = "ListDeploymentPrefix"
+    sid       = "ListDeploymentAndReleasePrefixes"
     actions   = ["s3:ListBucket"]
     resources = [aws_s3_bucket.deployment.arn]
 
     condition {
       test     = "StringLike"
       variable = "s3:prefix"
-      values   = ["deployments", "deployments/*"]
+      values = [
+        "deployments",
+        "deployments/*",
+        "releases/successful",
+        "releases/successful/*"
+      ]
     }
   }
 
@@ -817,6 +981,15 @@ data "aws_iam_policy_document" "github_deploy" {
       "s3:PutObject"
     ]
     resources = ["${aws_s3_bucket.deployment.arn}/${local.deployment_prefix}*"]
+  }
+
+  statement {
+    sid = "ReadAndRecordSuccessfulReleases"
+    actions = [
+      "s3:GetObject",
+      "s3:PutObject"
+    ]
+    resources = ["${aws_s3_bucket.deployment.arn}/${local.release_prefix}*"]
   }
 
   statement {
@@ -861,4 +1034,82 @@ resource "aws_iam_role_policy" "github_deploy" {
   name   = "ec2-k3s-deploy"
   role   = aws_iam_role.github_deploy.id
   policy = data.aws_iam_policy_document.github_deploy.json
+}
+
+data "aws_iam_policy_document" "github_monitor_assume_role" {
+  statement {
+    effect  = "Allow"
+    actions = ["sts:AssumeRoleWithWebIdentity"]
+
+    principals {
+      type        = "Federated"
+      identifiers = [local.github_oidc_provider_arn]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "token.actions.githubusercontent.com:aud"
+      values   = ["sts.amazonaws.com"]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "token.actions.githubusercontent.com:sub"
+      values   = ["repo:${var.github_owner}/${var.github_repository}:environment:production-monitor"]
+    }
+  }
+}
+
+resource "aws_iam_role" "github_monitor" {
+  name                 = "${var.project_name}-github-monitor"
+  assume_role_policy   = data.aws_iam_policy_document.github_monitor_assume_role.json
+  max_session_duration = 3600
+
+  tags = {
+    Component = "monitoring"
+  }
+}
+
+data "aws_iam_policy_document" "github_monitor" {
+  statement {
+    sid       = "ReadTargetNodeState"
+    actions   = ["ec2:DescribeInstances"]
+    resources = ["*"]
+
+    # DescribeInstances does not support resource-level permissions.
+    condition {
+      test     = "StringEquals"
+      variable = "ec2:Region"
+      values   = [var.aws_region]
+    }
+  }
+
+  statement {
+    sid     = "RunBackupCheckOnTargetNode"
+    actions = ["ssm:SendCommand"]
+    resources = [
+      aws_instance.app.arn,
+      "arn:${data.aws_partition.current.partition}:ssm:${var.aws_region}::document/AWS-RunShellScript"
+    ]
+  }
+
+  statement {
+    sid       = "ReadBackupCheckInvocation"
+    actions   = ["ssm:GetCommandInvocation"]
+    resources = ["*"]
+
+    # GetCommandInvocation has no IAM resource type, so constrain its wildcard
+    # to the deployment Region instead.
+    condition {
+      test     = "StringEquals"
+      variable = "aws:RequestedRegion"
+      values   = [var.aws_region]
+    }
+  }
+}
+
+resource "aws_iam_role_policy" "github_monitor" {
+  name   = "mysql-backup-monitor"
+  role   = aws_iam_role.github_monitor.id
+  policy = data.aws_iam_policy_document.github_monitor.json
 }

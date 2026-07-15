@@ -54,6 +54,7 @@ public class HobbyMeetupService {
     private final ChatScheduleRsvpRepository chatScheduleRsvpRepository;
     private final OfflineNotificationService offlineNotificationService;
     private final ObjectMapper objectMapper;
+    private final ChatService chatService;
 
     @Transactional(readOnly = true)
     public Page<HobbyMeetupDto> findMeetups(Long currentUserId, String keyword, String interest, Pageable pageable) {
@@ -130,9 +131,91 @@ public class HobbyMeetupService {
         return toDto(chatRoomRepository.save(room), creator);
     }
 
+    @Transactional(readOnly = true)
+    public HobbyMeetupDto getMeetup(Long currentUserId, String roomId) {
+        User currentUser = getUser(currentUserId);
+        ChatRoom room = getPublicMeetup(roomId);
+        if (room.getCreator() != null
+                && userBlockRepository.existsBetween(currentUserId, room.getCreator().getId())) {
+            throw new ChatException("Hobby meetup not found.", HttpStatus.NOT_FOUND);
+        }
+        return toDto(room, currentUser);
+    }
+
+    public HobbyMeetupDto updateMeetup(
+            Long requesterId,
+            String roomId,
+            CreateHobbyMeetupRequest request
+    ) {
+        User requester = getUser(requesterId);
+        ChatRoom room = requireOwnedPublicMeetupForUpdate(roomId, requesterId);
+        if (request == null || request.getTitle() == null || request.getTitle().trim().isEmpty()) {
+            throw new ChatException("모임 이름을 입력해 줘.", HttpStatus.BAD_REQUEST);
+        }
+        List<String> tags = cleanTags(request.getInterestTags());
+        if (tags.isEmpty()) {
+            throw new ChatException("관심사 태그를 하나 이상 입력해 줘.", HttpStatus.BAD_REQUEST);
+        }
+        Integer maxParticipants = request.getMaxParticipants();
+        if (maxParticipants == null || maxParticipants < 2 || maxParticipants > 50) {
+            throw new ChatException("모집 인원은 2명 이상 50명 이하로 입력해 줘.", HttpStatus.BAD_REQUEST);
+        }
+        if (maxParticipants < room.getParticipants().size()) {
+            throw new ChatException(
+                    "모집 인원은 현재 참여자 수보다 적게 줄일 수 없어.",
+                    HttpStatus.CONFLICT);
+        }
+        if ((request.getLatitude() == null) != (request.getLongitude() == null)) {
+            throw new ChatException("위도와 경도는 함께 입력해 줘.", HttpStatus.BAD_REQUEST);
+        }
+
+        LocalDateTime scheduledAtUtc = toUtcLocalDateTime(request.getScheduledAt());
+        LocalDateTime registrationDeadlineUtc = toUtcLocalDateTime(request.getRegistrationDeadline());
+        LocalDateTime nowUtc = LocalDateTime.now(ZoneOffset.UTC);
+        if (scheduledAtUtc != null && scheduledAtUtc.isBefore(nowUtc)) {
+            throw new ChatException("모임 일정은 현재 이후여야 해.", HttpStatus.BAD_REQUEST);
+        }
+        if (registrationDeadlineUtc != null && scheduledAtUtc != null
+                && registrationDeadlineUtc.isAfter(scheduledAtUtc)) {
+            throw new ChatException(
+                    "신청 마감은 모임 시작 이후로 정할 수 없어.",
+                    HttpStatus.BAD_REQUEST);
+        }
+        Integer durationMinutes = request.getDurationMinutes() != null
+                ? request.getDurationMinutes() : 120;
+        if (durationMinutes < 30 || durationMinutes > 1440) {
+            throw new ChatException("모임 시간은 30분 이상 1,440분 이하로 입력해 줘.", HttpStatus.BAD_REQUEST);
+        }
+
+        LocalDateTime previousScheduledAt = room.getScheduledAt();
+        room.setName(request.getTitle().trim());
+        room.setDescription(trimToNull(request.getDescription()));
+        room.setInterestTags(tags);
+        room.setLocation(trimToNull(request.getLocation()));
+        room.setLocationAddress(trimToNull(request.getLocationAddress()));
+        room.setLatitude(request.getLatitude());
+        room.setLongitude(request.getLongitude());
+        room.setKakaoPlaceId(trimToNull(request.getKakaoPlaceId()));
+        room.setMaxParticipants(maxParticipants);
+        room.setScheduledAt(scheduledAtUtc);
+        room.setMeetupTimeBasis(MeetupTimeBasis.UTC);
+        room.setDurationMinutes(durationMinutes);
+        room.setRegistrationDeadline(registrationDeadlineUtc);
+        if (!Objects.equals(previousScheduledAt, scheduledAtUtc)) {
+            room.setReminderSentAt(null);
+        }
+        promoteWaitlistedUsers(room);
+        return toDto(chatRoomRepository.save(room), requester);
+    }
+
+    public void deleteMeetup(Long requesterId, String roomId) {
+        requireOwnedPublicMeetupForUpdate(roomId, requesterId);
+        chatService.deleteRoom(roomId, requesterId);
+    }
+
     public HobbyMeetupDto joinMeetup(Long userId, String roomId) {
         User user = getUser(userId);
-        ChatRoom room = getPublicMeetup(roomId);
+        ChatRoom room = getPublicMeetupForUpdate(roomId);
         if (room.getCreator() != null && userBlockRepository.existsBetween(userId, room.getCreator().getId())) {
             throw new ChatException("차단 관계인 사용자의 모임에는 참여할 수 없어요.", HttpStatus.FORBIDDEN);
         }
@@ -141,31 +224,53 @@ public class HobbyMeetupService {
             throw new ChatException("모임 신청이 마감되었어요.", HttpStatus.CONFLICT);
         }
 
-        if (!room.getParticipants().contains(user)) {
-            if (room.getMaxParticipants() != null && room.getParticipants().size() >= room.getMaxParticipants()) {
-                if (!meetupWaitlistRepository.existsByRoom_IdAndUser_Id(roomId, userId)) {
-                    meetupWaitlistRepository.save(new MeetupWaitlistEntry(room, user));
-                }
-                return toDto(room, user);
+        boolean promoted = promoteWaitlistedUsers(room);
+        if (room.getParticipants().contains(user)) {
+            if (meetupWaitlistRepository.existsByRoom_IdAndUser_Id(roomId, userId)) {
+                meetupWaitlistRepository.deleteByRoom_IdAndUser_Id(roomId, userId);
             }
-            room.getParticipants().add(user);
-            chatRoomRepository.save(room);
-            if (room.getCreator() == null
-                    || room.getCreator().getAccountType() != UserAccountType.SYSTEM) {
-                domainEventPublisher.publish(MeetupJoinedEvent.create(
-                        room.getId(),
-                        room.getName(),
-                        user.getId(),
-                        room.getCreator() != null ? room.getCreator().getId() : null
-                ));
+            if (promoted) {
+                chatRoomRepository.save(room);
             }
+            return toDto(room, user);
+        }
+
+        if (room.getMaxParticipants() != null
+                && room.getParticipants().size() >= room.getMaxParticipants()) {
+            if (!meetupWaitlistRepository.existsByRoom_IdAndUser_Id(roomId, userId)) {
+                meetupWaitlistRepository.save(new MeetupWaitlistEntry(room, user));
+            }
+            if (promoted) {
+                chatRoomRepository.save(room);
+            }
+            return toDto(room, user);
+        }
+
+        room.getParticipants().add(user);
+        if (meetupWaitlistRepository.existsByRoom_IdAndUser_Id(roomId, userId)) {
+            meetupWaitlistRepository.deleteByRoom_IdAndUser_Id(roomId, userId);
+        }
+        chatRoomRepository.save(room);
+        if (room.getCreator() == null
+                || room.getCreator().getAccountType() != UserAccountType.SYSTEM) {
+            domainEventPublisher.publish(MeetupJoinedEvent.create(
+                    room.getId(),
+                    room.getName(),
+                    user.getId(),
+                    room.getCreator() != null ? room.getCreator().getId() : null
+            ));
         }
         return toDto(room, user);
     }
 
     public void leaveMeetup(Long userId, String roomId) {
         User user = getUser(userId);
-        ChatRoom room = getPublicMeetup(roomId);
+        ChatRoom room = getPublicMeetupForUpdate(roomId);
+        if (room.getCreator() != null && Objects.equals(room.getCreator().getId(), userId)) {
+            throw new ChatException(
+                    "모임장은 나가기 대신 모임 삭제를 이용해 줘.",
+                    HttpStatus.CONFLICT);
+        }
         if (chatScheduleRepository.existsByRoom_IdAndCreator_IdAndStatusAndStartsAtAfter(
                 roomId, userId, ChatScheduleStatus.SCHEDULED, Instant.now())) {
             throw new ChatException(
@@ -180,19 +285,7 @@ public class HobbyMeetupService {
             throw new ChatException("You are not a participant in this hobby meetup.", HttpStatus.BAD_REQUEST);
         }
         chatScheduleRsvpRepository.deleteBySchedule_Room_IdAndUser_Id(roomId, userId);
-        meetupWaitlistRepository.findFirstByRoom_IdOrderByCreatedAtAsc(roomId).ifPresent(entry -> {
-            room.getParticipants().add(entry.getUser());
-            meetupWaitlistRepository.delete(entry);
-            try {
-                OfflineNotification notification = offlineNotificationService.saveOfflineNotification(
-                        entry.getUser().getId(), OfflineNotification.NotificationType.MEETUP_WAITLIST_PROMOTED,
-                        objectMapper.writeValueAsString(Map.of("roomId", room.getId(), "title", room.getName())),
-                        "대기하던 모임에 자리가 나서 참여가 확정됐어.", "/meetups", 9);
-                offlineNotificationService.sendPendingNotifications(entry.getUser().getId());
-            } catch (Exception ignored) {
-                // 승급 트랜잭션은 알림 직렬화 실패 때문에 되돌리지 않는다.
-            }
-        });
+        promoteWaitlistedUsers(room);
         chatRoomRepository.save(room);
     }
 
@@ -243,6 +336,80 @@ public class HobbyMeetupService {
             throw new ChatException("Hobby meetup not found.", HttpStatus.NOT_FOUND);
         }
         return room;
+    }
+
+    private ChatRoom requireOwnedPublicMeetupForUpdate(String roomId, Long requesterId) {
+        ChatRoom room = getPublicMeetupForUpdate(roomId);
+        if (room.getCreator() == null || !Objects.equals(room.getCreator().getId(), requesterId)) {
+            throw new ChatException("모임장만 이 모임을 수정하거나 삭제할 수 있어.", HttpStatus.FORBIDDEN);
+        }
+        return room;
+    }
+
+    private ChatRoom getPublicMeetupForUpdate(String roomId) {
+        ChatRoom room = chatRoomRepository.findByIdForUpdate(roomId)
+                .orElseThrow(() -> new ChatException("Hobby meetup not found.", HttpStatus.NOT_FOUND));
+        if (room.getType() != ChatRoomType.GROUP || !room.isPublicRoom()) {
+            throw new ChatException("Hobby meetup not found.", HttpStatus.NOT_FOUND);
+        }
+        return room;
+    }
+
+    /**
+     * Offers every open seat to the oldest eligible wait-list entry before a
+     * new caller can take it. Callers hold the room's pessimistic write lock.
+     */
+    private boolean promoteWaitlistedUsers(ChatRoom room) {
+        if (MeetupTimePolicy.isPast(
+                room.getRegistrationDeadline(), room.getMeetupTimeBasis(), Instant.now())) {
+            return false;
+        }
+        List<MeetupWaitlistEntry> entries =
+                meetupWaitlistRepository.findByRoom_IdOrderByCreatedAtAsc(room.getId());
+        if (entries == null || entries.isEmpty()) {
+            return false;
+        }
+
+        int availableSlots = room.getMaxParticipants() == null
+                ? Integer.MAX_VALUE
+                : Math.max(0, room.getMaxParticipants() - room.getParticipants().size());
+        boolean changed = false;
+        for (MeetupWaitlistEntry entry : entries) {
+            User waitlistedUser = entry.getUser();
+            if (waitlistedUser == null || room.getParticipants().contains(waitlistedUser)) {
+                meetupWaitlistRepository.delete(entry);
+                changed = true;
+                continue;
+            }
+            if (room.getCreator() != null && userBlockRepository.existsBetween(
+                    waitlistedUser.getId(), room.getCreator().getId())) {
+                meetupWaitlistRepository.delete(entry);
+                changed = true;
+                continue;
+            }
+            if (availableSlots <= 0) {
+                break;
+            }
+
+            room.getParticipants().add(waitlistedUser);
+            meetupWaitlistRepository.delete(entry);
+            notifyWaitlistPromotion(room, waitlistedUser);
+            availableSlots--;
+            changed = true;
+        }
+        return changed;
+    }
+
+    private void notifyWaitlistPromotion(ChatRoom room, User user) {
+        try {
+            OfflineNotification notification = offlineNotificationService.saveOfflineNotification(
+                    user.getId(), OfflineNotification.NotificationType.MEETUP_WAITLIST_PROMOTED,
+                    objectMapper.writeValueAsString(Map.of("roomId", room.getId(), "title", room.getName())),
+                    "대기하던 모임에 자리가 나서 참여가 확정됐어.", "/meetups", 9);
+            offlineNotificationService.sendPendingNotifications(user.getId());
+        } catch (Exception ignored) {
+            // 승급 트랜잭션은 알림 직렬화 실패 때문에 되돌리지 않는다.
+        }
     }
 
     private User getUser(Long userId) {

@@ -4,7 +4,9 @@ import com.talkwithneighbors.dto.feed.CreateCommentRequest;
 import com.talkwithneighbors.dto.feed.CreateFeedPostRequest;
 import com.talkwithneighbors.dto.feed.FeedPostDto;
 import com.talkwithneighbors.dto.feed.PostCommentDto;
-import com.talkwithneighbors.domain.event.FeedPostDeletedEvent;
+import com.talkwithneighbors.dto.feed.UpdateCommentRequest;
+import com.talkwithneighbors.dto.feed.UpdateFeedPostRequest;
+import com.talkwithneighbors.domain.event.MediaFilesDeletedEvent;
 import com.talkwithneighbors.entity.FeedMediaType;
 import com.talkwithneighbors.entity.FeedPost;
 import com.talkwithneighbors.entity.FeedPostMedia;
@@ -18,10 +20,11 @@ import com.talkwithneighbors.repository.PostLikeRepository;
 import com.talkwithneighbors.repository.UserRepository;
 import com.talkwithneighbors.repository.UserBlockRepository;
 import com.talkwithneighbors.repository.HiddenContentRepository;
+import com.talkwithneighbors.service.media.storage.MediaStoragePath;
+import com.talkwithneighbors.outbox.DomainEventPublisher;
 import com.talkwithneighbors.entity.SafetyTargetType;
 import com.talkwithneighbors.dto.mypage.MyCommentActivityDto;
 import lombok.RequiredArgsConstructor;
-import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.Pageable;
@@ -46,7 +49,7 @@ public class FeedService {
     private final CompatibilityScoreService compatibilityScoreService;
     private final UserBlockRepository userBlockRepository;
     private final HiddenContentRepository hiddenContentRepository;
-    private final ApplicationEventPublisher applicationEventPublisher;
+    private final DomainEventPublisher domainEventPublisher;
 
     @Transactional(readOnly = true)
     public Page<FeedPostDto> getFeed(Long currentUserId, Pageable pageable) {
@@ -73,12 +76,18 @@ public class FeedService {
         if (request == null || isBlank(request.getImageUrl())) {
             throw new MatchingException("이미지 URL을 입력해 주세요.", HttpStatus.BAD_REQUEST);
         }
+        String imageUrl = request.getImageUrl().trim();
+        if (MediaStoragePath.fromPublicUrl(imageUrl).isPresent()) {
+            throw new MatchingException(
+                    "서비스에 저장된 미디어는 파일 업로드로만 게시할 수 있어.",
+                    HttpStatus.BAD_REQUEST);
+        }
 
         FeedPost post = new FeedPost();
         post.setAuthor(author);
-        post.setImageUrl(request.getImageUrl().trim());
+        post.setImageUrl(imageUrl);
         post.setMedia(new java.util.ArrayList<>(List.of(
-                new FeedPostMedia(request.getImageUrl().trim(), FeedMediaType.IMAGE)
+                new FeedPostMedia(imageUrl, FeedMediaType.IMAGE)
         )));
         post.setCaption(request.getCaption() != null ? request.getCaption().trim() : "");
         post.setInterestTags(cleanTags(request.getInterestTags()));
@@ -138,6 +147,34 @@ public class FeedService {
         return toDto(post, getUser(currentUserId));
     }
 
+    @Transactional
+    public FeedPostDto updatePost(Long currentUserId, String postId, UpdateFeedPostRequest request) {
+        User currentUser = getUser(currentUserId);
+        FeedPost post = getPost(postId);
+        requireAuthor(currentUserId, post);
+        if (request == null || (request.caption() == null
+                && request.interestTags() == null
+                && request.publicPreview() == null)) {
+            throw new MatchingException("수정할 피드 항목을 하나 이상 입력해 줘.", HttpStatus.BAD_REQUEST);
+        }
+
+        if (request.caption() != null) {
+            String caption = request.caption().trim();
+            if (caption.length() > 2000) {
+                throw new MatchingException("캡션은 2,000자 이하로 입력해 줘.", HttpStatus.BAD_REQUEST);
+            }
+            post.setCaption(caption);
+        }
+        if (request.interestTags() != null) {
+            post.setInterestTags(cleanTags(request.interestTags()));
+        }
+        if (request.publicPreview() != null) {
+            post.setPublicPreview(request.publicPreview());
+        }
+
+        return toDto(feedPostRepository.save(post), currentUser);
+    }
+
     @Transactional(readOnly = true)
     public List<PostCommentDto> getComments(Long currentUserId, String postId) {
         FeedPost post = getPost(postId);
@@ -163,6 +200,27 @@ public class FeedService {
         comment.setPost(post);
         comment.setAuthor(getUser(currentUserId));
         comment.setContent(request.getContent().trim());
+        return PostCommentDto.fromEntity(postCommentRepository.save(comment));
+    }
+
+    @Transactional
+    public PostCommentDto updateComment(
+            Long currentUserId,
+            String commentId,
+            UpdateCommentRequest request
+    ) {
+        getUser(currentUserId);
+        PostComment comment = postCommentRepository.findById(commentId)
+                .orElseThrow(() -> new MatchingException("댓글을 찾을 수 없어.", HttpStatus.NOT_FOUND));
+        requireCommentAuthor(currentUserId, comment);
+        String content = request == null || request.content() == null ? "" : request.content().trim();
+        if (content.isEmpty()) {
+            throw new MatchingException("댓글 내용을 입력해 줘.", HttpStatus.BAD_REQUEST);
+        }
+        if (content.length() > 1000) {
+            throw new MatchingException("댓글은 1,000자 이하로 입력해 줘.", HttpStatus.BAD_REQUEST);
+        }
+        comment.setContent(content);
         return PostCommentDto.fromEntity(postCommentRepository.save(comment));
     }
 
@@ -195,34 +253,44 @@ public class FeedService {
     @Transactional
     public void deletePost(Long currentUserId, String postId) {
         FeedPost post = getPost(postId);
-        if (post.getAuthor() == null || !Objects.equals(post.getAuthor().getId(), currentUserId)) {
-            throw new MatchingException("내가 작성한 게시글만 삭제할 수 있어요.", HttpStatus.FORBIDDEN);
-        }
+        requireAuthor(currentUserId, post);
         postLikeRepository.deleteByPost_Id(postId);
         postCommentRepository.deleteByPost_Id(postId);
         List<String> mediaUrls = post.getMedia() == null
                 ? List.of()
                 : post.getMedia().stream()
+                        .filter(this::isServerOwnedFeedUpload)
                         .flatMap(media -> java.util.stream.Stream.of(media.getUrl(), media.getThumbnailUrl()))
                         .filter(Objects::nonNull)
                         .filter(url -> !url.isBlank())
+                        .filter(this::isFeedStorageUrl)
                         .distinct()
                         .toList();
-        if (mediaUrls.isEmpty() && post.getImageUrl() != null) {
-            mediaUrls = List.of(post.getImageUrl());
-        }
         feedPostRepository.delete(post);
-        applicationEventPublisher.publishEvent(new FeedPostDeletedEvent(postId, mediaUrls));
+        if (!mediaUrls.isEmpty()) {
+            domainEventPublisher.publish(MediaFilesDeletedEvent.create(
+                    "FeedPost", postId, mediaUrls));
+        }
     }
 
     @Transactional
     public void deleteComment(Long currentUserId, String commentId) {
         PostComment comment = postCommentRepository.findById(commentId)
                 .orElseThrow(() -> new MatchingException("댓글을 찾을 수 없어요.", HttpStatus.NOT_FOUND));
-        if (comment.getAuthor() == null || !Objects.equals(comment.getAuthor().getId(), currentUserId)) {
-            throw new MatchingException("내가 작성한 댓글만 삭제할 수 있어요.", HttpStatus.FORBIDDEN);
-        }
+        requireCommentAuthor(currentUserId, comment);
         postCommentRepository.delete(comment);
+    }
+
+    private void requireAuthor(Long currentUserId, FeedPost post) {
+        if (post.getAuthor() == null || !Objects.equals(post.getAuthor().getId(), currentUserId)) {
+            throw new MatchingException("작성자만 이 게시글을 수정하거나 삭제할 수 있어.", HttpStatus.FORBIDDEN);
+        }
+    }
+
+    private void requireCommentAuthor(Long currentUserId, PostComment comment) {
+        if (comment.getAuthor() == null || !Objects.equals(comment.getAuthor().getId(), currentUserId)) {
+            throw new MatchingException("작성자만 이 댓글을 수정하거나 삭제할 수 있어.", HttpStatus.FORBIDDEN);
+        }
     }
 
     private FeedPostDto toDto(FeedPost post, User currentUser) {
@@ -280,5 +348,24 @@ public class FeedService {
 
     private boolean isBlank(String value) {
         return value == null || value.trim().isEmpty();
+    }
+
+    /**
+     * Only multipart uploads carry server-produced object metadata. JSON posts
+     * deliberately do not, so a client-controlled URL can never become an S3
+     * deletion capability.
+     */
+    private boolean isServerOwnedFeedUpload(FeedPostMedia media) {
+        return media != null
+                && media.getContentType() != null
+                && !media.getContentType().isBlank()
+                && media.getSizeBytes() != null
+                && isFeedStorageUrl(media.getUrl());
+    }
+
+    private boolean isFeedStorageUrl(String url) {
+        return MediaStoragePath.fromPublicUrl(url)
+                .map(relativeKey -> relativeKey.startsWith("feed/"))
+                .orElse(false);
     }
 }

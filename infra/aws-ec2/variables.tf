@@ -177,6 +177,36 @@ variable "media_noncurrent_version_expiration_days" {
   }
 }
 
+variable "mysql_backup_retention_days" {
+  description = "Days to retain verified MySQL logical backups in the private deployment bucket."
+  type        = number
+  default     = 30
+
+  validation {
+    condition = (
+      var.mysql_backup_retention_days >= 7 &&
+      var.mysql_backup_retention_days <= 36500 &&
+      floor(var.mysql_backup_retention_days) == var.mysql_backup_retention_days
+    )
+    error_message = "mysql_backup_retention_days must be a whole number between 7 and 36500."
+  }
+}
+
+variable "release_history_retention_days" {
+  description = "Days to retain immutable successful-release manifests used for audited rollback."
+  type        = number
+  default     = 90
+
+  validation {
+    condition = (
+      var.release_history_retention_days >= 7 &&
+      var.release_history_retention_days <= 36500 &&
+      floor(var.release_history_retention_days) == var.release_history_retention_days
+    )
+    error_message = "release_history_retention_days must be a whole number between 7 and 36500."
+  }
+}
+
 variable "budget_alert_email" {
   description = "Email address for optional AWS Budgets alerts. Leave null to skip budget creation and email confirmation."
   type        = string

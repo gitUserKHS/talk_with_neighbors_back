@@ -5,15 +5,30 @@ on:
     workflows: ["Publish backend image"]
     types: [completed]
     branches: [main]
+  repository_dispatch:
+    types: [frontend_image_published]
   workflow_dispatch:
     inputs:
+      deployment_mode:
+        description: "Normal deploy or guarded rollback to a successful release; rollback never downgrades the database"
+        required: true
+        default: deploy
+        type: choice
+        options:
+          - deploy
+          - rollback_latest_successful
+          - rollback_previous_successful
       backend_image:
         description: "Backend digest, ghcr.io/gituserkhs/talk_with_neighbors_back@sha256:..."
-        required: true
+        required: false
         type: string
       frontend_image:
         description: "Frontend digest, ghcr.io/gituserkhs/talk_with_neighbors_front@sha256:..."
-        required: true
+        required: false
+        type: string
+      rollback_confirmation:
+        description: "Rollback only: ROLLBACK_WITHOUT_DATABASE_DOWNGRADE"
+        required: false
         type: string
       public_origin:
         description: "Optional HTTPS DNS origin; blank uses https://talk-with-neighbors.duckdns.org; diagnose://k3s collects a redacted one-day diagnostic artifact"
@@ -336,6 +351,208 @@ jobs:
         shell: bash
         run: shred -u -- "$RUNNER_TEMP/k3s-diagnostics.txt" 2>/dev/null || rm -f -- "$RUNNER_TEMP/k3s-diagnostics.txt"
 
+  deploy_frontend:
+    name: Deploy verified frontend only
+    if: >-
+      github.event_name == 'repository_dispatch' &&
+      github.event.action == 'frontend_image_published' &&
+      github.event.client_payload.source_repository == 'gitUserKHS/talk_with_neighbors_front' &&
+      github.event.client_payload.source_ref == 'refs/heads/main' &&
+      github.event.sender.type == 'Bot' &&
+      (vars.FRONTEND_DISPATCH_ACTOR == '' || github.actor == vars.FRONTEND_DISPATCH_ACTOR)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: production
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION || 'ap-northeast-2' }}
+      AWS_ROLE_ARN: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+      INSTANCE_ID: ${{ vars.EC2_INSTANCE_ID }}
+      DEPLOY_BUCKET: ${{ vars.DEPLOY_BUCKET }}
+      PUBLIC_ORIGIN_INPUT: ${{ vars.PUBLIC_ORIGIN || 'https://talk-with-neighbors.duckdns.org' }}
+      DISPATCH_FRONTEND_IMAGE: ${{ github.event.client_payload.frontend_image }}
+      SOURCE_REPOSITORY: ${{ github.event.client_payload.source_repository }}
+      SOURCE_REF: ${{ github.event.client_payload.source_ref }}
+      SOURCE_SHA: ${{ github.event.client_payload.source_sha }}
+      SOURCE_RUN_ID: ${{ github.event.client_payload.source_run_id }}
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - name: Validate frontend dispatch provenance
+        env:
+          GHCR_USERNAME: ${{ secrets.GHCR_USERNAME }}
+          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_REPOSITORY" == "gitUserKHS/talk_with_neighbors_front" ]] || { echo "Invalid frontend source repository" >&2; exit 1; }
+          [[ "$SOURCE_REF" == "refs/heads/main" ]] || { echo "Invalid frontend source ref" >&2; exit 1; }
+          [[ "$SOURCE_SHA" =~ ^[a-f0-9]{40}$ ]] || { echo "Invalid frontend source SHA" >&2; exit 1; }
+          [[ "$SOURCE_RUN_ID" =~ ^[0-9]+$ ]] || { echo "Invalid frontend source run id" >&2; exit 1; }
+          [[ "$DISPATCH_FRONTEND_IMAGE" =~ ^ghcr\.io/gituserkhs/talk_with_neighbors_front@sha256:[a-f0-9]{64}$ ]] || { echo "Invalid dispatched frontend digest" >&2; exit 1; }
+          [[ -z "$GHCR_USERNAME" && -z "$GHCR_TOKEN" || -n "$GHCR_USERNAME" && -n "$GHCR_TOKEN" ]] || { echo "Set both GHCR credentials or neither" >&2; exit 1; }
+
+      - name: Set up Buildx for immutable frontend tag resolution
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+
+      - name: Resolve the current verified frontend main digest
+        id: frontend_target
+        env:
+          GHCR_USERNAME: ${{ secrets.GHCR_USERNAME }}
+          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ghcr_logged_in=false
+          cleanup_ghcr_login() {
+            if [[ "$ghcr_logged_in" == "true" ]]; then
+              docker logout ghcr.io >/dev/null 2>&1 || true
+            fi
+          }
+          trap cleanup_ghcr_login EXIT
+          if [[ -n "$GHCR_USERNAME" ]]; then
+            printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$GHCR_USERNAME" --password-stdin >/dev/null
+            ghcr_logged_in=true
+          fi
+          digest="$(docker buildx imagetools inspect ghcr.io/gituserkhs/talk_with_neighbors_front:main | awk '$1 == "Digest:" && digest == "" { digest = $2 } END { print digest }')"
+          [[ "$digest" =~ ^sha256:[a-f0-9]{64}$ ]] || { echo "Could not resolve the verified frontend :main tag" >&2; exit 1; }
+          frontend_image="ghcr.io/gituserkhs/talk_with_neighbors_front@${digest}"
+          if [[ "$DISPATCH_FRONTEND_IMAGE" != "$frontend_image" ]]; then
+            printf 'stale=true\n' >> "$GITHUB_OUTPUT"
+            echo "Stale frontend dispatch ignored successfully: its digest is no longer the verified :main image."
+            exit 0
+          fi
+          printf 'stale=false\n' >> "$GITHUB_OUTPUT"
+          printf 'FRONTEND_IMAGE=%s\n' "$DISPATCH_FRONTEND_IMAGE" >> "$GITHUB_ENV"
+
+      - name: Report stale frontend dispatch no-op
+        if: steps.frontend_target.outputs.stale == 'true'
+        shell: bash
+        run: |
+          {
+            echo "### Stale frontend dispatch ignored"
+            echo "A newer verified frontend image already owns the \`:main\` tag, so this event completed successfully without touching AWS or the cluster."
+            printf -- "- Ignored frontend: \`%s\`\n" "$DISPATCH_FRONTEND_IMAGE"
+            printf -- "- Ignored source: \`%s@%s\` (run %s)\n" "$SOURCE_REPOSITORY" "$SOURCE_SHA" "$SOURCE_RUN_ID"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Validate frontend-only deployment configuration
+        if: steps.frontend_target.outputs.stale != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$INSTANCE_ID" =~ ^i-[a-f0-9]{8,17}$ ]] || { echo "EC2_INSTANCE_ID is missing or invalid" >&2; exit 1; }
+          [[ -n "$AWS_ROLE_ARN" ]] || { echo "AWS_DEPLOY_ROLE_ARN is required" >&2; exit 1; }
+          [[ "$DEPLOY_BUCKET" =~ ^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$ ]] || { echo "Invalid deployment bucket" >&2; exit 1; }
+
+      - name: Configure short-lived AWS credentials
+        if: steps.frontend_target.outputs.stale != 'true'
+        uses: aws-actions/configure-aws-credentials@517a711dbcd0e402f90c77e7e2f81e849156e31d # v6
+        with:
+          role-to-assume: ${{ env.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: github-frontend-only-${{ github.run_id }}
+
+      - name: Resolve and prepare the existing EC2 cluster
+        if: steps.frontend_target.outputs.stale != 'true'
+        id: instance
+        shell: bash
+        run: |
+          set -euo pipefail
+          state="$(aws ec2 describe-instances --instance-ids "$INSTANCE_ID" --query 'Reservations[0].Instances[0].State.Name' --output text)"
+          if [[ "$state" == "stopped" ]]; then
+            aws ec2 start-instances --instance-ids "$INSTANCE_ID" >/dev/null
+            aws ec2 wait instance-running --instance-ids "$INSTANCE_ID"
+            state=running
+          elif [[ "$state" == "pending" ]]; then
+            aws ec2 wait instance-running --instance-ids "$INSTANCE_ID"
+            state=running
+          fi
+          [[ "$state" == "running" ]] || { echo "EC2 is $state; frontend-only deployment requires the existing node to be startable" >&2; exit 1; }
+
+          public_ip="$(aws ec2 describe-instances --instance-ids "$INSTANCE_ID" --query 'Reservations[0].Instances[0].PublicIpAddress' --output text)"
+          [[ "$public_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "EC2 has no public IPv4 address" >&2; exit 1; }
+          elastic_ip="$(aws ec2 describe-addresses --filters "Name=instance-id,Values=$INSTANCE_ID" --query 'Addresses[0].PublicIp' --output text)"
+          [[ "$elastic_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ && "$elastic_ip" == "$public_ip" ]] || { echo "The existing node does not have its declared Elastic IP" >&2; exit 1; }
+          public_origin="$PUBLIC_ORIGIN_INPUT"
+          [[ "$public_origin" =~ ^https://([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]] || { echo "PUBLIC_ORIGIN must be a lowercase HTTPS DNS origin without a port or path" >&2; exit 1; }
+          public_host="${public_origin#https://}"
+
+          dns_matches=false
+          for _ in {1..30}; do
+            resolved_ips="$(getent ahostsv4 "$public_host" 2>/dev/null | awk '{print $1}' | sort -u)"
+            if [[ "$resolved_ips" == "$elastic_ip" ]]; then
+              dns_matches=true
+              break
+            fi
+            sleep 10
+          done
+          [[ "$dns_matches" == "true" ]] || { echo "The public DNS record does not point to the existing Elastic IP" >&2; exit 1; }
+
+          ping_status=""
+          for _ in {1..60}; do
+            ping_status="$(aws ssm describe-instance-information --filters "Key=InstanceIds,Values=$INSTANCE_ID" --query 'InstanceInformationList[0].PingStatus' --output text 2>/dev/null || true)"
+            [[ "$ping_status" == "Online" ]] && break
+            sleep 5
+          done
+          [[ "$ping_status" == "Online" ]] || { echo "The existing node did not become available through SSM" >&2; exit 1; }
+          printf 'public_origin=%s\n' "$public_origin" >> "$GITHUB_OUTPUT"
+
+      - name: Update only the existing frontend deployment
+        if: steps.frontend_target.outputs.stale != 'true'
+        id: frontend
+        shell: bash
+        run: >-
+          bash deploy/k8s/deploy-frontend-via-ssm.sh
+          "$INSTANCE_ID"
+          "$FRONTEND_IMAGE"
+          "${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          "$GITHUB_OUTPUT"
+
+      - name: Run strict public smoke tests
+        if: steps.frontend_target.outputs.stale != 'true'
+        env:
+          PUBLIC_ORIGIN: ${{ steps.instance.outputs.public_origin }}
+        shell: bash
+        run: bash deploy/k8s/public-smoke.sh "$PUBLIC_ORIGIN"
+
+      - name: Record successful frontend-only release
+        if: steps.frontend_target.outputs.stale != 'true'
+        id: release
+        env:
+          BACKEND_IMAGE: ${{ steps.frontend.outputs.backend_image }}
+          PUBLIC_ORIGIN: ${{ steps.instance.outputs.public_origin }}
+        shell: bash
+        run: |
+          bash deploy/k8s/release-history.sh record \
+            "$DEPLOY_BUCKET" \
+            "${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            "$BACKEND_IMAGE" \
+            "$FRONTEND_IMAGE" \
+            "$GITHUB_EVENT_NAME" \
+            "$SOURCE_REPOSITORY" \
+            "$SOURCE_REF" \
+            "$SOURCE_SHA" \
+            "$SOURCE_RUN_ID" \
+            "$PUBLIC_ORIGIN" \
+            "false" \
+            "frontend_only"
+
+      - name: Write frontend-only deployment summary
+        if: steps.frontend_target.outputs.stale != 'true'
+        env:
+          BACKEND_IMAGE: ${{ steps.frontend.outputs.backend_image }}
+          PUBLIC_ORIGIN: ${{ steps.instance.outputs.public_origin }}
+        shell: bash
+        run: |
+          {
+            echo "### Frontend-only EC2 k3s deployment succeeded"
+            printf -- "- URL: <%s>\n" "$PUBLIC_ORIGIN"
+            printf -- "- Existing backend: \`%s\`\n" "$BACKEND_IMAGE"
+            printf -- "- Frontend: \`%s\`\n" "$FRONTEND_IMAGE"
+            printf -- "- Frontend source: \`%s@%s\` (run %s)\n" "$SOURCE_REPOSITORY" "$SOURCE_SHA" "$SOURCE_RUN_ID"
+            printf -- "- Release manifest: \`%s\`\n" "${{ steps.release.outputs.release_manifest_key }}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
   deploy:
     name: Deploy through AWS Systems Manager
     if: >-
@@ -357,6 +574,8 @@ jobs:
       INSTANCE_ID: ${{ vars.EC2_INSTANCE_ID }}
       DEPLOY_BUCKET: ${{ vars.DEPLOY_BUCKET }}
       MEDIA_BUCKET: ${{ vars.MEDIA_BUCKET }}
+      MYSQL_BACKUP_BUCKET: ${{ vars.MYSQL_BACKUP_BUCKET }}
+      DEPLOYMENT_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.deployment_mode || 'deploy' }}
       BACKEND_IMAGE: ${{ github.event_name == 'workflow_dispatch' && inputs.backend_image || '' }}
       FRONTEND_IMAGE: ${{ github.event_name == 'workflow_dispatch' && inputs.frontend_image || '' }}
       PUBLIC_ORIGIN_INPUT: ${{ (github.event_name == 'workflow_dispatch' && inputs.public_origin) || vars.PUBLIC_ORIGIN || 'https://talk-with-neighbors.duckdns.org' }}
@@ -364,6 +583,8 @@ jobs:
       START_IF_STOPPED: ${{ github.event_name == 'workflow_run' && 'true' || inputs.start_if_stopped }}
       REINITIALIZE_K3S_NETWORK: ${{ github.event_name == 'workflow_run' && 'false' || inputs.reinitialize_k3s_network }}
       REINITIALIZE_CONFIRMATION: ${{ github.event_name == 'workflow_dispatch' && inputs.reinitialize_confirmation || '' }}
+      ROLLBACK_CONFIRMATION: ${{ github.event_name == 'workflow_dispatch' && inputs.rollback_confirmation || '' }}
+      RUN_DATABASE_MIGRATIONS: "true"
       K3S_NETWORK_REINITIALIZE_ALLOWED: ${{ vars.K3S_NETWORK_REINITIALIZE_ALLOWED }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
@@ -412,7 +633,7 @@ jobs:
           } >> "$GITHUB_ENV"
           echo "Resolved verified backend and frontend main tags to immutable OCI digests."
 
-      - name: Validate deployment inputs
+      - name: Validate deployment request and secrets
         env:
           MYSQL_PASSWORD: ${{ secrets.MYSQL_PASSWORD }}
           MYSQL_ROOT_PASSWORD: ${{ secrets.MYSQL_ROOT_PASSWORD }}
@@ -428,10 +649,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          [[ "$BACKEND_IMAGE" =~ ^ghcr\.io/gituserkhs/talk_with_neighbors_back@sha256:[a-f0-9]{64}$ ]] || { echo "Invalid backend digest" >&2; exit 1; }
-          [[ "$FRONTEND_IMAGE" =~ ^ghcr\.io/gituserkhs/talk_with_neighbors_front@sha256:[a-f0-9]{64}$ ]] || { echo "Invalid frontend digest" >&2; exit 1; }
           [[ "$INSTANCE_ID" =~ ^i-[a-f0-9]{8,17}$ ]] || { echo "EC2_INSTANCE_ID is missing or invalid" >&2; exit 1; }
-          [[ -n "$AWS_ROLE_ARN" && -n "$DEPLOY_BUCKET" && -n "$MEDIA_BUCKET" ]] || { echo "AWS role and S3 bucket variables are required" >&2; exit 1; }
+          [[ -n "$AWS_ROLE_ARN" && -n "$DEPLOY_BUCKET" && -n "$MEDIA_BUCKET" && -n "$MYSQL_BACKUP_BUCKET" ]] || { echo "AWS role and S3 bucket variables are required" >&2; exit 1; }
+          [[ "$DEPLOY_BUCKET" =~ ^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$ ]] || { echo "Invalid deployment bucket" >&2; exit 1; }
+          [[ "$MYSQL_BACKUP_BUCKET" =~ ^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$ ]] || { echo "Invalid MySQL backup bucket" >&2; exit 1; }
           (( ${#MYSQL_PASSWORD} >= 16 )) || { echo "MYSQL_PASSWORD must contain at least 16 characters" >&2; exit 1; }
           (( ${#MYSQL_ROOT_PASSWORD} >= 16 )) || { echo "MYSQL_ROOT_PASSWORD must contain at least 16 characters" >&2; exit 1; }
           [[ "$AUTH_EMAIL_REQUIRED" == "true" || "$AUTH_EMAIL_REQUIRED" == "false" ]] || { echo "AUTH_EMAIL_REQUIRED must be true or false" >&2; exit 1; }
@@ -442,6 +663,21 @@ jobs:
           [[ -z "$GOOGLE_OAUTH_CLIENT_ID" && -z "$GOOGLE_OAUTH_CLIENT_SECRET" || -n "$GOOGLE_OAUTH_CLIENT_ID" && -n "$GOOGLE_OAUTH_CLIENT_SECRET" ]] || { echo "Set both Google OAuth secrets or neither" >&2; exit 1; }
           [[ -z "$KAKAO_OAUTH_CLIENT_ID" && -z "$KAKAO_OAUTH_CLIENT_SECRET" || -n "$KAKAO_OAUTH_CLIENT_ID" && -n "$KAKAO_OAUTH_CLIENT_SECRET" ]] || { echo "Set both Kakao OAuth secrets or neither" >&2; exit 1; }
           [[ -z "$GHCR_USERNAME" && -z "$GHCR_TOKEN" || -n "$GHCR_USERNAME" && -n "$GHCR_TOKEN" ]] || { echo "Set both GHCR credentials or neither" >&2; exit 1; }
+          case "$DEPLOYMENT_MODE" in
+            deploy)
+              [[ -z "$ROLLBACK_CONFIRMATION" ]] || { echo "Clear rollback_confirmation for a normal deploy" >&2; exit 1; }
+              ;;
+            rollback_latest_successful|rollback_previous_successful)
+              [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]] || { echo "Rollback is manual-only" >&2; exit 1; }
+              [[ "$ROLLBACK_CONFIRMATION" == "ROLLBACK_WITHOUT_DATABASE_DOWNGRADE" ]] || { echo "The rollback database-safety confirmation is invalid" >&2; exit 1; }
+              [[ -z "$BACKEND_IMAGE" && -z "$FRONTEND_IMAGE" ]] || { echo "Rollback resolves recorded digests; clear manual image inputs" >&2; exit 1; }
+              [[ "$REINITIALIZE_K3S_NETWORK" == "false" ]] || { echo "Rollback cannot reinitialize the k3s network" >&2; exit 1; }
+              ;;
+            *)
+              echo "Invalid deployment mode" >&2
+              exit 1
+              ;;
+          esac
           expected_confirmation="REINITIALIZE_K3S_NETWORK:${INSTANCE_ID}:pods=10.244.0.0/16:services=10.96.0.0/16:dns=10.96.0.10"
           if [[ "$REINITIALIZE_K3S_NETWORK" == "true" ]]; then
             [[ "$K3S_NETWORK_REINITIALIZE_ALLOWED" == "true" ]] || { echo "The production Environment must explicitly set K3S_NETWORK_REINITIALIZE_ALLOWED=true" >&2; exit 1; }
@@ -458,6 +694,23 @@ jobs:
           role-to-assume: ${{ env.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
           role-session-name: github-ec2-k3s-${{ github.run_id }}
+
+      - name: Resolve guarded rollback target
+        if: env.DEPLOYMENT_MODE != 'deploy'
+        shell: bash
+        run: |
+          set -euo pipefail
+          selector=latest
+          [[ "$DEPLOYMENT_MODE" == "rollback_previous_successful" ]] && selector=previous
+          bash deploy/k8s/release-history.sh resolve "$DEPLOY_BUCKET" "$selector" "$GITHUB_ENV"
+
+      - name: Validate immutable deployment images
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$BACKEND_IMAGE" =~ ^ghcr\.io/gituserkhs/talk_with_neighbors_back@sha256:[a-f0-9]{64}$ ]] || { echo "Invalid backend digest" >&2; exit 1; }
+          [[ "$FRONTEND_IMAGE" =~ ^ghcr\.io/gituserkhs/talk_with_neighbors_front@sha256:[a-f0-9]{64}$ ]] || { echo "Invalid frontend digest" >&2; exit 1; }
+          [[ "$RUN_DATABASE_MIGRATIONS" == "true" || "$RUN_DATABASE_MIGRATIONS" == "false" ]] || { echo "Invalid database migration mode" >&2; exit 1; }
 
       - name: Resolve and prepare the EC2 instance
         id: instance
@@ -509,6 +762,7 @@ jobs:
           ACME_EMAIL: ${{ env.ACME_EMAIL }}
           MYSQL_PASSWORD: ${{ secrets.MYSQL_PASSWORD }}
           MYSQL_ROOT_PASSWORD: ${{ secrets.MYSQL_ROOT_PASSWORD }}
+          MYSQL_BACKUP_BUCKET: ${{ env.MYSQL_BACKUP_BUCKET }}
           EMAIL_VERIFICATION_HMAC_SECRET: ${{ secrets.EMAIL_VERIFICATION_HMAC_SECRET }}
           EMAIL_VERIFICATION_FROM: ${{ secrets.EMAIL_VERIFICATION_FROM }}
           AUTH_EMAIL_REQUIRED: ${{ vars.AUTH_EMAIL_REQUIRED || 'false' }}
@@ -533,33 +787,38 @@ jobs:
             "$FRONTEND_IMAGE" \
             "${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
             "$REINITIALIZE_K3S_NETWORK" \
-            "$REINITIALIZE_CONFIRMATION"
+            "$REINITIALIZE_CONFIRMATION" \
+            "$RUN_DATABASE_MIGRATIONS"
 
       - name: Run strict public smoke tests
         env:
           PUBLIC_ORIGIN: ${{ steps.instance.outputs.public_origin }}
-          PUBLIC_HOST: ${{ steps.instance.outputs.public_host }}
+        shell: bash
+        run: bash deploy/k8s/public-smoke.sh "$PUBLIC_ORIGIN"
+
+      - name: Record successful immutable release
+        id: release
+        env:
+          PUBLIC_ORIGIN: ${{ steps.instance.outputs.public_origin }}
+          SOURCE_REPOSITORY: ${{ github.repository }}
+          SOURCE_REF: ${{ github.event_name == 'workflow_run' && 'refs/heads/main' || github.ref }}
+          SOURCE_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+          SOURCE_RUN_ID: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.id || github.run_id }}
         shell: bash
         run: |
-          set -euo pipefail
-          redirect_result="$(curl --show-error --silent --output /dev/null --max-redirs 0 --write-out '%{http_code} %{redirect_url}' "http://${PUBLIC_HOST}/healthz")"
-          read -r redirect_status redirect_url <<<"$redirect_result"
-          [[ "$redirect_status" == "301" || "$redirect_status" == "308" ]] || { echo "HTTP did not return a permanent HTTPS redirect" >&2; exit 1; }
-          [[ "$redirect_url" == "$PUBLIC_ORIGIN/healthz" ]] || { echo "HTTP redirect target was not the canonical HTTPS origin" >&2; exit 1; }
-          health_status="$(curl --fail --show-error --silent --retry 12 --retry-all-errors --retry-delay 5 --output "$RUNNER_TEMP/healthz.txt" --write-out '%{http_code}' "$PUBLIC_ORIGIN/healthz")"
-          [[ "$health_status" == "200" ]] || { echo "healthz returned HTTP $health_status" >&2; exit 1; }
-          [[ "$(tr -d '\r\n' < "$RUNNER_TEMP/healthz.txt")" == "ok" ]] || { echo "healthz returned an unexpected body" >&2; exit 1; }
-          api_status="$(curl --fail --show-error --silent --retry 12 --retry-all-errors --retry-delay 5 --output "$RUNNER_TEMP/api-smoke.json" --write-out '%{http_code}' "$PUBLIC_ORIGIN/api/auth/check-duplicates?username=deploy-smoke")"
-          [[ "$api_status" == "200" ]] || { echo "API smoke test returned HTTP $api_status" >&2; exit 1; }
-          jq -e 'type == "object" and ((.emailExists | type) == "boolean") and ((.usernameExists | type) == "boolean")' "$RUNNER_TEMP/api-smoke.json" >/dev/null
-          public_feed_status="$(curl --fail --show-error --silent --retry 12 --retry-all-errors --retry-delay 5 --output "$RUNNER_TEMP/public-feed.json" --write-out '%{http_code}' "$PUBLIC_ORIGIN/api/public/feed?size=50")"
-          [[ "$public_feed_status" == "200" ]] || { echo "Public feed returned HTTP $public_feed_status" >&2; exit 1; }
-          jq -e 'type == "object" and (.content | type == "array") and (.content | any(.[]; .official == true and (.id | type == "string" and length == 36) and (.media | type == "array" and length > 0) and (has("demo") | not)))' "$RUNNER_TEMP/public-feed.json" >/dev/null
-          public_meetups_status="$(curl --fail --show-error --silent --retry 12 --retry-all-errors --retry-delay 5 --output "$RUNNER_TEMP/public-meetups.json" --write-out '%{http_code}' "$PUBLIC_ORIGIN/api/public/meetups?size=50")"
-          [[ "$public_meetups_status" == "200" ]] || { echo "Public meetups returned HTTP $public_meetups_status" >&2; exit 1; }
-          jq -e 'type == "object" and (.content | type == "array") and (.content | any(.[]; .official == true and (.id | type == "string" and length == 36) and (.location | type == "string" and length > 0) and (.latitude | type == "number") and (.longitude | type == "number") and (has("demo") | not)))' "$RUNNER_TEMP/public-meetups.json" >/dev/null
-          protected_write_status="$(curl --show-error --silent --output /dev/null --write-out '%{http_code}' --request POST --header 'Content-Type: application/json' --data '{}' "$PUBLIC_ORIGIN/api/feed")"
-          [[ "$protected_write_status" == "401" ]] || { echo "Anonymous feed write returned HTTP $protected_write_status instead of 401" >&2; exit 1; }
+          bash deploy/k8s/release-history.sh record \
+            "$DEPLOY_BUCKET" \
+            "${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            "$BACKEND_IMAGE" \
+            "$FRONTEND_IMAGE" \
+            "$GITHUB_EVENT_NAME" \
+            "$SOURCE_REPOSITORY" \
+            "$SOURCE_REF" \
+            "$SOURCE_SHA" \
+            "$SOURCE_RUN_ID" \
+            "$PUBLIC_ORIGIN" \
+            "$RUN_DATABASE_MIGRATIONS" \
+            "$DEPLOYMENT_MODE"
 
       - name: Write deployment summary
         env:
@@ -571,14 +830,16 @@ jobs:
             printf -- "- URL: <%s>\n" "$PUBLIC_ORIGIN"
             printf -- "- Backend: \`%s\`\n" "$BACKEND_IMAGE"
             printf -- "- Frontend: \`%s\`\n" "$FRONTEND_IMAGE"
+            printf -- "- Mode: \`%s\`\n" "$DEPLOYMENT_MODE"
+            printf -- "- Database migrations: \`%s\`\n" "$RUN_DATABASE_MIGRATIONS"
+            printf -- "- Release manifest: \`%s\`\n" "${{ steps.release.outputs.release_manifest_key }}"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Remove runner plaintext files
         if: always()
         shell: bash
         run: |
-          for path in "$RUNNER_TEMP/deploy-bundle.tgz" "$RUNNER_TEMP/healthz.txt" "$RUNNER_TEMP/api-smoke.json" "$RUNNER_TEMP/public-feed.json" "$RUNNER_TEMP/public-meetups.json"; do
-            if [[ -f "$path" ]]; then
-              shred -u -- "$path" 2>/dev/null || rm -f -- "$path"
-            fi
-          done
+          path="$RUNNER_TEMP/deploy-bundle.tgz"
+          if [[ -f "$path" ]]; then
+            shred -u -- "$path" 2>/dev/null || rm -f -- "$path"
+          fi

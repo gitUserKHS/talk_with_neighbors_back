@@ -165,6 +165,23 @@ public class MediaStorageService {
         }
     }
 
+    /**
+     * Deletes objects without swallowing storage failures. Durable outbox
+     * listeners use this variant so an unsuccessful delivery remains pending
+     * and is retried. Object deletion is idempotent in both supported stores.
+     */
+    public void deleteMediaOrThrow(Collection<String> urls) {
+        if (urls == null) {
+            return;
+        }
+        for (String url : urls) {
+            String relativeKey = MediaStoragePath.fromPublicUrl(url).orElse(null);
+            if (relativeKey != null) {
+                objectStorage.delete(relativeKey);
+            }
+        }
+    }
+
     public List<String> attachmentUrls(Collection<MessageAttachment> attachments) {
         if (attachments == null) {
             return List.of();

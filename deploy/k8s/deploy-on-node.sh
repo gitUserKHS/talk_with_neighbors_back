@@ -4,6 +4,7 @@ set -euo pipefail
 readonly BACKEND_IMAGE="${1:-}"
 readonly FRONTEND_IMAGE="${2:-}"
 readonly RELEASE_ID="${3:-}"
+readonly RUN_DATABASE_MIGRATIONS="${4:-true}"
 RELEASE_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 readonly RELEASE_DIR
 # The helper is resolved from the private release directory at runtime.
@@ -143,6 +144,7 @@ trap 'exit 143' TERM
 [[ "$BACKEND_IMAGE" =~ ^ghcr\.io/gituserkhs/talk_with_neighbors_back@sha256:[a-f0-9]{64}$ ]] || { echo "Invalid backend digest" >&2; exit 1; }
 [[ "$FRONTEND_IMAGE" =~ ^ghcr\.io/gituserkhs/talk_with_neighbors_front@sha256:[a-f0-9]{64}$ ]] || { echo "Invalid frontend digest" >&2; exit 1; }
 [[ "$RELEASE_ID" =~ ^[0-9]+-[0-9]+$ ]] || { echo "Invalid release id" >&2; exit 1; }
+[[ "$RUN_DATABASE_MIGRATIONS" == "true" || "$RUN_DATABASE_MIGRATIONS" == "false" ]] || { echo "Invalid database migration mode" >&2; exit 1; }
 
 for _ in {1..120}; do
   if command -v k3s >/dev/null 2>&1 && [[ -f /var/lib/rancher/k3s/server/node-ready ]]; then
@@ -158,6 +160,10 @@ for required in \
   "$RELEASE_DIR/traefik-config.yaml" \
   "$RELEASE_DIR/k3s-network-common.sh" \
   "$RELEASE_DIR/k3s-server-config.yaml" \
+  "$RELEASE_DIR/install-mysql-backup.sh" \
+  "$RELEASE_DIR/mysql-backup.sh" \
+  "$RELEASE_DIR/mysql-backup-restore-verify.sh" \
+  "$RELEASE_DIR/mysql-backup.conf" \
   "$RELEASE_DIR/run-database-migrations.sh" \
   "$RELEASE_DIR/runtime-config.json" \
   "$RELEASE_DIR/app-secrets.json" \
@@ -166,6 +172,10 @@ for required in \
 done
 [[ -d "$RELEASE_DIR/database-migrations" && ! -L "$RELEASE_DIR/database-migrations" ]] || {
   echo "Missing or unsafe database migration directory" >&2
+  exit 1
+}
+[[ -d "$RELEASE_DIR/systemd" && ! -L "$RELEASE_DIR/systemd" ]] || {
+  echo "Missing or unsafe systemd backup unit directory" >&2
   exit 1
 }
 
@@ -207,7 +217,20 @@ elif [[ -f "$NETWORK_MIGRATION_DONE" && ! -f "$MYSQL_RESTORE_DONE" ]]; then
   exit 1
 fi
 
-bash "$RELEASE_DIR/run-database-migrations.sh"
+bash "$RELEASE_DIR/install-mysql-backup.sh" "$RELEASE_DIR"
+if [[ "$RUN_DATABASE_MIGRATIONS" == "true" ]]; then
+  set -a
+  # The generated file contains only a validated bucket name and fixed prefix.
+  # shellcheck disable=SC1091
+  source /etc/talk-with-neighbors/mysql-backup.conf
+  set +a
+  /usr/local/sbin/talk-with-neighbors-mysql-backup \
+    --lock-held \
+    --reason "before-migration-${RELEASE_ID}"
+  bash "$RELEASE_DIR/run-database-migrations.sh"
+else
+  echo "Database migrations skipped for guarded application rollback; the database is never downgraded"
+fi
 
 "${kubectl[@]}" apply -k "$RELEASE_DIR/base"
 "${kubectl[@]}" -n "$NAMESPACE" rollout status deployment/backend --timeout=10m

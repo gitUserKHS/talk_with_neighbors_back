@@ -10,6 +10,7 @@ import lombok.Setter;
 
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
@@ -36,7 +37,10 @@ public class HobbyMeetupDto {
     private Integer participantCount;
     private boolean joined;
     private boolean full;
+    private Long creatorId;
     private String creatorUsername;
+    private boolean canManage;
+    private List<HobbyMeetupParticipantDto> participants;
     private String lastMessage;
     private String lastMessageTime;
     @JsonFormat(shape = JsonFormat.Shape.STRING)
@@ -76,7 +80,22 @@ public class HobbyMeetupDto {
         dto.setJoined(currentUser != null && room.getParticipants() != null
                 && room.getParticipants().stream().anyMatch(user -> user.getId().equals(currentUser.getId())));
         dto.setFull(room.getMaxParticipants() != null && participantCount >= room.getMaxParticipants());
+        Long creatorId = room.getCreator() != null ? room.getCreator().getId() : null;
+        dto.setCreatorId(creatorId);
         dto.setCreatorUsername(room.getCreator() != null ? room.getCreator().getUsername() : null);
+        dto.setCanManage(currentUser != null && Objects.equals(creatorId, currentUser.getId()));
+        dto.setParticipants(room.getParticipants() == null
+                ? List.of()
+                : room.getParticipants().stream()
+                        .sorted(Comparator
+                                .comparing((User participant) -> !Objects.equals(participant.getId(), creatorId))
+                                .thenComparing(User::getUsername, Comparator.nullsLast(String.CASE_INSENSITIVE_ORDER)))
+                        .map(participant -> new HobbyMeetupParticipantDto(
+                                participant.getId(),
+                                participant.getUsername(),
+                                participant.getProfileImage(),
+                                Objects.equals(participant.getId(), creatorId)))
+                        .toList());
         dto.setLastMessage(room.getLastMessage());
         if (room.getLastMessageTime() != null) {
             dto.setLastMessageTime(room.getLastMessageTime().format(DATE_TIME_FORMATTER));

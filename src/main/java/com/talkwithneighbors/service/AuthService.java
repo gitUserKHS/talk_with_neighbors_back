@@ -10,13 +10,13 @@ import com.talkwithneighbors.auth.email.EmailVerificationService;
 import com.talkwithneighbors.auth.nickname.NicknameException;
 import com.talkwithneighbors.auth.session.SessionIssuer;
 import com.talkwithneighbors.exception.AuthException;
+import com.talkwithneighbors.outbox.DomainEventPublisher;
 import com.talkwithneighbors.repository.UserRepository;
 import com.talkwithneighbors.security.UserSession;
 import jakarta.servlet.http.HttpSession;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
-import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
@@ -37,7 +37,7 @@ public class AuthService {
     private final PasswordEncoder passwordEncoder;
     private final RedisSessionService redisSessionService;
     private final OfflineNotificationService offlineNotificationService;
-    private final ApplicationEventPublisher applicationEventPublisher;
+    private final DomainEventPublisher domainEventPublisher;
     private final EmailVerificationService emailVerificationService;
     private final SessionIssuer sessionIssuer;
 
@@ -263,8 +263,8 @@ public class AuthService {
         if (previousImageUrl != null
                 && !previousImageUrl.isBlank()
                 && !previousImageUrl.equals(profileImageUrl)) {
-            applicationEventPublisher.publishEvent(
-                    new MediaFilesDeletedEvent(java.util.List.of(previousImageUrl)));
+            domainEventPublisher.publish(MediaFilesDeletedEvent.create(
+                    "User", user.getId().toString(), java.util.List.of(previousImageUrl)));
         }
         return UserDto.fromEntity(updatedUser);
     }

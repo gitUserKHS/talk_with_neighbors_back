@@ -8,6 +8,7 @@ import com.talkwithneighbors.domain.event.ChatMessageCommittedEvent;
 import com.talkwithneighbors.domain.event.ChatMessageChangedEvent;
 import com.talkwithneighbors.domain.event.ChatRoomDeletedEvent;
 import com.talkwithneighbors.domain.event.MediaFilesDeletedEvent;
+import com.talkwithneighbors.domain.event.MeetupJoinedEvent;
 import com.talkwithneighbors.entity.ChatRoom;
 import com.talkwithneighbors.entity.ChatRoomType;
 import com.talkwithneighbors.entity.ChatAttachmentType;
@@ -15,6 +16,7 @@ import com.talkwithneighbors.entity.Message;
 import com.talkwithneighbors.entity.MessageAttachment;
 import com.talkwithneighbors.entity.Message.MessageType;
 import com.talkwithneighbors.entity.User;
+import com.talkwithneighbors.entity.UserAccountType;
 import com.talkwithneighbors.exception.ChatException;
 import com.talkwithneighbors.repository.ChatRoomRepository;
 import com.talkwithneighbors.repository.ChatRoomDeletionRepository;
@@ -22,9 +24,11 @@ import com.talkwithneighbors.repository.ChatScheduleRepository;
 import com.talkwithneighbors.repository.ChatScheduleRsvpRepository;
 import com.talkwithneighbors.entity.ChatScheduleStatus;
 import com.talkwithneighbors.repository.MessageRepository;
+import com.talkwithneighbors.repository.MeetupWaitlistRepository;
 import com.talkwithneighbors.repository.UserRepository;
 import com.talkwithneighbors.repository.UserBlockRepository;
 import com.talkwithneighbors.service.ChatService;
+import com.talkwithneighbors.service.MeetupTimePolicy;
 import com.talkwithneighbors.service.NotificationService;
 import com.talkwithneighbors.outbox.DomainEventPublisher;
 import lombok.RequiredArgsConstructor;
@@ -38,6 +42,7 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Instant;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -61,6 +66,7 @@ public class ChatServiceImpl implements ChatService {
     private final ChatRoomDeletionRepository chatRoomDeletionRepository;
     private final ChatScheduleRepository chatScheduleRepository;
     private final ChatScheduleRsvpRepository chatScheduleRsvpRepository;
+    private final MeetupWaitlistRepository meetupWaitlistRepository;
     private final DomainEventPublisher domainEventPublisher;
 
     @Override
@@ -177,16 +183,29 @@ public class ChatServiceImpl implements ChatService {
         Long userId = Long.parseLong(userIdString);
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new RuntimeException("User not found with id: " + userId));
-        ChatRoom chatRoom = chatRoomRepository.findById(roomId)
+        ChatRoom chatRoom = chatRoomRepository.findByIdForUpdate(roomId)
                 .orElseThrow(() -> new RuntimeException("Chat room not found"));
 
         if (chatRoom.getType() != ChatRoomType.GROUP || !chatRoom.isPublicRoom()) {
             throw new ChatException("Only public hobby meetups can be joined directly.", HttpStatus.FORBIDDEN);
         }
+        if (chatRoom.getCreator() != null
+                && userBlockRepository.existsBetween(userId, chatRoom.getCreator().getId())) {
+            throw new ChatException("차단 관계인 사용자의 모임에는 참여할 수 없어.", HttpStatus.FORBIDDEN);
+        }
+        if (MeetupTimePolicy.isPast(
+                chatRoom.getRegistrationDeadline(), chatRoom.getMeetupTimeBasis(), Instant.now())) {
+            throw new ChatException("모임 신청이 마감되었어.", HttpStatus.CONFLICT);
+        }
 
         if (chatRoom.getParticipants().contains(user)) {
             log.info("User {} is already a participant in room {}", user.getId(), roomId);
             return;
+        }
+        if (meetupWaitlistRepository.countByRoom_Id(roomId) > 0) {
+            throw new ChatException(
+                    "대기 순서를 지키기 위해 모임 참여 화면에서 신청해 줘.",
+                    HttpStatus.CONFLICT);
         }
         if (chatRoom.getMaxParticipants() != null
                 && chatRoom.getParticipants().size() >= chatRoom.getMaxParticipants()) {
@@ -194,6 +213,14 @@ public class ChatServiceImpl implements ChatService {
         }
         chatRoom.getParticipants().add(user);
         chatRoomRepository.save(chatRoom);
+        if (chatRoom.getCreator() == null
+                || chatRoom.getCreator().getAccountType() != UserAccountType.SYSTEM) {
+            domainEventPublisher.publish(MeetupJoinedEvent.create(
+                    chatRoom.getId(),
+                    chatRoom.getName(),
+                    user.getId(),
+                    chatRoom.getCreator() != null ? chatRoom.getCreator().getId() : null));
+        }
         log.info("User {} successfully joined room {}", user.getId(), roomId);
     }
 
@@ -387,7 +414,8 @@ public class ChatServiceImpl implements ChatService {
         MessageDto messageDto = MessageDto.fromEntity(savedMessage, requesterId);
         publishChangedMessage(messageDto, savedMessage.getChatRoom(), latestMessage);
         if (!mediaUrls.isEmpty()) {
-            applicationEventPublisher.publishEvent(new MediaFilesDeletedEvent(mediaUrls));
+            domainEventPublisher.publish(MediaFilesDeletedEvent.create(
+                    "Message", messageId, mediaUrls));
         }
         return messageDto;
     }
@@ -573,13 +601,17 @@ public class ChatServiceImpl implements ChatService {
 
     @Override
     @Transactional
-    public void deleteRoom(String roomId) {
+    public void deleteRoom(String roomId, Long requesterId) {
         log.info("[deleteRoom] Starting deletion process for roomId: {}", roomId);
 
         try {
             ChatRoom chatRoom = chatRoomRepository.findByIdForUpdate(roomId)
                     .orElseThrow(() -> new ChatException(
                             "Chat room not found: " + roomId, HttpStatus.NOT_FOUND));
+            if (chatRoom.getCreator() == null
+                    || !java.util.Objects.equals(chatRoom.getCreator().getId(), requesterId)) {
+                throw new ChatException("채팅방을 만든 사람만 삭제할 수 있어.", HttpStatus.FORBIDDEN);
+            }
 
             List<Long> participantIds = chatRoom.getParticipants().stream()
                     .map(User::getId)
@@ -597,8 +629,8 @@ public class ChatServiceImpl implements ChatService {
             }
 
             if (!attachmentUrls.isEmpty()) {
-                applicationEventPublisher.publishEvent(
-                        new MediaFilesDeletedEvent(attachmentUrls));
+                domainEventPublisher.publish(MediaFilesDeletedEvent.create(
+                        "ChatRoom", roomId, attachmentUrls));
             }
             domainEventPublisher.publish(
                     ChatRoomDeletedEvent.create(roomId, participantIds));
@@ -739,12 +771,18 @@ public class ChatServiceImpl implements ChatService {
     @Override
     @Transactional
     public ChatRoomDto updateRoom(String roomId, Long requesterId, UpdateChatRoomRequest request) {
-        ChatRoom chatRoom = chatRoomRepository.findById(roomId)
+        ChatRoom chatRoom = chatRoomRepository.findByIdForUpdate(roomId)
                 .orElseThrow(() -> new ChatException("Chat room not found: " + roomId, HttpStatus.NOT_FOUND));
         User requester = userRepository.findById(requesterId)
                 .orElseThrow(() -> new ChatException("User not found: " + requesterId, HttpStatus.NOT_FOUND));
         if (chatRoom.getCreator() == null || !chatRoom.getCreator().getId().equals(requesterId)) {
             throw new ChatException("Only the room creator can update this room.", HttpStatus.FORBIDDEN);
+        }
+        if (request == null) {
+            throw new ChatException("수정할 채팅방 정보를 입력해 줘.", HttpStatus.BAD_REQUEST);
+        }
+        if (request.getType() != null && request.getType() != chatRoom.getType()) {
+            throw new ChatException("채팅방 종류는 만든 뒤 변경할 수 없어.", HttpStatus.BAD_REQUEST);
         }
 
         String resolvedName = request.resolvedName();
@@ -752,16 +790,34 @@ public class ChatServiceImpl implements ChatService {
             if (resolvedName.isBlank()) {
                 throw new ChatException("Chat room name cannot be empty.", HttpStatus.BAD_REQUEST);
             }
-            chatRoom.setName(resolvedName.trim());
-        }
-        if (request.getType() != null) {
-            chatRoom.setType(request.getType());
+            String normalizedName = resolvedName.trim();
+            int maxNameLength = chatRoom.isPublicRoom() ? 80 : 255;
+            if (normalizedName.length() > maxNameLength) {
+                throw new ChatException(
+                        "채팅방 이름은 " + maxNameLength + "자 이하로 입력해 줘.",
+                        HttpStatus.BAD_REQUEST);
+            }
+            chatRoom.setName(normalizedName);
         }
         if (request.getDescription() != null) {
-            chatRoom.setDescription(request.getDescription().trim());
+            String description = request.getDescription().trim();
+            if (description.length() > 500) {
+                throw new ChatException("채팅방 소개는 500자 이하로 입력해 줘.", HttpStatus.BAD_REQUEST);
+            }
+            chatRoom.setDescription(description);
         }
         Integer maxParticipants = request.resolvedMaxParticipants();
         if (maxParticipants != null) {
+            if (chatRoom.isPublicRoom()) {
+                throw new ChatException(
+                        "공개 모임의 모집 인원은 모임 수정 화면에서 변경해 줘.",
+                        HttpStatus.BAD_REQUEST);
+            }
+            if (maxParticipants < 2 || maxParticipants > 50) {
+                throw new ChatException(
+                        "최대 참여 인원은 2명 이상 50명 이하로 입력해 줘.",
+                        HttpStatus.BAD_REQUEST);
+            }
             if (maxParticipants < chatRoom.getParticipants().size()) {
                 throw new ChatException("Maximum participants cannot be lower than the current participant count.", HttpStatus.CONFLICT);
             }

@@ -34,7 +34,7 @@ output "media_prefix" {
 }
 
 output "deployment_bucket_name" {
-  description = "Private, unversioned S3 bucket used for short-lived deployment bundles."
+  description = "Private S3 bucket used for deployment bundles and successful-release history."
   value       = aws_s3_bucket.deployment.id
 }
 
@@ -43,9 +43,29 @@ output "deployment_prefix" {
   value       = local.deployment_prefix
 }
 
+output "mysql_backup_prefix" {
+  description = "Verified logical-backup prefix retained according to mysql_backup_retention_days."
+  value       = local.mysql_backup_prefix
+}
+
+output "mysql_backup_bucket_name" {
+  description = "Deletion-protected, private, versioned S3 bucket for verified MySQL logical backups."
+  value       = aws_s3_bucket.mysql_backup.id
+}
+
+output "release_history_prefix" {
+  description = "Successful immutable-release manifest prefix used by guarded rollback."
+  value       = local.release_prefix
+}
+
 output "github_deploy_role_arn" {
   description = "Set this as the AWS_DEPLOY_ROLE_ARN GitHub Actions environment variable."
   value       = aws_iam_role.github_deploy.arn
+}
+
+output "github_monitor_role_arn" {
+  description = "Set this as the AWS_MONITOR_ROLE_ARN variable in the production-monitor GitHub Environment."
+  value       = aws_iam_role.github_monitor.arn
 }
 
 output "instance_role_arn" {

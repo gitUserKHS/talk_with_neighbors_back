@@ -18,6 +18,20 @@ mock_provider "aws" {
       json = "{\"Version\":\"2012-10-17\",\"Statement\":[]}"
     }
   }
+
+  mock_resource "aws_instance" {
+    defaults = {
+      id  = "i-0123456789abcdef0"
+      arn = "arn:aws:ec2:ap-northeast-2:123456789012:instance/i-0123456789abcdef0"
+    }
+  }
+
+  mock_resource "aws_iam_role" {
+    defaults = {
+      id  = "mock-role-id"
+      arn = "arn:aws:iam::123456789012:role/mock-role"
+    }
+  }
 }
 
 run "secure_low_cost_defaults" {
@@ -92,9 +106,25 @@ run "secure_low_cost_defaults" {
         for rule in aws_s3_bucket_lifecycle_configuration.media.rule :
         rule.noncurrent_version_expiration[0].noncurrent_days
         if rule.id == "expire-noncurrent-media"
-      ]) == 30
+      ]) == 30 &&
+      aws_s3_bucket.mysql_backup.force_destroy == false &&
+      aws_s3_bucket_versioning.mysql_backup.versioning_configuration[0].status == "Enabled" &&
+      one([
+        for rule in aws_s3_bucket_server_side_encryption_configuration.mysql_backup.rule :
+        rule.apply_server_side_encryption_by_default[0].sse_algorithm
+      ]) == "AES256" &&
+      one([
+        for rule in aws_s3_bucket_lifecycle_configuration.mysql_backup.rule :
+        rule.expiration[0].days
+        if rule.id == "expire-verified-mysql-backups"
+      ]) == 30 &&
+      one([
+        for rule in aws_s3_bucket_lifecycle_configuration.deployment.rule :
+        rule.expiration[0].days
+        if rule.id == "expire-release-history"
+      ]) == 90
     )
-    error_message = "Buckets must be deletion-protected, media versioning enabled, and old media versions bounded by default."
+    error_message = "Buckets must be deletion-protected and media, backup, and release-history retention must remain bounded by default."
   }
 
   assert {
@@ -105,6 +135,75 @@ run "secure_low_cost_defaults" {
   assert {
     condition     = length(aws_iam_role_policy.instance_ses) == 0
     error_message = "The EC2 role must not receive SES permissions until a verified identity is explicitly supplied."
+  }
+
+  assert {
+    condition = (
+      aws_iam_role.github_monitor.name == "talk-with-neighbors-github-monitor" &&
+      aws_iam_role.github_monitor.max_session_duration == 3600 &&
+      aws_iam_role_policy.github_monitor.role == aws_iam_role.github_monitor.id &&
+      output.github_monitor_role_arn == aws_iam_role.github_monitor.arn
+    )
+    error_message = "The backup monitor must use a dedicated IAM role exposed through AWS_MONITOR_ROLE_ARN."
+  }
+
+  assert {
+    condition = toset(one([
+      for condition in data.aws_iam_policy_document.github_monitor_assume_role.statement[0].condition : condition.values
+      if condition.variable == "token.actions.githubusercontent.com:sub"
+    ])) == toset(["repo:gitUserKHS/talk_with_neighbors_back:environment:production-monitor"])
+    error_message = "The monitor role trust policy must accept only the production-monitor GitHub OIDC subject."
+  }
+
+  assert {
+    condition = (
+      toset(one([
+        for statement in data.aws_iam_policy_document.github_monitor.statement : statement.actions
+        if statement.sid == "ReadTargetNodeState"
+      ])) == toset(["ec2:DescribeInstances"]) &&
+      toset(one([
+        for statement in data.aws_iam_policy_document.github_monitor.statement : statement.actions
+        if statement.sid == "RunBackupCheckOnTargetNode"
+      ])) == toset(["ssm:SendCommand"]) &&
+      toset(one([
+        for statement in data.aws_iam_policy_document.github_monitor.statement : statement.actions
+        if statement.sid == "ReadBackupCheckInvocation"
+      ])) == toset(["ssm:GetCommandInvocation"])
+    )
+    error_message = "The monitor role must be limited to node-state read, target SendCommand, and invocation read permissions."
+  }
+
+  assert {
+    condition = (
+      toset(one([
+        for statement in data.aws_iam_policy_document.github_monitor.statement : statement.resources
+        if statement.sid == "RunBackupCheckOnTargetNode"
+        ])) == toset([
+        aws_instance.app.arn,
+        "arn:aws:ssm:ap-northeast-2::document/AWS-RunShellScript"
+      ])
+    )
+    error_message = "The monitor SendCommand permission must target only the portfolio instance and AWS-RunShellScript document."
+  }
+
+  assert {
+    condition = (
+      toset(one([
+        for statement in data.aws_iam_policy_document.github_monitor.statement : one([
+          for condition in statement.condition : condition.values
+          if condition.variable == "ec2:Region"
+        ])
+        if statement.sid == "ReadTargetNodeState"
+      ])) == toset(["ap-northeast-2"]) &&
+      toset(one([
+        for statement in data.aws_iam_policy_document.github_monitor.statement : one([
+          for condition in statement.condition : condition.values
+          if condition.variable == "aws:RequestedRegion"
+        ])
+        if statement.sid == "ReadBackupCheckInvocation"
+      ])) == toset(["ap-northeast-2"])
+    )
+    error_message = "Wildcard-only monitor reads must remain constrained to the deployment Region."
   }
 }
 

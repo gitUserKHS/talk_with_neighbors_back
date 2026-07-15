@@ -1,0 +1,11 @@
+[Unit]
+Description=Weekly Talk With Neighbors MySQL restore verification schedule
+
+[Timer]
+OnCalendar=Sun *-*-* 19:15:00 UTC
+RandomizedDelaySec=20m
+Persistent=true
+Unit=talk-with-neighbors-mysql-restore-verify.service
+
+[Install]
+WantedBy=timers.target

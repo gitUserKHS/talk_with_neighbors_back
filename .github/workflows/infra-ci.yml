@@ -90,18 +90,36 @@ jobs:
         run: bash deploy/k8s/tests/database-migration-contract.sh
       - name: Test database migration runner
         run: bash deploy/k8s/tests/database-migration-runner.sh
+      - name: Verify MySQL backup and restore contract
+        run: bash deploy/k8s/tests/mysql-backup-contract.sh
+      - name: Verify guarded release history contract
+        run: bash deploy/k8s/tests/release-history-contract.sh
+      - name: Verify frontend-only deployment contract
+        run: bash deploy/k8s/tests/frontend-only-deploy-contract.sh
+      - name: Test frontend-only SSM runner
+        run: bash deploy/k8s/tests/frontend-only-deploy-runner.sh
       - name: Run ShellCheck on deployment scripts
         run: >-
           docker run --rm
           -v "${PWD}:/repo"
           koalaman/shellcheck:stable@sha256:bb596a0d169b85ddd81d8b6d3a2ff6d5baf5fca10b97f575ebc647c3dff62b3d
           /repo/deploy/k8s/build-bundle.sh
+          /repo/deploy/k8s/deploy-frontend-via-ssm.sh
           /repo/deploy/k8s/deploy-via-ssm.sh
           /repo/deploy/k8s/deploy-on-node.sh
+          /repo/deploy/k8s/install-mysql-backup.sh
+          /repo/deploy/k8s/mysql-backup.sh
+          /repo/deploy/k8s/mysql-backup-restore-verify.sh
+          /repo/deploy/k8s/public-smoke.sh
+          /repo/deploy/k8s/release-history.sh
           /repo/deploy/k8s/run-database-migrations.sh
           /repo/deploy/k8s/tests/deploy-on-node-order.sh
           /repo/deploy/k8s/tests/database-migration-contract.sh
           /repo/deploy/k8s/tests/database-migration-runner.sh
+          /repo/deploy/k8s/tests/mysql-backup-contract.sh
+          /repo/deploy/k8s/tests/release-history-contract.sh
+          /repo/deploy/k8s/tests/frontend-only-deploy-contract.sh
+          /repo/deploy/k8s/tests/frontend-only-deploy-runner.sh
           /repo/deploy/k8s/k3s-network-common.sh
           /repo/deploy/k8s/reinitialize-k3s-network.sh
           /repo/deploy/k8s/tests/test-k3s-network-reinitialize.sh
