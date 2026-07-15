@@ -7,6 +7,7 @@ import com.talkwithneighbors.entity.OfflineNotification;
 import com.talkwithneighbors.repository.ChatRoomRepository;
 import com.talkwithneighbors.service.OfflineNotificationService;
 import com.talkwithneighbors.service.MeetupTimePolicy;
+import com.talkwithneighbors.service.ChatScheduleService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -23,6 +24,7 @@ import java.util.Map;
 @Slf4j
 public class MeetupReminderScheduler {
     private final ChatRoomRepository chatRoomRepository;
+    private final ChatScheduleService chatScheduleService;
     private final OfflineNotificationService offlineNotificationService;
     private final ObjectMapper objectMapper;
 
@@ -30,6 +32,7 @@ public class MeetupReminderScheduler {
     @Transactional
     public void createUpcomingReminders() {
         Instant now = Instant.now();
+        chatScheduleService.reconcilePublicMeetupProjections(now);
         LocalDateTime utcStart = LocalDateTime.ofInstant(now, ZoneOffset.UTC);
         LocalDateTime legacyStart = LocalDateTime.ofInstant(now, MeetupTimePolicy.LEGACY_ZONE);
         for (ChatRoom room : chatRoomRepository.findUpcomingPublicMeetups(

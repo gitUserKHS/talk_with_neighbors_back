@@ -2,6 +2,8 @@ package com.talkwithneighbors.repository;
 
 import com.talkwithneighbors.entity.ChatRoom;
 import com.talkwithneighbors.entity.ChatRoomType;
+import com.talkwithneighbors.entity.ChatRoomStatus;
+import com.talkwithneighbors.entity.ChatScheduleStatus;
 import com.talkwithneighbors.entity.MeetupTimeBasis;
 import com.talkwithneighbors.entity.User;
 import org.springframework.data.domain.Page;
@@ -14,6 +16,7 @@ import org.springframework.stereotype.Repository;
 
 import java.util.List;
 import java.util.Optional;
+import java.time.Instant;
 import java.time.LocalDateTime;
 import jakarta.persistence.LockModeType;
 
@@ -161,4 +164,26 @@ public interface ChatRoomRepository extends JpaRepository<ChatRoom, String> {
             @Param("legacyEnd") LocalDateTime legacyEnd,
             @Param("utcBasis") MeetupTimeBasis utcBasis,
             @Param("legacyBasis") MeetupTimeBasis legacyBasis);
+
+    @Query("""
+            SELECT cr.id
+            FROM ChatRoom cr
+            WHERE cr.publicRoom = true
+              AND cr.status = :activeStatus
+              AND (
+                cr.scheduledAt IS NOT NULL
+                OR EXISTS (
+                  SELECT schedule.id
+                  FROM ChatSchedule schedule
+                  WHERE schedule.room = cr
+                    AND schedule.status = :scheduledStatus
+                    AND schedule.startsAt > :now
+                )
+              )
+            ORDER BY cr.id
+            """)
+    List<String> findPublicMeetupIdsRequiringScheduleProjectionReconciliation(
+            @Param("now") Instant now,
+            @Param("scheduledStatus") ChatScheduleStatus scheduledStatus,
+            @Param("activeStatus") ChatRoomStatus activeStatus);
 }

@@ -84,7 +84,7 @@ JSON 호환 경로에는 서비스 내부 `/uploads/**` URL을 넣을 수 없다
 | GET | `/api/meetups?keyword=&interest=&page=0&size=20` | 모임 검색 |
 | POST | `/api/meetups` | 공개 그룹 모임 생성 |
 | GET | `/api/meetups/{roomId}` | 모임 상세, 참여자 목록과 서버 판정 `canManage` 포함 |
-| PATCH | `/api/meetups/{roomId}` | 모임장 전용 정보·장소·일정·정원 수정 |
+| PATCH | `/api/meetups/{roomId}` | 모임장 전용 프로필 정보·대표 장소·정원 수정 |
 | DELETE | `/api/meetups/{roomId}` | 모임장 전용 모임·채팅·약속·참여 기록 삭제 |
 | POST | `/api/meetups/{roomId}/join` | 참가 |
 | POST | `/api/meetups/{roomId}/leave` | 탈퇴, 성공 시 204 |
@@ -93,7 +93,7 @@ JSON 호환 경로에는 서비스 내부 `/uploads/**` URL을 넣을 수 없다
 `longitude`, `kakaoPlaceId`다. 위도와 경도는 반드시 함께 보내며, 인증 모임 DTO에서만 이 장소
 정보를 돌려준다. `/api/public/meetups`는 정확한 장소 정보를 계속 제외한다.
 참가·대기열 변경은 모임 API만 담당한다. 일반 채팅방 입장·수정 API로 공개 모임의 차단 관계,
-신청 마감, 정원과 대기열, 일정 유효성 규칙을 우회할 수 없다.
+정원과 대기열 규칙을 우회할 수 없다. 회차 일정 변경은 모임 달력 API만 담당한다.
 
 ## 채팅 REST API
 

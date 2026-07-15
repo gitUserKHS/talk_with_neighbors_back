@@ -12,6 +12,7 @@ import com.talkwithneighbors.entity.ChatSchedule;
 import com.talkwithneighbors.entity.ChatScheduleRsvp;
 import com.talkwithneighbors.entity.ChatScheduleRsvpStatus;
 import com.talkwithneighbors.entity.ChatScheduleStatus;
+import com.talkwithneighbors.entity.MeetupTimeBasis;
 import com.talkwithneighbors.entity.Message;
 import com.talkwithneighbors.entity.User;
 import com.talkwithneighbors.exception.ChatException;
@@ -34,15 +35,20 @@ import org.springframework.http.HttpStatus;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
+import java.util.UUID;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -76,10 +82,19 @@ class ChatScheduleServiceTest {
 
     @Test
     void participantCreatesScheduleWithHostAttendingAndStableCard() {
+        AtomicReference<ChatSchedule> savedSchedule = new AtomicReference<>();
         when(userRepository.findById(host.getId())).thenReturn(Optional.of(host));
         when(chatRoomRepository.findByIdForUpdate(room.getId())).thenReturn(Optional.of(room));
         when(scheduleRepository.saveAndFlush(any(ChatSchedule.class)))
-                .thenAnswer(invocation -> initialize(invocation.getArgument(0)));
+                .thenAnswer(invocation -> {
+                    ChatSchedule saved = initialize(invocation.getArgument(0));
+                    savedSchedule.set(saved);
+                    return saved;
+                });
+        when(scheduleRepository
+                .findFirstByRoom_IdAndStatusAndStartsAtAfterOrderByStartsAtAscIdAsc(
+                        any(), any(), any()))
+                .thenAnswer(invocation -> Optional.ofNullable(savedSchedule.get()));
         when(messageRepository.saveAndFlush(any(Message.class)))
                 .thenAnswer(invocation -> invocation.getArgument(0));
 
@@ -99,13 +114,73 @@ class ChatScheduleServiceTest {
         verify(messageRepository).saveAndFlush(card.capture());
         assertThat(card.getValue().getType()).isEqualTo(Message.MessageType.SCHEDULE);
         assertThat(card.getValue().getSchedule().getId()).isEqualTo(result.id());
-        assertThat(room.getLastMessage()).isEqualTo("일정: 저녁 산책");
+        assertThat(room.getLastMessage()).isNull();
+        assertThat(room.getLastMessageTime()).isNull();
+        assertThat(room.getScheduledAt())
+                .isEqualTo(LocalDateTime.ofInstant(savedSchedule.get().getStartsAt(), ZoneOffset.UTC));
+        assertThat(room.getDurationMinutes()).isEqualTo(90);
+        assertThat(room.getMeetupTimeBasis()).isEqualTo(MeetupTimeBasis.UTC);
+        assertThat(room.getRegistrationDeadline()).isNull();
 
         ArgumentCaptor<ChatScheduleCardChangedEvent> event =
                 ArgumentCaptor.forClass(ChatScheduleCardChangedEvent.class);
         verify(applicationEventPublisher).publishEvent(event.capture());
         assertThat(event.getValue().participantIds()).containsExactlyInAnyOrder(1L, 2L);
         assertThat(event.getValue().message().getSchedule().currentUserStatus()).isNull();
+    }
+
+    @Test
+    void createMaterializesUnrepresentedLegacyEventOnceBeforeProjectionChanges() {
+        Instant legacyStart = Instant.now().plusSeconds(86_400);
+        room.setScheduledAt(LocalDateTime.ofInstant(
+                legacyStart, MeetupTimePolicy.LEGACY_ZONE));
+        room.setMeetupTimeBasis(null);
+        room.setDurationMinutes(60);
+        room.setLastMessage("기존 대화");
+        LocalDateTime previewTime = LocalDateTime.now().minusMinutes(1);
+        room.setLastMessageTime(previewTime);
+        List<ChatSchedule> persisted = new ArrayList<>();
+
+        when(userRepository.findById(host.getId())).thenReturn(Optional.of(host));
+        when(chatRoomRepository.findByIdForUpdate(room.getId())).thenReturn(Optional.of(room));
+        when(scheduleRepository.existsById(any()))
+                .thenAnswer(invocation -> persisted.stream().anyMatch(
+                        schedule -> schedule.getId().equals(invocation.getArgument(0))));
+        when(scheduleRepository.existsByRoom_IdAndStatusAndStartsAt(any(), any(), any()))
+                .thenAnswer(invocation -> persisted.stream().anyMatch(
+                        schedule -> schedule.getStatus() == invocation.getArgument(1)
+                                && schedule.getStartsAt().equals(invocation.getArgument(2))));
+        when(scheduleRepository.saveAndFlush(any(ChatSchedule.class)))
+                .thenAnswer(invocation -> {
+                    ChatSchedule saved = initialize(invocation.getArgument(0));
+                    persisted.add(saved);
+                    return saved;
+                });
+        when(messageRepository.saveAndFlush(any(Message.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+        when(scheduleRepository
+                .findFirstByRoom_IdAndStatusAndStartsAtAfterOrderByStartsAtAscIdAsc(
+                        any(), any(), any()))
+                .thenAnswer(invocation -> persisted.stream()
+                        .filter(schedule -> schedule.getStatus() == ChatScheduleStatus.SCHEDULED)
+                        .filter(schedule -> schedule.getStartsAt().isAfter(invocation.getArgument(2)))
+                        .min(java.util.Comparator.comparing(ChatSchedule::getStartsAt)));
+
+        service.create(room.getId(), host.getId(), createRequest("새 달력 일정 1"));
+        service.create(room.getId(), host.getId(), createRequest("새 달력 일정 2"));
+
+        assertThat(persisted).hasSize(3);
+        assertThat(persisted).filteredOn(schedule -> schedule.getId().equals(
+                        UUID.nameUUIDFromBytes(
+                                ("legacy-chat-schedule:" + room.getId())
+                                        .getBytes(StandardCharsets.UTF_8)).toString()))
+                .singleElement()
+                .satisfies(schedule -> assertThat(schedule.getStartsAt()).isEqualTo(legacyStart));
+        assertThat(room.getScheduledAt())
+                .isEqualTo(LocalDateTime.ofInstant(legacyStart, ZoneOffset.UTC));
+        assertThat(room.getLastMessage()).isEqualTo("기존 대화");
+        assertThat(room.getLastMessageTime()).isEqualTo(previewTime);
+        verify(messageRepository, times(3)).saveAndFlush(any(Message.class));
     }
 
     @Test
@@ -142,7 +217,7 @@ class ChatScheduleServiceTest {
         ChatSchedule first = schedule("schedule-1", host, "아침 산책");
         ChatSchedule second = schedule("schedule-2", member, "저녁 식사");
         when(userRepository.findById(member.getId())).thenReturn(Optional.of(member));
-        when(chatRoomRepository.findByIdAndParticipantsContaining(room.getId(), member))
+        when(chatRoomRepository.findByIdForUpdate(room.getId()))
                 .thenReturn(Optional.of(room));
         when(scheduleRepository.findDetailedByRoomId(room.getId()))
                 .thenReturn(List.of(first, second));
@@ -154,10 +229,403 @@ class ChatScheduleServiceTest {
     }
 
     @Test
+    void listMaterializesLegacyMeetupExactlyOnceWithoutReorderingChat() {
+        LocalDateTime legacyWallClock = LocalDateTime.of(2099, 8, 1, 19, 0);
+        Instant expectedStart = MeetupTimePolicy.toInstant(legacyWallClock, null);
+        LocalDateTime previewTime = LocalDateTime.of(2026, 7, 16, 12, 0);
+        room.setScheduledAt(legacyWallClock);
+        room.setMeetupTimeBasis(null);
+        room.setDurationMinutes(75);
+        room.setRegistrationDeadline(legacyWallClock.minusHours(2));
+        room.setLocation("서울숲");
+        room.setLocationAddress("서울 성동구 뚝섬로 273");
+        room.setLatitude(37.5444);
+        room.setLongitude(127.0374);
+        room.setKakaoPlaceId("legacy-place");
+        room.setLastMessage("기존 마지막 메시지");
+        room.setLastMessageTime(previewTime);
+
+        AtomicReference<ChatSchedule> persisted = new AtomicReference<>();
+        when(userRepository.findById(host.getId())).thenReturn(Optional.of(host));
+        when(chatRoomRepository.findByIdForUpdate(room.getId())).thenReturn(Optional.of(room));
+        when(scheduleRepository.existsById(any()))
+                .thenAnswer(invocation -> persisted.get() != null);
+        when(scheduleRepository.saveAndFlush(any(ChatSchedule.class)))
+                .thenAnswer(invocation -> {
+                    ChatSchedule saved = initialize(invocation.getArgument(0));
+                    persisted.set(saved);
+                    return saved;
+                });
+        when(messageRepository.saveAndFlush(any(Message.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+        when(scheduleRepository
+                .findFirstByRoom_IdAndStatusAndStartsAtAfterOrderByStartsAtAscIdAsc(
+                        any(), any(), any()))
+                .thenAnswer(invocation -> Optional.ofNullable(persisted.get()));
+        when(scheduleRepository.findDetailedByRoomId(room.getId()))
+                .thenAnswer(invocation -> List.of(persisted.get()));
+
+        var first = service.list(room.getId(), host.getId());
+        var second = service.list(room.getId(), host.getId());
+
+        assertThat(first).singleElement().satisfies(schedule -> {
+            assertThat(schedule.id()).isEqualTo(second.get(0).id());
+            assertThat(schedule.startsAt().toInstant()).isEqualTo(expectedStart);
+            assertThat(schedule.durationMinutes()).isEqualTo(75);
+            assertThat(schedule.location()).isEqualTo("서울숲");
+            assertThat(schedule.currentUserStatus())
+                    .isEqualTo(ChatScheduleRsvpStatus.ATTENDING);
+        });
+        assertThat(room.getScheduledAt())
+                .isEqualTo(LocalDateTime.ofInstant(expectedStart, ZoneOffset.UTC));
+        assertThat(room.getMeetupTimeBasis()).isEqualTo(MeetupTimeBasis.UTC);
+        assertThat(room.getRegistrationDeadline()).isEqualTo(legacyWallClock.minusHours(2));
+        assertThat(room.getLastMessage()).isEqualTo("기존 마지막 메시지");
+        assertThat(room.getLastMessageTime()).isEqualTo(previewTime);
+
+        ArgumentCaptor<Message> migratedCard = ArgumentCaptor.forClass(Message.class);
+        verify(messageRepository, times(1)).saveAndFlush(migratedCard.capture());
+        String migratedScheduleId = UUID.nameUUIDFromBytes(
+                ("legacy-chat-schedule:" + room.getId()).getBytes(StandardCharsets.UTF_8))
+                .toString();
+        assertThat(migratedCard.getValue().getId()).isEqualTo(
+                UUID.nameUUIDFromBytes(
+                        ("legacy-chat-schedule-message:" + migratedScheduleId)
+                                .getBytes(StandardCharsets.UTF_8))
+                        .toString());
+        assertThat(migratedCard.getValue().getCreatedAt()).isBefore(previewTime);
+        verify(scheduleRepository, times(1)).saveAndFlush(any(ChatSchedule.class));
+        verify(applicationEventPublisher, never()).publishEvent(any());
+    }
+
+    @Test
+    void oldProfileScheduleChangeCannotResurrectCancelledCanonicalSchedule() {
+        Instant requestedStart = Instant.parse("2099-08-01T10:00:00Z");
+        String scheduleId = UUID.nameUUIDFromBytes(
+                ("legacy-chat-schedule:" + room.getId()).getBytes(StandardCharsets.UTF_8))
+                .toString();
+        ChatSchedule cancelled = schedule(scheduleId, host, "Cancelled event");
+        cancelled.setStartsAt(requestedStart.minusSeconds(86_400));
+        cancelled.setStatus(ChatScheduleStatus.CANCELLED);
+        cancelled.setCancelledAt(Instant.parse("2099-07-31T00:00:00Z"));
+        room.setScheduledAt(LocalDateTime.ofInstant(requestedStart, ZoneOffset.UTC));
+        room.setMeetupTimeBasis(MeetupTimeBasis.UTC);
+        room.setDurationMinutes(90);
+        room.setRegistrationDeadline(room.getScheduledAt().minusHours(1));
+
+        when(scheduleRepository.findById(scheduleId)).thenReturn(Optional.of(cancelled));
+
+        assertThatThrownBy(() -> service.synchronizeLegacyProfileSchedule(
+                room, cancelled.getStartsAt(), cancelled.getDurationMinutes()))
+                .isInstanceOfSatisfying(ChatException.class, exception -> {
+                    assertThat(exception.getStatus()).isEqualTo(HttpStatus.CONFLICT);
+                    assertThat(exception.getMessage()).contains("모임 달력");
+                });
+
+        assertThat(cancelled.getStatus()).isEqualTo(ChatScheduleStatus.CANCELLED);
+        assertThat(cancelled.getCancelledAt()).isNotNull();
+        assertThat(room.getScheduledAt())
+                .isEqualTo(LocalDateTime.ofInstant(requestedStart, ZoneOffset.UTC));
+        assertThat(room.getRegistrationDeadline())
+                .isEqualTo(LocalDateTime.ofInstant(requestedStart, ZoneOffset.UTC).minusHours(1));
+        verify(scheduleRepository, never()).saveAndFlush(any());
+        verify(messageRepository, never()).saveAndFlush(any());
+        verify(chatRoomRepository, never()).save(room);
+    }
+
+    @Test
+    void oldProfileEditFromNextProjectionDoesNotMovePastLegacyHistoryToNewTarget() {
+        Instant pastStart = Instant.parse("2026-07-15T10:00:00Z");
+        Instant nextStart = Instant.parse("2099-08-01T10:00:00Z");
+        Instant editedTarget = Instant.parse("2099-09-01T10:00:00Z");
+        String legacyScheduleId = UUID.nameUUIDFromBytes(
+                ("legacy-chat-schedule:" + room.getId()).getBytes(StandardCharsets.UTF_8))
+                .toString();
+        ChatSchedule pastLegacy = schedule(legacyScheduleId, host, "Past legacy event");
+        pastLegacy.setStartsAt(pastStart);
+        ChatSchedule next = schedule("next-event", member, "Next event");
+        next.setStartsAt(nextStart);
+        room.setScheduledAt(LocalDateTime.ofInstant(editedTarget, ZoneOffset.UTC));
+        room.setMeetupTimeBasis(MeetupTimeBasis.UTC);
+        room.setDurationMinutes(next.getDurationMinutes());
+
+        when(scheduleRepository.findById(legacyScheduleId)).thenReturn(Optional.of(pastLegacy));
+
+        assertThatThrownBy(() -> service.synchronizeLegacyProfileSchedule(
+                room, nextStart, next.getDurationMinutes()))
+                .isInstanceOfSatisfying(ChatException.class,
+                        exception -> assertThat(exception.getStatus())
+                                .isEqualTo(HttpStatus.CONFLICT));
+
+        assertThat(pastLegacy.getStartsAt()).isEqualTo(pastStart);
+        assertThat(pastLegacy.getStatus()).isEqualTo(ChatScheduleStatus.SCHEDULED);
+        assertThat(room.getScheduledAt())
+                .isEqualTo(LocalDateTime.ofInstant(editedTarget, ZoneOffset.UTC));
+        verify(scheduleRepository, never()).saveAndFlush(any());
+        verify(messageRepository, never()).saveAndFlush(any());
+        verify(chatRoomRepository, never()).save(room);
+    }
+
+    @Test
+    void unchangedOldProfileResubmissionKeepsHistoricalLegacyAndNextProjection() {
+        Instant pastStart = Instant.parse("2026-07-15T10:00:00Z");
+        Instant nextStart = Instant.parse("2099-08-01T10:00:00Z");
+        String legacyScheduleId = UUID.nameUUIDFromBytes(
+                ("legacy-chat-schedule:" + room.getId()).getBytes(StandardCharsets.UTF_8))
+                .toString();
+        ChatSchedule pastLegacy = schedule(legacyScheduleId, host, "Past legacy event");
+        pastLegacy.setStartsAt(pastStart);
+        ChatSchedule next = schedule("next-event", member, "Next event");
+        next.setStartsAt(nextStart);
+        next.setDurationMinutes(90);
+        room.setScheduledAt(LocalDateTime.ofInstant(nextStart, ZoneOffset.UTC));
+        room.setMeetupTimeBasis(MeetupTimeBasis.UTC);
+        room.setDurationMinutes(90);
+
+        when(scheduleRepository.findById(legacyScheduleId)).thenReturn(Optional.of(pastLegacy));
+        when(scheduleRepository
+                .findFirstByRoom_IdAndStatusAndStartsAtAfterOrderByStartsAtAscIdAsc(
+                        any(), any(), any()))
+                .thenReturn(Optional.of(next));
+
+        service.synchronizeLegacyProfileSchedule(room, nextStart, 90);
+
+        assertThat(pastLegacy.getStartsAt()).isEqualTo(pastStart);
+        assertThat(room.getScheduledAt())
+                .isEqualTo(LocalDateTime.ofInstant(nextStart, ZoneOffset.UTC));
+        verify(scheduleRepository, never()).saveAndFlush(any());
+        verify(messageRepository, never()).saveAndFlush(any());
+        verify(chatRoomRepository).save(room);
+    }
+
+    @Test
+    void currentFutureLegacyProjectionCanBeMovedByOldProfileForm() {
+        Instant previousStart = Instant.parse("2099-08-01T10:00:00Z");
+        Instant requestedStart = Instant.parse("2099-09-01T10:00:00Z");
+        String scheduleId = UUID.nameUUIDFromBytes(
+                ("legacy-chat-schedule:" + room.getId()).getBytes(StandardCharsets.UTF_8))
+                .toString();
+        ChatSchedule current = schedule(scheduleId, host, "Current legacy event");
+        current.setStartsAt(previousStart);
+        current.setDurationMinutes(60);
+        Message card = card("legacy-card", current);
+        room.setScheduledAt(LocalDateTime.ofInstant(requestedStart, ZoneOffset.UTC));
+        room.setMeetupTimeBasis(MeetupTimeBasis.UTC);
+        room.setDurationMinutes(150);
+
+        when(scheduleRepository.findById(scheduleId)).thenReturn(Optional.of(current));
+        when(rsvpRepository.findBySchedule_IdAndUser_Id(scheduleId, host.getId()))
+                .thenReturn(Optional.of(current.getRsvps().get(0)));
+        when(messageRepository.findBySchedule_IdAndChatRoom_Id(scheduleId, room.getId()))
+                .thenReturn(Optional.of(card));
+        when(scheduleRepository
+                .findFirstByRoom_IdAndStatusAndStartsAtAfterOrderByStartsAtAscIdAsc(
+                        any(), any(), any()))
+                .thenReturn(Optional.of(current));
+
+        service.synchronizeLegacyProfileSchedule(room, previousStart, 60);
+
+        assertThat(current.getStartsAt()).isEqualTo(requestedStart);
+        assertThat(current.getDurationMinutes()).isEqualTo(150);
+        verify(scheduleRepository).saveAndFlush(current);
+        verify(messageRepository).saveAndFlush(card);
+    }
+
+    @Test
+    void missingDeterministicIdentityRejectsOldProfileScheduleChange() {
+        Instant previousStart = Instant.parse("2099-08-01T10:00:00Z");
+        Instant requestedStart = Instant.parse("2099-09-01T10:00:00Z");
+        room.setScheduledAt(LocalDateTime.ofInstant(requestedStart, ZoneOffset.UTC));
+        room.setMeetupTimeBasis(MeetupTimeBasis.UTC);
+        room.setDurationMinutes(90);
+
+        assertThatThrownBy(() -> service.synchronizeLegacyProfileSchedule(
+                room, previousStart, 90))
+                .isInstanceOfSatisfying(ChatException.class,
+                        exception -> assertThat(exception.getStatus())
+                                .isEqualTo(HttpStatus.CONFLICT));
+
+        verify(scheduleRepository, never()).saveAndFlush(any());
+        verify(messageRepository, never()).saveAndFlush(any());
+        verify(chatRoomRepository, never()).save(room);
+    }
+
+    @Test
+    void startedLegacyEventCannotBeMovedIntoTheFutureByOldProfileForm() {
+        Instant pastStart = Instant.parse("2026-07-15T10:00:00Z");
+        Instant requestedStart = Instant.parse("2099-09-01T10:00:00Z");
+        String scheduleId = UUID.nameUUIDFromBytes(
+                ("legacy-chat-schedule:" + room.getId()).getBytes(StandardCharsets.UTF_8))
+                .toString();
+        ChatSchedule started = schedule(scheduleId, host, "Started legacy event");
+        started.setStartsAt(pastStart);
+        room.setScheduledAt(LocalDateTime.ofInstant(requestedStart, ZoneOffset.UTC));
+        room.setMeetupTimeBasis(MeetupTimeBasis.UTC);
+        room.setDurationMinutes(started.getDurationMinutes());
+        when(scheduleRepository.findById(scheduleId)).thenReturn(Optional.of(started));
+
+        assertThatThrownBy(() -> service.synchronizeLegacyProfileSchedule(
+                room, pastStart, started.getDurationMinutes()))
+                .isInstanceOfSatisfying(ChatException.class,
+                        exception -> assertThat(exception.getStatus())
+                                .isEqualTo(HttpStatus.CONFLICT));
+
+        assertThat(started.getStartsAt()).isEqualTo(pastStart);
+        verify(scheduleRepository, never()).saveAndFlush(any());
+        verify(messageRepository, never()).saveAndFlush(any());
+    }
+
+    @Test
+    void listRepairsLegacySchedulePreviewFromNewestVisibleMessage() {
+        LocalDateTime scheduleCardTime = LocalDateTime.of(2026, 7, 16, 12, 0);
+        Message visible = new Message();
+        visible.setId("visible-message");
+        visible.setChatRoom(room);
+        visible.setSender(member);
+        visible.setType(Message.MessageType.TEXT);
+        visible.setContent("달력 밖의 최신 대화");
+        visible.setCreatedAt(scheduleCardTime.minusMinutes(5));
+        room.setLastMessage("일정: 예전 약속");
+        room.setLastMessageTime(scheduleCardTime);
+
+        when(userRepository.findById(host.getId())).thenReturn(Optional.of(host));
+        when(chatRoomRepository.findByIdForUpdate(room.getId())).thenReturn(Optional.of(room));
+        when(messageRepository.existsByChatRoom_IdAndTypeAndCreatedAt(
+                room.getId(), Message.MessageType.SCHEDULE, scheduleCardTime)).thenReturn(true);
+        when(messageRepository.findVisibleActiveByChatRoomIdOrderByCreatedAtDesc(
+                any(), any(), any())).thenReturn(List.of(visible));
+        when(scheduleRepository.findDetailedByRoomId(room.getId())).thenReturn(List.of());
+
+        service.list(room.getId(), host.getId());
+
+        assertThat(room.getLastMessage()).isEqualTo("달력 밖의 최신 대화");
+        assertThat(room.getLastMessageTime()).isEqualTo(visible.getCreatedAt());
+    }
+
+    @Test
+    void legacyProfileEventSurvivesAlongsideExistingCalendarSchedule() {
+        LocalDateTime legacyWallClock = LocalDateTime.of(2099, 8, 1, 19, 0);
+        Instant legacyStart = MeetupTimePolicy.toInstant(legacyWallClock, null);
+        room.setScheduledAt(legacyWallClock);
+        room.setDurationMinutes(120);
+        ChatSchedule actual = schedule("actual-schedule", host, "달력 일정");
+        actual.setStartsAt(Instant.parse("2099-09-01T10:00:00Z"));
+        actual.setDurationMinutes(45);
+        AtomicReference<ChatSchedule> migrated = new AtomicReference<>();
+
+        when(userRepository.findById(host.getId())).thenReturn(Optional.of(host));
+        when(chatRoomRepository.findByIdForUpdate(room.getId())).thenReturn(Optional.of(room));
+        when(scheduleRepository.saveAndFlush(any(ChatSchedule.class)))
+                .thenAnswer(invocation -> {
+                    ChatSchedule saved = initialize(invocation.getArgument(0));
+                    migrated.set(saved);
+                    return saved;
+                });
+        when(scheduleRepository
+                .findFirstByRoom_IdAndStatusAndStartsAtAfterOrderByStartsAtAscIdAsc(
+                        any(), any(), any()))
+                .thenAnswer(invocation -> Optional.of(migrated.get()));
+        when(scheduleRepository.findDetailedByRoomId(room.getId()))
+                .thenAnswer(invocation -> List.of(migrated.get(), actual));
+
+        var schedules = service.list(room.getId(), host.getId());
+
+        assertThat(schedules).extracting(result -> result.id())
+                .containsExactly(migrated.get().getId(), "actual-schedule");
+        assertThat(migrated.get().getStartsAt()).isEqualTo(legacyStart);
+        assertThat(room.getScheduledAt())
+                .isEqualTo(LocalDateTime.ofInstant(legacyStart, ZoneOffset.UTC));
+        assertThat(room.getDurationMinutes()).isEqualTo(120);
+        verify(scheduleRepository, times(1)).saveAndFlush(any());
+        verify(messageRepository, times(1)).saveAndFlush(any());
+    }
+
+    @Test
+    void periodicAdvanceMovesPassedProjectionToNextCalendarEvent() {
+        Instant now = Instant.parse("2026-07-16T00:00:00Z");
+        ChatSchedule passed = schedule("passed", host, "지난 일정");
+        passed.setStartsAt(now.minusSeconds(60));
+        ChatSchedule upcoming = schedule("upcoming", host, "다음 일정");
+        upcoming.setStartsAt(now.plusSeconds(12 * 3_600));
+        upcoming.setDurationMinutes(90);
+        room.setPublicRoom(true);
+        room.setStatus(ChatRoomStatus.ACTIVE);
+        room.setScheduledAt(LocalDateTime.ofInstant(passed.getStartsAt(), ZoneOffset.UTC));
+        room.setMeetupTimeBasis(MeetupTimeBasis.UTC);
+        room.setDurationMinutes(passed.getDurationMinutes());
+        room.setRegistrationDeadline(room.getScheduledAt().minusHours(1));
+        room.setReminderSentAt(room.getScheduledAt().minusHours(24));
+
+        when(chatRoomRepository.findPublicMeetupIdsRequiringScheduleProjectionReconciliation(
+                now,
+                ChatScheduleStatus.SCHEDULED,
+                ChatRoomStatus.ACTIVE)).thenReturn(List.of(room.getId()));
+        when(chatRoomRepository.findByIdForUpdate(room.getId())).thenReturn(Optional.of(room));
+        when(scheduleRepository.existsByRoom_IdAndStatusAndStartsAt(
+                room.getId(), ChatScheduleStatus.SCHEDULED, passed.getStartsAt())).thenReturn(true);
+        when(scheduleRepository
+                .findFirstByRoom_IdAndStatusAndStartsAtAfterOrderByStartsAtAscIdAsc(
+                        room.getId(), ChatScheduleStatus.SCHEDULED, now))
+                .thenReturn(Optional.of(upcoming));
+
+        service.reconcilePublicMeetupProjections(now);
+
+        assertThat(room.getScheduledAt())
+                .isEqualTo(LocalDateTime.ofInstant(upcoming.getStartsAt(), ZoneOffset.UTC));
+        assertThat(room.getDurationMinutes()).isEqualTo(90);
+        assertThat(room.getMeetupTimeBasis()).isEqualTo(MeetupTimeBasis.UTC);
+        assertThat(room.getRegistrationDeadline())
+                .isEqualTo(LocalDateTime.ofInstant(passed.getStartsAt(), ZoneOffset.UTC).minusHours(1));
+        assertThat(room.getReminderSentAt()).isNull();
+        verify(chatRoomRepository).save(room);
+        verify(scheduleRepository, never()).saveAndFlush(any());
+    }
+
+    @Test
+    void periodicReconciliationSelectsEarlierEventWhenCurrentProjectionIsStillFuture() {
+        Instant now = Instant.parse("2026-07-16T00:00:00Z");
+        ChatSchedule projected = schedule("projected", host, "Projected event");
+        projected.setStartsAt(now.plusSeconds(20 * 3_600));
+        ChatSchedule earlier = schedule("earlier", host, "Earlier event");
+        earlier.setStartsAt(now.plusSeconds(12 * 3_600));
+        earlier.setDurationMinutes(90);
+        room.setPublicRoom(true);
+        room.setStatus(ChatRoomStatus.ACTIVE);
+        room.setScheduledAt(LocalDateTime.ofInstant(projected.getStartsAt(), ZoneOffset.UTC));
+        room.setMeetupTimeBasis(MeetupTimeBasis.UTC);
+        room.setDurationMinutes(projected.getDurationMinutes());
+        room.setRegistrationDeadline(room.getScheduledAt().minusHours(1));
+        room.setReminderSentAt(room.getScheduledAt().minusHours(24));
+
+        when(chatRoomRepository.findPublicMeetupIdsRequiringScheduleProjectionReconciliation(
+                now, ChatScheduleStatus.SCHEDULED, ChatRoomStatus.ACTIVE))
+                .thenReturn(List.of(room.getId()));
+        when(chatRoomRepository.findByIdForUpdate(room.getId())).thenReturn(Optional.of(room));
+        when(scheduleRepository.existsByRoom_IdAndStatusAndStartsAt(
+                room.getId(), ChatScheduleStatus.SCHEDULED, projected.getStartsAt()))
+                .thenReturn(true);
+        when(scheduleRepository
+                .findFirstByRoom_IdAndStatusAndStartsAtAfterOrderByStartsAtAscIdAsc(
+                        room.getId(), ChatScheduleStatus.SCHEDULED, now))
+                .thenReturn(Optional.of(earlier));
+
+        service.reconcilePublicMeetupProjections(now);
+
+        assertThat(room.getScheduledAt())
+                .isEqualTo(LocalDateTime.ofInstant(earlier.getStartsAt(), ZoneOffset.UTC));
+        assertThat(room.getDurationMinutes()).isEqualTo(90);
+        assertThat(room.getRegistrationDeadline())
+                .isEqualTo(LocalDateTime.ofInstant(projected.getStartsAt(), ZoneOffset.UTC).minusHours(1));
+        assertThat(room.getReminderSentAt()).isNull();
+        verify(chatRoomRepository).save(room);
+        verify(scheduleRepository, never()).saveAndFlush(any());
+    }
+
+    @Test
     void onlyScheduleCreatorCanUpdate() {
         ChatSchedule schedule = schedule("schedule-1", host, "기존 일정");
         when(userRepository.findById(member.getId())).thenReturn(Optional.of(member));
-        when(chatRoomRepository.findByIdAndParticipantsContaining(room.getId(), member))
+        when(chatRoomRepository.findByIdForUpdate(room.getId()))
                 .thenReturn(Optional.of(room));
         when(scheduleRepository.findDetailedByIdAndRoomId(schedule.getId(), room.getId()))
                 .thenReturn(Optional.of(schedule));
@@ -174,23 +642,38 @@ class ChatScheduleServiceTest {
     void creatorUpdatesScheduleAndRebroadcastsSameCardId() {
         ChatSchedule schedule = schedule("schedule-1", host, "기존 일정");
         schedule.setVersion(3L);
+        Instant originalStart = schedule.getStartsAt();
+        Instant movedStart = originalStart.plusSeconds(86_400);
         Message card = card("message-1", schedule);
-        room.setLastMessage(card.getContent());
-        room.setLastMessageTime(card.getCreatedAt());
+        room.setLastMessage("기존 일반 메시지");
+        room.setLastMessageTime(card.getCreatedAt().minusSeconds(1));
+        room.setScheduledAt(LocalDateTime.ofInstant(originalStart, ZoneOffset.UTC));
+        room.setMeetupTimeBasis(MeetupTimeBasis.UTC);
+        room.setDurationMinutes(schedule.getDurationMinutes());
+        room.setRegistrationDeadline(room.getScheduledAt().minusHours(1));
+        room.setReminderSentAt(room.getScheduledAt().minusHours(24));
         when(userRepository.findById(host.getId())).thenReturn(Optional.of(host));
-        when(chatRoomRepository.findByIdAndParticipantsContaining(room.getId(), host))
+        when(chatRoomRepository.findByIdForUpdate(room.getId()))
                 .thenReturn(Optional.of(room));
         when(scheduleRepository.findDetailedByIdAndRoomId(schedule.getId(), room.getId()))
                 .thenReturn(Optional.of(schedule));
+        when(scheduleRepository.existsByRoom_IdAndStatusAndStartsAt(
+                room.getId(), ChatScheduleStatus.SCHEDULED, originalStart))
+                .thenReturn(true);
         when(scheduleRepository.saveAndFlush(schedule)).thenAnswer(invocation -> {
             schedule.setVersion(4L);
             return schedule;
         });
+        when(scheduleRepository
+                .findFirstByRoom_IdAndStatusAndStartsAtAfterOrderByStartsAtAscIdAsc(
+                        any(), any(), any()))
+                .thenReturn(Optional.of(schedule));
         when(messageRepository.findBySchedule_IdAndChatRoom_Id(schedule.getId(), room.getId()))
                 .thenReturn(Optional.of(card));
 
         var result = service.update(
-                room.getId(), schedule.getId(), host.getId(), updateRequest(3L, "변경된 일정"));
+                room.getId(), schedule.getId(), host.getId(),
+                updateRequest(3L, "변경된 일정", movedStart.atOffset(ZoneOffset.UTC)));
 
         assertThat(result.title()).isEqualTo("변경된 일정");
         assertThat(result.version()).isEqualTo(4L);
@@ -199,7 +682,14 @@ class ChatScheduleServiceTest {
         verify(applicationEventPublisher).publishEvent(event.capture());
         assertThat(event.getValue().message().getId()).isEqualTo("message-1");
         assertThat(event.getValue().message().getSchedule().currentUserStatus()).isNull();
-        assertThat(room.getLastMessage()).isEqualTo("일정: 변경된 일정");
+        assertThat(room.getLastMessage()).isEqualTo("기존 일반 메시지");
+        assertThat(room.getLastMessageTime()).isEqualTo(card.getCreatedAt().minusSeconds(1));
+        assertThat(room.getScheduledAt())
+                .isEqualTo(LocalDateTime.ofInstant(movedStart, ZoneOffset.UTC));
+        assertThat(room.getMeetupTimeBasis()).isEqualTo(MeetupTimeBasis.UTC);
+        assertThat(room.getRegistrationDeadline())
+                .isEqualTo(LocalDateTime.ofInstant(originalStart, ZoneOffset.UTC).minusHours(1));
+        assertThat(room.getReminderSentAt()).isNull();
     }
 
     @Test
@@ -207,7 +697,7 @@ class ChatScheduleServiceTest {
         ChatSchedule schedule = schedule("schedule-1", host, "기존 일정");
         schedule.setVersion(5L);
         when(userRepository.findById(host.getId())).thenReturn(Optional.of(host));
-        when(chatRoomRepository.findByIdAndParticipantsContaining(room.getId(), host))
+        when(chatRoomRepository.findByIdForUpdate(room.getId()))
                 .thenReturn(Optional.of(room));
         when(scheduleRepository.findDetailedByIdAndRoomId(schedule.getId(), room.getId()))
                 .thenReturn(Optional.of(schedule));
@@ -224,11 +714,18 @@ class ChatScheduleServiceTest {
     void creatorCancelsInsteadOfDeletingSchedule() {
         ChatSchedule schedule = schedule("schedule-1", host, "취소할 일정");
         Message card = card("message-1", schedule);
+        room.setScheduledAt(LocalDateTime.ofInstant(schedule.getStartsAt(), ZoneOffset.UTC));
+        room.setMeetupTimeBasis(MeetupTimeBasis.UTC);
+        room.setDurationMinutes(schedule.getDurationMinutes());
+        room.setRegistrationDeadline(room.getScheduledAt().minusHours(1));
+        room.setReminderSentAt(room.getScheduledAt().minusHours(24));
         when(userRepository.findById(host.getId())).thenReturn(Optional.of(host));
-        when(chatRoomRepository.findByIdAndParticipantsContaining(room.getId(), host))
+        when(chatRoomRepository.findByIdForUpdate(room.getId()))
                 .thenReturn(Optional.of(room));
         when(scheduleRepository.findDetailedByIdAndRoomId(schedule.getId(), room.getId()))
                 .thenReturn(Optional.of(schedule));
+        when(scheduleRepository.existsByRoom_IdAndStatusAndStartsAt(
+                room.getId(), ChatScheduleStatus.SCHEDULED, schedule.getStartsAt())).thenReturn(true);
         when(scheduleRepository.saveAndFlush(schedule)).thenReturn(schedule);
         when(messageRepository.findBySchedule_IdAndChatRoom_Id(schedule.getId(), room.getId()))
                 .thenReturn(Optional.of(card));
@@ -239,6 +736,12 @@ class ChatScheduleServiceTest {
         assertThat(result.status()).isEqualTo(ChatScheduleStatus.CANCELLED);
         assertThat(result.cancelledAt()).isNotNull();
         assertThat(card.getContent()).isEqualTo("취소된 일정: 취소할 일정");
+        assertThat(room.getScheduledAt()).isNull();
+        assertThat(room.getMeetupTimeBasis()).isNull();
+        assertThat(room.getDurationMinutes()).isNull();
+        assertThat(room.getRegistrationDeadline())
+                .isEqualTo(LocalDateTime.ofInstant(schedule.getStartsAt(), ZoneOffset.UTC).minusHours(1));
+        assertThat(room.getReminderSentAt()).isNull();
         verify(scheduleRepository, never()).delete(any());
     }
 
@@ -324,7 +827,7 @@ class ChatScheduleServiceTest {
         assertThat(com.talkwithneighbors.dto.schedule.ChatScheduleDto
                 .fromEntity(schedule, host.getId()).canCancel()).isFalse();
         when(userRepository.findById(host.getId())).thenReturn(Optional.of(host));
-        when(chatRoomRepository.findByIdAndParticipantsContaining(room.getId(), host))
+        when(chatRoomRepository.findByIdForUpdate(room.getId()))
                 .thenReturn(Optional.of(room));
         when(scheduleRepository.findDetailedByIdAndRoomId(schedule.getId(), room.getId()))
                 .thenReturn(Optional.of(schedule));
@@ -345,7 +848,7 @@ class ChatScheduleServiceTest {
         schedule.setKakaoPlaceId("place-1");
         Message card = card("message-1", schedule);
         when(userRepository.findById(host.getId())).thenReturn(Optional.of(host));
-        when(chatRoomRepository.findByIdAndParticipantsContaining(room.getId(), host))
+        when(chatRoomRepository.findByIdForUpdate(room.getId()))
                 .thenReturn(Optional.of(room));
         when(scheduleRepository.findDetailedByIdAndRoomId(schedule.getId(), room.getId()))
                 .thenReturn(Optional.of(schedule));
@@ -396,11 +899,19 @@ class ChatScheduleServiceTest {
     }
 
     private UpdateChatScheduleRequest updateRequest(Long version, String title) {
+        return updateRequest(version, title, null);
+    }
+
+    private UpdateChatScheduleRequest updateRequest(
+            Long version,
+            String title,
+            OffsetDateTime startsAt
+    ) {
         return new UpdateChatScheduleRequest(
                 version,
                 title,
                 null,
-                null,
+                startsAt,
                 null,
                 null,
                 null,
