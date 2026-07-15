@@ -47,6 +47,12 @@ public class ChatRoomDeletionRepository {
         // Make every pending entity change visible before executing bulk DML.
         entityManager.flush();
 
+        int scheduleRsvps = executeDelete("""
+                DELETE FROM chat_schedule_rsvps
+                WHERE schedule_id IN (
+                    SELECT id FROM chat_schedules WHERE room_id = :roomId
+                )
+                """, roomId);
         int waitlistEntries = executeDelete(
                 "DELETE FROM meetup_waitlist WHERE room_id = :roomId", roomId);
         int readStatuses = executeDelete("""
@@ -63,6 +69,8 @@ public class ChatRoomDeletionRepository {
                 """, roomId);
         int messages = executeDelete(
                 "DELETE FROM messages WHERE chat_room_id = :roomId", roomId);
+        int schedules = executeDelete(
+                "DELETE FROM chat_schedules WHERE room_id = :roomId", roomId);
         int interestTags = executeDelete(
                 "DELETE FROM chat_room_interest_tags WHERE chat_room_id = :roomId", roomId);
         int participants = executeDelete(
@@ -73,6 +81,8 @@ public class ChatRoomDeletionRepository {
         // Native DML bypasses the first-level cache; detach stale room/message entities.
         entityManager.clear();
         return new ChatRoomDeletionResult(
+                scheduleRsvps,
+                schedules,
                 waitlistEntries,
                 readStatuses,
                 attachments,
@@ -99,6 +109,8 @@ public class ChatRoomDeletionRepository {
     }
 
     public record ChatRoomDeletionResult(
+            int scheduleRsvps,
+            int schedules,
             int waitlistEntries,
             int readStatuses,
             int attachments,
@@ -107,5 +119,18 @@ public class ChatRoomDeletionRepository {
             int participants,
             int rooms
     ) {
+        /** Keeps older unit-test fixtures and callers source-compatible. */
+        public ChatRoomDeletionResult(
+                int waitlistEntries,
+                int readStatuses,
+                int attachments,
+                int messages,
+                int interestTags,
+                int participants,
+                int rooms
+        ) {
+            this(0, 0, waitlistEntries, readStatuses, attachments, messages,
+                    interestTags, participants, rooms);
+        }
     }
 }

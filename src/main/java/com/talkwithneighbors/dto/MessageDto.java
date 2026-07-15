@@ -3,6 +3,7 @@ package com.talkwithneighbors.dto;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.talkwithneighbors.entity.Message;
 import com.talkwithneighbors.entity.Message.MessageType;
+import com.talkwithneighbors.dto.schedule.ChatScheduleDto;
 
 import lombok.Getter;
 import lombok.Setter;
@@ -26,6 +27,7 @@ public class MessageDto {
     private String editedAt;
     private String deletedAt;
     private MessageType type;
+    private ChatScheduleDto schedule;
     @JsonProperty("isDeleted")
     private boolean isDeleted;
     private Set<Long> readByUsers;
@@ -54,6 +56,9 @@ public class MessageDto {
             dto.setDeletedAt(message.getDeletedAt().format(formatter));
         }
         dto.setType(message.getType());
+        if (!message.isDeleted() && message.getSchedule() != null) {
+            dto.setSchedule(ChatScheduleDto.fromEntity(message.getSchedule(), currentUserId));
+        }
         dto.setDeleted(message.isDeleted());
         List<com.talkwithneighbors.entity.MessageAttachment> attachments = message.getAttachments();
         if (message.isDeleted()) {

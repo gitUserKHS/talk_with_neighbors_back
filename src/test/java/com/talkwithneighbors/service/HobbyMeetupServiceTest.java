@@ -12,6 +12,9 @@ import com.talkwithneighbors.repository.ChatRoomRepository;
 import com.talkwithneighbors.repository.UserRepository;
 import com.talkwithneighbors.repository.UserBlockRepository;
 import com.talkwithneighbors.repository.MeetupWaitlistRepository;
+import com.talkwithneighbors.repository.ChatScheduleRepository;
+import com.talkwithneighbors.repository.ChatScheduleRsvpRepository;
+import com.talkwithneighbors.entity.ChatScheduleStatus;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.talkwithneighbors.outbox.DomainEventPublisher;
 import org.junit.jupiter.api.BeforeEach;
@@ -28,6 +31,7 @@ import java.util.Optional;
 import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.time.Instant;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -53,6 +57,12 @@ class HobbyMeetupServiceTest {
 
     @Mock
     private MeetupWaitlistRepository meetupWaitlistRepository;
+
+    @Mock
+    private ChatScheduleRepository chatScheduleRepository;
+
+    @Mock
+    private ChatScheduleRsvpRepository chatScheduleRsvpRepository;
 
     @Mock
     private OfflineNotificationService offlineNotificationService;
@@ -165,7 +175,36 @@ class HobbyMeetupServiceTest {
 
         assertFalse(room.getParticipants().contains(member));
         assertTrue(room.getParticipants().contains(creator));
+        verify(chatScheduleRsvpRepository)
+                .deleteBySchedule_Room_IdAndUser_Id(room.getId(), member.getId());
         verify(chatRoomRepository).save(room);
+    }
+
+    @Test
+    void creatorMustCancelFutureChatScheduleBeforeLeavingMeetup() {
+        User member = user(2L, "member", "카페");
+        ChatRoom room = publicMeetup("meetup-with-schedule", 5);
+        room.getParticipants().add(creator);
+        room.getParticipants().add(member);
+
+        when(userRepository.findById(member.getId())).thenReturn(Optional.of(member));
+        when(chatRoomRepository.findById(room.getId())).thenReturn(Optional.of(room));
+        when(chatScheduleRepository.existsByRoom_IdAndCreator_IdAndStatusAndStartsAtAfter(
+                org.mockito.ArgumentMatchers.eq(room.getId()),
+                org.mockito.ArgumentMatchers.eq(member.getId()),
+                org.mockito.ArgumentMatchers.eq(ChatScheduleStatus.SCHEDULED),
+                org.mockito.ArgumentMatchers.any(Instant.class)))
+                .thenReturn(true);
+
+        ChatException exception = assertThrows(
+                ChatException.class,
+                () -> hobbyMeetupService.leaveMeetup(member.getId(), room.getId()));
+
+        assertEquals(HttpStatus.CONFLICT, exception.getStatus());
+        assertTrue(room.getParticipants().contains(member));
+        verify(chatScheduleRsvpRepository, never())
+                .deleteBySchedule_Room_IdAndUser_Id(any(), any());
+        verify(chatRoomRepository, never()).save(room);
     }
 
     private ChatRoom publicMeetup(String id, int maxParticipants) {

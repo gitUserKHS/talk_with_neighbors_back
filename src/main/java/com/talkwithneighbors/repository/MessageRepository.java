@@ -4,11 +4,13 @@ import com.talkwithneighbors.entity.Message;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import java.util.List;
+import java.util.Optional;
 
 /**
  * 채팅 메시지를 관리하는 리포지토리 인터페이스
@@ -55,4 +57,7 @@ public interface MessageRepository extends JpaRepository<Message, String> {
             @Param("mediaUrl") String mediaUrl,
             @Param("userId") Long userId
     );
+
+    @EntityGraph(attributePaths = {"schedule", "schedule.creator", "schedule.rsvps", "schedule.rsvps.user"})
+    Optional<Message> findBySchedule_IdAndChatRoom_Id(String scheduleId, String roomId);
 }

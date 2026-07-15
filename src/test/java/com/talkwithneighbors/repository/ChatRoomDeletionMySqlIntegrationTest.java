@@ -3,6 +3,10 @@ package com.talkwithneighbors.repository;
 import com.talkwithneighbors.entity.ChatAttachmentType;
 import com.talkwithneighbors.entity.ChatRoom;
 import com.talkwithneighbors.entity.ChatRoomType;
+import com.talkwithneighbors.entity.ChatSchedule;
+import com.talkwithneighbors.entity.ChatScheduleRsvp;
+import com.talkwithneighbors.entity.ChatScheduleRsvpStatus;
+import com.talkwithneighbors.entity.ChatScheduleStatus;
 import com.talkwithneighbors.entity.MeetupWaitlistEntry;
 import com.talkwithneighbors.entity.Message;
 import com.talkwithneighbors.entity.MessageAttachment;
@@ -29,6 +33,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.LocalDateTime;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -60,6 +65,12 @@ class ChatRoomDeletionMySqlIntegrationTest {
 
     @Autowired
     private MeetupWaitlistRepository meetupWaitlistRepository;
+
+    @Autowired
+    private ChatScheduleRepository chatScheduleRepository;
+
+    @Autowired
+    private ChatScheduleRsvpRepository chatScheduleRsvpRepository;
 
     @Autowired
     private EntityManager entityManager;
@@ -147,6 +158,30 @@ class ChatRoomDeletionMySqlIntegrationTest {
 
             if (includeWaitlist) {
                 meetupWaitlistRepository.saveAndFlush(new MeetupWaitlistEntry(room, peer));
+
+                ChatSchedule schedule = new ChatSchedule();
+                schedule.setId("schedule-" + suffix);
+                schedule.setRoom(room);
+                schedule.setCreator(owner);
+                schedule.setTitle("Deletion-linked schedule");
+                schedule.setStartsAt(Instant.now().plusSeconds(86_400));
+                schedule.setDurationMinutes(90);
+                schedule.setTimeZone("Asia/Seoul");
+                schedule.setStatus(ChatScheduleStatus.SCHEDULED);
+                schedule = chatScheduleRepository.saveAndFlush(schedule);
+
+                chatScheduleRsvpRepository.saveAndFlush(new ChatScheduleRsvp(
+                        schedule, peer, ChatScheduleRsvpStatus.ATTENDING));
+
+                Message scheduleCard = new Message();
+                scheduleCard.setId("schedule-message-" + suffix);
+                scheduleCard.setChatRoom(room);
+                scheduleCard.setSender(owner);
+                scheduleCard.setContent("일정: Deletion-linked schedule");
+                scheduleCard.setType(Message.MessageType.SCHEDULE);
+                scheduleCard.setSchedule(schedule);
+                scheduleCard.setReadByUsers(new HashSet<>(List.of(owner.getId())));
+                messageRepository.saveAndFlush(scheduleCard);
             }
 
             entityManager.flush();
@@ -177,6 +212,11 @@ class ChatRoomDeletionMySqlIntegrationTest {
         assertCount(0, "SELECT COUNT(*) FROM chat_room_participants WHERE chat_room_id = ?", fixture.roomId());
         assertCount(0, "SELECT COUNT(*) FROM chat_room_interest_tags WHERE chat_room_id = ?", fixture.roomId());
         assertCount(0, "SELECT COUNT(*) FROM meetup_waitlist WHERE room_id = ?", fixture.roomId());
+        assertCount(0, "SELECT COUNT(*) FROM chat_schedules WHERE room_id = ?", fixture.roomId());
+        assertCount(0, """
+                SELECT COUNT(*) FROM chat_schedule_rsvps
+                WHERE schedule_id IN (SELECT id FROM chat_schedules WHERE room_id = ?)
+                """, fixture.roomId());
         assertCount(1, "SELECT COUNT(*) FROM users WHERE id = ?", fixture.ownerId());
         assertCount(1, "SELECT COUNT(*) FROM users WHERE id = ?", fixture.peerId());
     }

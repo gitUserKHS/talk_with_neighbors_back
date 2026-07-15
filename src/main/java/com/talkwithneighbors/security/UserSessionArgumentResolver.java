@@ -1,10 +1,12 @@
 package com.talkwithneighbors.security;
 
+import com.talkwithneighbors.exception.AuthException;
 import com.talkwithneighbors.service.SessionValidationService;
 import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import org.springframework.core.MethodParameter;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
 import org.springframework.web.bind.support.WebDataBinderFactory;
 import org.springframework.web.context.request.NativeWebRequest;
@@ -42,7 +44,9 @@ public class UserSessionArgumentResolver implements HandlerMethodArgumentResolve
 
         String sessionId = sessionCookie(request);
         if (sessionId == null) {
-            throw new IllegalStateException("An authenticated session is required");
+            throw new AuthException(
+                    "로그인이 필요해.",
+                    HttpStatus.UNAUTHORIZED);
         }
         return sessionValidationService.validateSession(sessionId);
     }
