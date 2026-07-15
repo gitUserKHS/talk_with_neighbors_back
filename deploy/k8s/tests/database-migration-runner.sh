@@ -151,7 +151,10 @@ set -e
 grep -Fq 'restore a verified schema+data backup first' <<<"$missing_schema_output"
 [[ "$(wc -l < "$missing_schema_state/ledger.tsv")" -eq 1 ]]
 [[ "$(wc -l < "$missing_schema_state/apply.log")" -eq 0 ]]
-! grep -Fq 'V2026071601' "$missing_schema_state/ledger.tsv"
+if grep -Fq 'V2026071601' "$missing_schema_state/ledger.tsv"; then
+  echo "schema preflight failure unexpectedly recorded V2026071601" >&2
+  exit 1
+fi
 
 export FAKE_K3S_STATE="$state"
 export FAKE_CALENDAR_SCHEMA_FINGERPRINT='14:18:4:9:2'
