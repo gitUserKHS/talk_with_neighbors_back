@@ -51,8 +51,12 @@ flowchart TD
 | `APP_MEDIA_STORAGE_DIRECTORY` | 백엔드 미디어 저장 경로; Compose 기본 `/app/uploads` |
 | `APP_MEDIA_FFMPEG_COMMAND` | FFmpeg 실행 파일; Docker 기본 `ffmpeg` |
 | `APP_MEDIA_FFPROBE_COMMAND` | FFprobe 실행 파일; Docker 기본 `ffprobe` |
-| `APP_MEDIA_PROCESSING_TIMEOUT_SECONDS` | 한 파일 변환 제한 시간; 기본 180초 |
-| `APP_MEDIA_MAX_CONCURRENT_PROCESSES` | 동시 FFmpeg 변환 수; 기본 2, 초과 요청은 잠시 대기 후 503 |
+| `APP_MEDIA_PROCESSING_TIMEOUT_SECONDS` | probe·변환·썸네일을 합친 한 파일 처리 제한 시간; 기본 90초 |
+| `APP_MEDIA_MAX_CONCURRENT_PROCESSES` | 동시 FFmpeg 변환 수; 기본 1, 초과 요청은 잠시 대기 후 503 |
+| `APP_MEDIA_MAX_VIDEO_BYTES` | 입력 동영상 한 개의 최대 크기; 기본 30MB(31457280 bytes) |
+| `APP_MEDIA_MAX_VIDEO_DURATION_SECONDS` | 입력 동영상 최대 재생 시간; 기본 60초 |
+| `APP_MEDIA_MAX_VIDEO_PIXELS` | 입력 동영상 프레임 최대 픽셀 수; 기본 2073600(1920x1080) |
+| `APP_MEDIA_MAX_VIDEO_DIMENSION` | 입력 동영상 긴 변의 최대 길이; 기본 1920px, 세로/가로 동일 적용 |
 | `PUBLIC_ORIGIN` | 운영 HTTPS CORS origin; 기본 `https://talk-with-neighbors.duckdns.org` |
 | `IMAGE_TAG` | 운영 Compose의 GHCR 태그 |
 
@@ -86,7 +90,9 @@ PR과 `main`, `codex/**` 푸시에서 다음을 실행한다.
 
 `main`과 버전 태그의 백엔드 이미지는 별도 품질 작업이 성공한 뒤에만 GHCR에 게시된다. 게시 이미지에는 provenance와 SBOM attestation을 생성한다. 백엔드 `main`의 **Publish backend image**가 성공하면 배포 워크플로가 자동으로 이어지고, 검증을 통과해 승격된 백엔드·프런트엔드 `:main` 태그를 각각 OCI digest로 해석한 뒤 그 불변 주소만 k3s에 전달한다. 실패하거나 취소된 게시 실행은 배포하지 않는다.
 
-백엔드 `main` 게시 성공은 백엔드 저장소 안에서 전체 배포를 시작한다. 프런트 `main` 게시 성공은 최소 권한 GitHub App 토큰으로 백엔드 저장소에 `frontend_image_published` 이벤트를 보낸다. 이 경로는 이벤트의 출처·SHA·run ID와 현재 검증된 프런트 `:main` digest를 다시 확인한 뒤, 기존 k3s의 프런트 Deployment만 교체한다. DB·Redis·백엔드·Kubernetes Secret·migration·백업은 실행하지 않으며, 실제 배포 중인 백엔드 digest와 새 프런트 digest를 릴리스 이력에 기록한다. 늦게 도착한 이벤트도 최신 프런트를 이전 버전으로 되돌리지 않는다. 두 저장소가 함께 바뀌고 API 호환 순서가 필요한 릴리스는 프런트 게시 성공 뒤 백엔드를 병합한다.
+백엔드 `main` 게시 성공은 백엔드 저장소 안에서 전체 배포를 시작한다. 프런트 `main` 게시 성공은 최소 권한 GitHub App 토큰으로 백엔드 저장소에 `frontend_image_published` 이벤트를 보낸다. 이 경로는 이벤트의 출처·SHA·run ID와 현재 검증된 프런트 `:main` digest를 다시 확인한 뒤, 기존 k3s의 프런트 Deployment만 교체한다. DB·Redis·백엔드·Kubernetes Secret·migration·백업은 실행하지 않으며, 실제 배포 중인 백엔드 digest와 새 프런트 digest를 릴리스 이력에 기록한다. 늦게 도착한 이벤트도 최신 프런트를 이전 버전으로 되돌리지 않는다.
+
+모임 달력처럼 기존 쓰기를 canonical 데이터로 흡수해야 하는 릴리스는 세 번으로 나눈다. **PR A**에는 호환 백엔드 코드와 테스트만 넣고 migration 파일은 제외한 채 먼저 배포하여 모든 이전 Pod가 교체됐는지 검증한다. 이 버전은 이전 프런트의 프로필 일정 쓰기를 같은 트랜잭션에서 canonical calendar에도 동기화한다. **PR B**는 그 `main` 위에 `V2026071601`과 migration gate·테스트·운영 문서만 추가해 backfill을 실행한다. migration은 후보 방을 `FOR UPDATE`로 잠그고 하나의 트랜잭션에서 변환하므로 이미 배포된 호환 백엔드 쓰기와 경합해도 중간 snapshot을 덮어쓰지 않는다. 마지막으로 새 프런트를 병합·배포한다. PR A와 PR B를 합치면 현재 배포 스크립트가 새 backend rollout보다 migration을 먼저 실행하므로 허용하지 않는다.
 
 ## AWS 인프라와 k3s 배포
 

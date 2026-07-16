@@ -185,6 +185,16 @@ spec:
               value: /tmp/twn-media
             - name: APP_MEDIA_MAX_CONCURRENT_PROCESSES
               value: "1"
+            - name: APP_MEDIA_PROCESSING_TIMEOUT_SECONDS
+              value: "90"
+            - name: APP_MEDIA_MAX_VIDEO_BYTES
+              value: "31457280"
+            - name: APP_MEDIA_MAX_VIDEO_DURATION_SECONDS
+              value: "60"
+            - name: APP_MEDIA_MAX_VIDEO_PIXELS
+              value: "2073600"
+            - name: APP_MEDIA_MAX_VIDEO_DIMENSION
+              value: "1920"
             - name: SERVER_TOMCAT_THREADS_MAX
               value: "50"
             - name: SERVER_TOMCAT_THREADS_MIN_SPARE

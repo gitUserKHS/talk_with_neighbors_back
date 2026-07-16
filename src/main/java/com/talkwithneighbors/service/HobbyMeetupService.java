@@ -52,6 +52,7 @@ public class HobbyMeetupService {
     private final MeetupWaitlistRepository meetupWaitlistRepository;
     private final ChatScheduleRepository chatScheduleRepository;
     private final ChatScheduleRsvpRepository chatScheduleRsvpRepository;
+    private final ChatScheduleService chatScheduleService;
     private final OfflineNotificationService offlineNotificationService;
     private final ObjectMapper objectMapper;
     private final ChatService chatService;
@@ -113,22 +114,22 @@ public class HobbyMeetupService {
         room.setMaxParticipants(request.getMaxParticipants());
         LocalDateTime scheduledAtUtc = toUtcLocalDateTime(request.getScheduledAt());
         LocalDateTime registrationDeadlineUtc = toUtcLocalDateTime(request.getRegistrationDeadline());
-        LocalDateTime nowUtc = LocalDateTime.now(ZoneOffset.UTC);
-        if (scheduledAtUtc != null && scheduledAtUtc.isBefore(nowUtc)) {
-            throw new ChatException("모임 일정은 현재 이후여야 해요.", HttpStatus.BAD_REQUEST);
-        }
-        if (registrationDeadlineUtc != null && scheduledAtUtc != null
-                && registrationDeadlineUtc.isAfter(scheduledAtUtc)) {
-            throw new ChatException("신청 마감은 모임 시작 전이어야 해요.", HttpStatus.BAD_REQUEST);
-        }
+        validateLegacyProfileSchedule(scheduledAtUtc, registrationDeadlineUtc);
         room.setScheduledAt(scheduledAtUtc);
-        room.setMeetupTimeBasis(MeetupTimeBasis.UTC);
-        room.setDurationMinutes(request.getDurationMinutes() != null ? request.getDurationMinutes() : 120);
+        room.setMeetupTimeBasis(scheduledAtUtc != null ? MeetupTimeBasis.UTC : null);
+        room.setDurationMinutes(scheduledAtUtc != null
+                ? (request.getDurationMinutes() != null ? request.getDurationMinutes() : 120)
+                : null);
         room.setRegistrationDeadline(registrationDeadlineUtc);
+        room.setReminderSentAt(null);
         room.setCreator(creator);
         room.getParticipants().add(creator);
 
-        return toDto(chatRoomRepository.save(room), creator);
+        ChatRoom savedRoom = chatRoomRepository.save(room);
+        if (scheduledAtUtc != null) {
+            chatScheduleService.synchronizeLegacyProfileSchedule(savedRoom);
+        }
+        return toDto(savedRoom, creator);
     }
 
     @Transactional(readOnly = true)
@@ -169,25 +170,27 @@ public class HobbyMeetupService {
             throw new ChatException("위도와 경도는 함께 입력해 줘.", HttpStatus.BAD_REQUEST);
         }
 
-        LocalDateTime scheduledAtUtc = toUtcLocalDateTime(request.getScheduledAt());
-        LocalDateTime registrationDeadlineUtc = toUtcLocalDateTime(request.getRegistrationDeadline());
-        LocalDateTime nowUtc = LocalDateTime.now(ZoneOffset.UTC);
-        if (scheduledAtUtc != null && scheduledAtUtc.isBefore(nowUtc)) {
-            throw new ChatException("모임 일정은 현재 이후여야 해.", HttpStatus.BAD_REQUEST);
+        // Preserve any unrepresented profile event before an old client can
+        // replace the room projection with its edited date.
+        chatScheduleService.materializeLegacyProfileSchedule(room);
+        LocalDateTime requestedScheduledAt = toUtcLocalDateTime(request.getScheduledAt());
+        LocalDateTime requestedDeadline = toUtcLocalDateTime(request.getRegistrationDeadline());
+        if (requestedScheduledAt != null) {
+            validateLegacyProfileSchedule(requestedScheduledAt, requestedDeadline);
         }
-        if (registrationDeadlineUtc != null && scheduledAtUtc != null
-                && registrationDeadlineUtc.isAfter(scheduledAtUtc)) {
+        Integer requestedDuration = request.getDurationMinutes() != null
+                ? request.getDurationMinutes() : 120;
+        if (requestedScheduledAt != null
+                && (requestedDuration < 30 || requestedDuration > 1440)) {
             throw new ChatException(
-                    "신청 마감은 모임 시작 이후로 정할 수 없어.",
+                    "모임 시간은 30분 이상 1,440분 이하로 입력해 줘.",
                     HttpStatus.BAD_REQUEST);
         }
-        Integer durationMinutes = request.getDurationMinutes() != null
-                ? request.getDurationMinutes() : 120;
-        if (durationMinutes < 30 || durationMinutes > 1440) {
-            throw new ChatException("모임 시간은 30분 이상 1,440분 이하로 입력해 줘.", HttpStatus.BAD_REQUEST);
-        }
-
         LocalDateTime previousScheduledAt = room.getScheduledAt();
+        Instant previousProjectionStart = MeetupTimePolicy.toInstant(
+                room.getScheduledAt(), room.getMeetupTimeBasis());
+        Integer previousProjectionDuration = room.getDurationMinutes();
+
         room.setName(request.getTitle().trim());
         room.setDescription(trimToNull(request.getDescription()));
         room.setInterestTags(tags);
@@ -197,12 +200,20 @@ public class HobbyMeetupService {
         room.setLongitude(request.getLongitude());
         room.setKakaoPlaceId(trimToNull(request.getKakaoPlaceId()));
         room.setMaxParticipants(maxParticipants);
-        room.setScheduledAt(scheduledAtUtc);
-        room.setMeetupTimeBasis(MeetupTimeBasis.UTC);
-        room.setDurationMinutes(durationMinutes);
-        room.setRegistrationDeadline(registrationDeadlineUtc);
-        if (!Objects.equals(previousScheduledAt, scheduledAtUtc)) {
-            room.setReminderSentAt(null);
+        if (requestedScheduledAt != null) {
+            room.setScheduledAt(requestedScheduledAt);
+            room.setMeetupTimeBasis(MeetupTimeBasis.UTC);
+            room.setDurationMinutes(requestedDuration);
+            if (!Objects.equals(previousScheduledAt, requestedScheduledAt)) {
+                room.setReminderSentAt(null);
+            }
+        }
+        if (requestedDeadline != null) {
+            room.setRegistrationDeadline(requestedDeadline);
+        }
+        if (requestedScheduledAt != null) {
+            chatScheduleService.synchronizeLegacyProfileSchedule(
+                    room, previousProjectionStart, previousProjectionDuration);
         }
         promoteWaitlistedUsers(room);
         return toDto(chatRoomRepository.save(room), requester);
@@ -219,7 +230,7 @@ public class HobbyMeetupService {
         if (room.getCreator() != null && userBlockRepository.existsBetween(userId, room.getCreator().getId())) {
             throw new ChatException("차단 관계인 사용자의 모임에는 참여할 수 없어요.", HttpStatus.FORBIDDEN);
         }
-        if (MeetupTimePolicy.isPast(
+        if (!chatScheduleRepository.existsByRoom_Id(room.getId()) && MeetupTimePolicy.isPast(
                 room.getRegistrationDeadline(), room.getMeetupTimeBasis(), Instant.now())) {
             throw new ChatException("모임 신청이 마감되었어요.", HttpStatus.CONFLICT);
         }
@@ -360,7 +371,7 @@ public class HobbyMeetupService {
      * new caller can take it. Callers hold the room's pessimistic write lock.
      */
     private boolean promoteWaitlistedUsers(ChatRoom room) {
-        if (MeetupTimePolicy.isPast(
+        if (!chatScheduleRepository.existsByRoom_Id(room.getId()) && MeetupTimePolicy.isPast(
                 room.getRegistrationDeadline(), room.getMeetupTimeBasis(), Instant.now())) {
             return false;
         }
@@ -429,7 +440,21 @@ public class HobbyMeetupService {
         return value.trim();
     }
 
+    private void validateLegacyProfileSchedule(
+            LocalDateTime scheduledAtUtc,
+            LocalDateTime registrationDeadlineUtc
+    ) {
+        if (scheduledAtUtc != null && scheduledAtUtc.isBefore(LocalDateTime.now(ZoneOffset.UTC))) {
+            throw new ChatException("모임 일정은 현재 이후여야 해.", HttpStatus.BAD_REQUEST);
+        }
+        if (registrationDeadlineUtc != null && scheduledAtUtc != null
+                && registrationDeadlineUtc.isAfter(scheduledAtUtc)) {
+            throw new ChatException("신청 마감은 모임 시작 전이어야 해.", HttpStatus.BAD_REQUEST);
+        }
+    }
+
     private LocalDateTime toUtcLocalDateTime(OffsetDateTime value) {
         return value == null ? null : value.withOffsetSameInstant(ZoneOffset.UTC).toLocalDateTime();
     }
+
 }

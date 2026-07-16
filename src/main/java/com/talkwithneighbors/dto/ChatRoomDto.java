@@ -1,6 +1,7 @@
 package com.talkwithneighbors.dto;
 
 import com.talkwithneighbors.entity.ChatRoom;
+import com.talkwithneighbors.entity.Message;
 import com.talkwithneighbors.entity.ChatRoomType;
 import com.talkwithneighbors.entity.ChatRoomStatus;
 import com.talkwithneighbors.entity.User;
@@ -90,7 +91,8 @@ public class ChatRoomDto {
         if (currentUser != null && messageRepository != null && chatRoom.getId() != null && currentUser.getId() != null) {
             try {
                 // MessageRepository의 countUnreadMessages 메서드가 (String, Long)을 받는지 확인 필요
-                long count = messageRepository.countUnreadMessages(chatRoom.getId(), currentUser.getId()); 
+                long count = messageRepository.countVisibleUnreadMessages(
+                        chatRoom.getId(), currentUser.getId(), Message.MessageType.SCHEDULE);
                 dto.setUnreadCount((int) count);
             } catch (Exception e) {
                 log.error("[ChatRoomDto] Error calculating unreadCount for room: {}, user: {}. Error: {}", chatRoom.getId(), currentUser.getId(), e.getMessage(), e);

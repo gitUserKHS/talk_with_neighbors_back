@@ -179,6 +179,49 @@ class ChatServiceTest {
     }
 
     @Test
+    void firstRoomListRepairsHiddenSchedulePreviewBeforePaging() {
+        LocalDateTime scheduleCardTime = LocalDateTime.of(2026, 7, 16, 12, 0);
+        Message visibleMessage = new Message();
+        visibleMessage.setId("visible-message");
+        visibleMessage.setChatRoom(testChatRoom);
+        visibleMessage.setSender(testUser);
+        visibleMessage.setType(Message.MessageType.TEXT);
+        visibleMessage.setContent("Visible chat message");
+        visibleMessage.setCreatedAt(scheduleCardTime.minusMinutes(5));
+        testChatRoom.setLastMessage("Schedule: hidden card");
+        testChatRoom.setLastMessageTime(scheduleCardTime);
+        Page<ChatRoom> chatRoomPage = new org.springframework.data.domain.PageImpl<>(
+                List.of(testChatRoom));
+        var pageable = org.springframework.data.domain.PageRequest.of(0, 10);
+
+        when(userRepository.findById(testUser.getId())).thenReturn(Optional.of(testUser));
+        when(messageRepository.findParticipantRoomIdsWithSchedulePreview(
+                testUser, Message.MessageType.SCHEDULE))
+                .thenReturn(List.of(testChatRoom.getId()));
+        when(chatRoomRepository.findByIdForUpdate(testChatRoom.getId()))
+                .thenReturn(Optional.of(testChatRoom));
+        when(messageRepository.existsByChatRoom_IdAndTypeAndCreatedAt(
+                testChatRoom.getId(), Message.MessageType.SCHEDULE, scheduleCardTime))
+                .thenReturn(true);
+        when(messageRepository.findVisibleActiveByChatRoomIdOrderByCreatedAtDesc(
+                eq(testChatRoom.getId()), eq(Message.MessageType.SCHEDULE), any()))
+                .thenReturn(List.of(visibleMessage));
+        when(chatRoomRepository.findByParticipantsContainingOrderByLastMessageTimeDesc(
+                testUser, pageable)).thenReturn(chatRoomPage);
+
+        Page<ChatRoomDto> result = chatService.getChatRoomsForUser(
+                testUser.getId().toString(), pageable);
+
+        assertEquals("Visible chat message", result.getContent().get(0).getLastMessage());
+        assertEquals(visibleMessage.getCreatedAt(),
+                LocalDateTime.parse(result.getContent().get(0).getLastMessageTime()));
+        org.mockito.InOrder order = inOrder(chatRoomRepository);
+        order.verify(chatRoomRepository).save(testChatRoom);
+        order.verify(chatRoomRepository)
+                .findByParticipantsContainingOrderByLastMessageTimeDesc(testUser, pageable);
+    }
+
+    @Test
     @DisplayName("채팅방 메시지 전송 성공 테스트")
     void sendMessageSuccess() {
         // given
@@ -252,7 +295,8 @@ class ChatServiceTest {
         when(chatRoomRepository.findByIdForUpdate(testChatRoom.getId())).thenReturn(Optional.of(testChatRoom));
         when(messageRepository.findById(testMessage.getId())).thenReturn(Optional.of(testMessage));
         when(messageRepository.save(testMessage)).thenReturn(testMessage);
-        when(messageRepository.findActiveByChatRoomIdOrderByCreatedAtDesc(eq(testChatRoom.getId()), any()))
+        when(messageRepository.findVisibleActiveByChatRoomIdOrderByCreatedAtDesc(
+                eq(testChatRoom.getId()), eq(Message.MessageType.SCHEDULE), any()))
                 .thenReturn(List.of(testMessage));
 
         MessageDto result = chatService.updateMessage(
@@ -298,7 +342,8 @@ class ChatServiceTest {
         when(chatRoomRepository.findByIdForUpdate(testChatRoom.getId())).thenReturn(Optional.of(testChatRoom));
         when(messageRepository.findById(testMessage.getId())).thenReturn(Optional.of(testMessage));
         when(messageRepository.save(testMessage)).thenReturn(testMessage);
-        when(messageRepository.findActiveByChatRoomIdOrderByCreatedAtDesc(eq(testChatRoom.getId()), any()))
+        when(messageRepository.findVisibleActiveByChatRoomIdOrderByCreatedAtDesc(
+                eq(testChatRoom.getId()), eq(Message.MessageType.SCHEDULE), any()))
                 .thenReturn(List.of());
 
         MessageDto result = chatService.deleteMessage(
@@ -335,7 +380,8 @@ class ChatServiceTest {
         Page<Message> messagePage = new org.springframework.data.domain.PageImpl<>(List.of(testMessage));
         when(userRepository.findById(testUser.getId())).thenReturn(Optional.of(testUser));
         when(chatRoomRepository.findById(testChatRoom.getId())).thenReturn(Optional.of(testChatRoom));
-        when(messageRepository.findByChatRoomIdOrderByCreatedAtDesc(anyString(), any()))
+        when(messageRepository.findVisibleByChatRoomIdOrderByCreatedAtDesc(
+                anyString(), eq(Message.MessageType.SCHEDULE), any()))
             .thenReturn(messagePage);
 
         // when

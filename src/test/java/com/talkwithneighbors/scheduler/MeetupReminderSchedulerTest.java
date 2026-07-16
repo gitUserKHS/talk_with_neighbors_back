@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.talkwithneighbors.entity.MeetupTimeBasis;
 import com.talkwithneighbors.repository.ChatRoomRepository;
 import com.talkwithneighbors.service.OfflineNotificationService;
+import com.talkwithneighbors.service.ChatScheduleService;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
@@ -17,6 +18,8 @@ import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.inOrder;
+import static org.mockito.ArgumentMatchers.any;
 
 @ExtendWith(MockitoExtension.class)
 class MeetupReminderSchedulerTest {
@@ -25,6 +28,9 @@ class MeetupReminderSchedulerTest {
 
     @Mock
     OfflineNotificationService offlineNotificationService;
+
+    @Mock
+    ChatScheduleService chatScheduleService;
 
     @Test
     void queriesUtcAndLegacySeoulWindowsWithoutShiftingExistingRows() {
@@ -42,8 +48,17 @@ class MeetupReminderSchedulerTest {
                 .thenReturn(List.of());
         LocalDateTime beforeUtc = LocalDateTime.now(ZoneOffset.UTC);
 
-        new MeetupReminderScheduler(chatRoomRepository, offlineNotificationService, new ObjectMapper())
+        new MeetupReminderScheduler(
+                chatRoomRepository,
+                chatScheduleService,
+                offlineNotificationService,
+                new ObjectMapper())
                 .createUpcomingReminders();
+
+        var order = inOrder(chatScheduleService, chatRoomRepository);
+        order.verify(chatScheduleService).reconcilePublicMeetupProjections(any());
+        order.verify(chatRoomRepository).findUpcomingPublicMeetups(
+                any(), any(), any(), any(), any(), any());
 
         LocalDateTime afterUtc = LocalDateTime.now(ZoneOffset.UTC);
         assertThat(utcStartCaptor.getValue()).isBetween(beforeUtc, afterUtc);

@@ -3,16 +3,23 @@ package com.talkwithneighbors.service;
 import com.talkwithneighbors.entity.ChatRoom;
 import com.talkwithneighbors.entity.ChatRoomStatus;
 import com.talkwithneighbors.entity.ChatRoomType;
+import com.talkwithneighbors.entity.ChatSchedule;
+import com.talkwithneighbors.entity.ChatScheduleRsvp;
+import com.talkwithneighbors.entity.ChatScheduleRsvpStatus;
+import com.talkwithneighbors.entity.ChatScheduleStatus;
 import com.talkwithneighbors.entity.FeedMediaType;
 import com.talkwithneighbors.entity.FeedPost;
 import com.talkwithneighbors.entity.FeedPostMedia;
 import com.talkwithneighbors.entity.MeetupTimeBasis;
+import com.talkwithneighbors.entity.Message;
 import com.talkwithneighbors.entity.PostComment;
 import com.talkwithneighbors.entity.User;
 import com.talkwithneighbors.entity.UserAccountType;
 import com.talkwithneighbors.repository.ChatRoomRepository;
+import com.talkwithneighbors.repository.ChatScheduleRepository;
 import com.talkwithneighbors.repository.FeedPostRepository;
 import com.talkwithneighbors.repository.PostCommentRepository;
+import com.talkwithneighbors.repository.MessageRepository;
 import com.talkwithneighbors.repository.UserRepository;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
@@ -21,6 +28,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 
 import java.time.Clock;
 import java.time.DayOfWeek;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
@@ -31,6 +39,7 @@ import java.time.temporal.TemporalAdjusters;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 import java.util.UUID;
 
 /**
@@ -60,6 +69,8 @@ public class OfficialContentSeedService {
     private final FeedPostRepository feedPostRepository;
     private final PostCommentRepository postCommentRepository;
     private final ChatRoomRepository chatRoomRepository;
+    private final ChatScheduleRepository chatScheduleRepository;
+    private final MessageRepository messageRepository;
     private final PasswordEncoder passwordEncoder;
     private final Clock clock;
 
@@ -69,10 +80,13 @@ public class OfficialContentSeedService {
             FeedPostRepository feedPostRepository,
             PostCommentRepository postCommentRepository,
             ChatRoomRepository chatRoomRepository,
+            ChatScheduleRepository chatScheduleRepository,
+            MessageRepository messageRepository,
             PasswordEncoder passwordEncoder
     ) {
         this(userRepository, feedPostRepository, postCommentRepository,
-                chatRoomRepository, passwordEncoder, Clock.systemUTC());
+                chatRoomRepository, chatScheduleRepository, messageRepository,
+                passwordEncoder, Clock.systemUTC());
     }
 
     OfficialContentSeedService(
@@ -80,6 +94,8 @@ public class OfficialContentSeedService {
             FeedPostRepository feedPostRepository,
             PostCommentRepository postCommentRepository,
             ChatRoomRepository chatRoomRepository,
+            ChatScheduleRepository chatScheduleRepository,
+            MessageRepository messageRepository,
             PasswordEncoder passwordEncoder,
             Clock clock
     ) {
@@ -87,6 +103,8 @@ public class OfficialContentSeedService {
         this.feedPostRepository = feedPostRepository;
         this.postCommentRepository = postCommentRepository;
         this.chatRoomRepository = chatRoomRepository;
+        this.chatScheduleRepository = chatScheduleRepository;
+        this.messageRepository = messageRepository;
         this.passwordEncoder = passwordEncoder;
         this.clock = clock;
     }
@@ -255,12 +273,19 @@ public class OfficialContentSeedService {
         for (ChatRoom room : chatRoomRepository.findByCreator_IdAndTypeOrderByScheduledAtDesc(
                 owner.getId(), ChatRoomType.GROUP)) {
             if (!room.isPublicRoom()
-                    || room.getStatus() != ChatRoomStatus.ACTIVE
-                    || room.getScheduledAt() == null) {
+                    || room.getStatus() != ChatRoomStatus.ACTIVE) {
                 continue;
             }
-            var scheduledAt = MeetupTimePolicy.toUtcOffset(room.getScheduledAt(), room.getMeetupTimeBasis());
-            if (scheduledAt != null && !scheduledAt.toInstant().isAfter(nowSeoul.toInstant())) {
+            Instant occurrenceStart = MeetupTimePolicy.toInstant(
+                    room.getScheduledAt(), room.getMeetupTimeBasis());
+            if (occurrenceStart == null) {
+                occurrenceStart = chatScheduleRepository
+                        .findFirstByRoom_IdAndStatusOrderByStartsAtDescIdDesc(
+                                room.getId(), ChatScheduleStatus.SCHEDULED)
+                        .map(ChatSchedule::getStartsAt)
+                        .orElse(null);
+            }
+            if (occurrenceStart != null && !occurrenceStart.isAfter(nowSeoul.toInstant())) {
                 room.setStatus(ChatRoomStatus.CLOSED);
                 chatRoomRepository.save(room);
             }
@@ -306,15 +331,117 @@ public class OfficialContentSeedService {
         if (created || room.getMaxParticipants() == null) {
             room.setMaxParticipants(spec.maxParticipants());
         }
-        if (created || room.getScheduledAt() == null) {
-            LocalDateTime scheduledAtUtc = spec.start().withZoneSameInstant(ZoneOffset.UTC).toLocalDateTime();
-            room.setScheduledAt(scheduledAtUtc);
-            room.setMeetupTimeBasis(MeetupTimeBasis.UTC);
-            room.setRegistrationDeadline(scheduledAtUtc.minusDays(1));
-            room.setDurationMinutes(spec.durationMinutes());
-        }
         room.getParticipants().add(owner);
+        room = chatRoomRepository.saveAndFlush(room);
+        upsertOfficialSchedule(room, spec, owner);
+        recomputeOfficialRoomProjection(room);
         chatRoomRepository.save(room);
+    }
+
+    private void upsertOfficialSchedule(ChatRoom room, MeetupSpec spec, User owner) {
+        String officialScheduleId = deterministicId("official-chat-schedule:", room.getId());
+        String legacyScheduleId = deterministicId("legacy-chat-schedule:", room.getId());
+        ChatSchedule schedule = chatScheduleRepository.findById(officialScheduleId)
+                .orElseGet(() -> chatScheduleRepository.findById(legacyScheduleId).orElse(null));
+        if (schedule == null) {
+            Instant preservedStart = MeetupTimePolicy.toInstant(
+                    room.getScheduledAt(), room.getMeetupTimeBasis());
+            schedule = new ChatSchedule();
+            schedule.setId(officialScheduleId);
+            schedule.setRoom(room);
+            schedule.setCreator(owner);
+            schedule.setTitle(spec.title());
+            schedule.setDescription(spec.description());
+            schedule.setStartsAt(preservedStart != null
+                    ? preservedStart
+                    : spec.start().toInstant());
+            schedule.setDurationMinutes(room.getDurationMinutes() != null
+                    ? room.getDurationMinutes()
+                    : spec.durationMinutes());
+            schedule.setTimeZone(SEOUL.getId());
+            schedule.setLocation(spec.location());
+            schedule.setLocationAddress(spec.address());
+            schedule.setLatitude(spec.latitude());
+            schedule.setLongitude(spec.longitude());
+            schedule.setKakaoPlaceId(spec.kakaoPlaceId());
+            schedule.setStatus(ChatScheduleStatus.SCHEDULED);
+            schedule.addRsvp(new ChatScheduleRsvp(
+                    schedule, owner, ChatScheduleRsvpStatus.ATTENDING));
+            schedule = chatScheduleRepository.saveAndFlush(schedule);
+        } else {
+            if (!room.getId().equals(schedule.getRoom().getId())
+                    || !owner.getId().equals(schedule.getCreator().getId())) {
+                throw new IllegalStateException(
+                        "Official chat schedule ID collision: " + schedule.getId());
+            }
+            // The seed specification owns descriptive metadata and duration.
+            // Only the start remains untouched so a published occurrence is not moved.
+            schedule.setTitle(spec.title());
+            schedule.setDescription(spec.description());
+            schedule.setDurationMinutes(spec.durationMinutes());
+            schedule.setTimeZone(SEOUL.getId());
+            schedule.setLocation(spec.location());
+            schedule.setLocationAddress(spec.address());
+            schedule.setLatitude(spec.latitude());
+            schedule.setLongitude(spec.longitude());
+            schedule.setKakaoPlaceId(spec.kakaoPlaceId());
+            var ownerRsvp = schedule.getRsvps().stream()
+                    .filter(rsvp -> owner.getId().equals(rsvp.getUser().getId()))
+                    .findFirst();
+            if (ownerRsvp.isPresent()) {
+                ownerRsvp.get().setStatus(ChatScheduleRsvpStatus.ATTENDING);
+            } else {
+                schedule.addRsvp(new ChatScheduleRsvp(
+                        schedule, owner, ChatScheduleRsvpStatus.ATTENDING));
+            }
+            schedule = chatScheduleRepository.saveAndFlush(schedule);
+        }
+
+        Message card = messageRepository
+                .findBySchedule_IdAndChatRoom_Id(schedule.getId(), room.getId())
+                .orElseGet(() -> {
+                    Message createdCard = new Message();
+                    createdCard.setId(deterministicId(
+                            "official-chat-schedule-message:", room.getId()));
+                    createdCard.setChatRoom(room);
+                    createdCard.setCreatedAt(room.getLastMessageTime() != null
+                            ? room.getLastMessageTime().minusSeconds(1)
+                            : LocalDateTime.ofInstant(clock.instant(), ZoneOffset.UTC).minusSeconds(1));
+                    return createdCard;
+                });
+        card.setSender(owner);
+        card.setContent("일정: " + schedule.getTitle());
+        card.setType(Message.MessageType.SCHEDULE);
+        card.setSchedule(schedule);
+        card.getReadByUsers().add(owner.getId());
+        messageRepository.saveAndFlush(card);
+    }
+
+    private void recomputeOfficialRoomProjection(ChatRoom room) {
+        Instant previousStart = MeetupTimePolicy.toInstant(
+                room.getScheduledAt(), room.getMeetupTimeBasis());
+        var nextSchedule = chatScheduleRepository
+                .findFirstByRoom_IdAndStatusAndStartsAtAfterOrderByStartsAtAscIdAsc(
+                        room.getId(), ChatScheduleStatus.SCHEDULED, clock.instant());
+        Instant nextStart = nextSchedule.map(ChatSchedule::getStartsAt).orElse(null);
+        if (!Objects.equals(previousStart, nextStart)) {
+            room.setReminderSentAt(null);
+        }
+        if (nextSchedule.isPresent()) {
+            ChatSchedule schedule = nextSchedule.get();
+            room.setScheduledAt(LocalDateTime.ofInstant(schedule.getStartsAt(), ZoneOffset.UTC));
+            room.setMeetupTimeBasis(MeetupTimeBasis.UTC);
+            room.setDurationMinutes(schedule.getDurationMinutes());
+        } else {
+            room.setScheduledAt(null);
+            room.setMeetupTimeBasis(null);
+            room.setDurationMinutes(null);
+        }
+    }
+
+    private String deterministicId(String namespace, String entityId) {
+        return UUID.nameUUIDFromBytes(
+                (namespace + entityId).getBytes(StandardCharsets.UTF_8)).toString();
     }
 
     private void requireSystemOwner(User owner, String entityName, String id) {

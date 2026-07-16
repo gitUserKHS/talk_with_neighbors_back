@@ -58,7 +58,7 @@
 | PATCH | `/api/feed/comments/{commentId}` | 작성자 전용 댓글 수정 |
 | DELETE | `/api/feed/comments/{commentId}` | 작성자 전용 댓글 삭제 |
 
-multipart 업로드 지원 형식은 JPG, PNG, GIF, WebP, MP4, WebM, MOV다. 사진은 파일당 10MB, 동영상은 파일당 100MB, 요청 전체는 200MB로 제한한다. 정적 이미지는 WebP, 영상은 MP4(H.264/AAC)로 변환한다. 응답의 `media[]`에는 `url`, `thumbnailUrl`, `type`, `contentType`, `sizeBytes`, `width`, `height`, `durationSeconds`, `sortOrder`가 포함되며 `/uploads/**`는 Nginx를 거쳐 제공된다.
+multipart 업로드 지원 형식은 JPG, PNG, GIF, WebP, MP4, WebM, MOV다. 사진은 파일당 10MB, 동영상은 파일당 30MB·요청당 1개, 서비스 검증 기준 요청 전체는 120MB로 제한한다. multipart 파서는 파일당 30MB·요청당 125MB에서 먼저 차단한다. 동영상은 60초, 긴 변 1920px, 총 2073600픽셀 이하만 허용한다. 정적 이미지는 WebP, 영상은 MP4(H.264/AAC)로 변환한다. 응답의 `media[]`에는 `url`, `thumbnailUrl`, `type`, `contentType`, `sizeBytes`, `width`, `height`, `durationSeconds`, `sortOrder`가 포함되며 `/uploads/**`는 Nginx를 거쳐 제공된다.
 
 JSON 호환 경로에는 서비스 내부 `/uploads/**` URL을 넣을 수 없다. 서버가 소유한 미디어는 multipart 업로드로만 만들고, 삭제 시에도 해당 게시물에 연결된 `feed/` prefix 객체만 정리해 다른 프로필·채팅·게시물 미디어를 건드리지 않는다.
 
@@ -84,7 +84,7 @@ JSON 호환 경로에는 서비스 내부 `/uploads/**` URL을 넣을 수 없다
 | GET | `/api/meetups?keyword=&interest=&page=0&size=20` | 모임 검색 |
 | POST | `/api/meetups` | 공개 그룹 모임 생성 |
 | GET | `/api/meetups/{roomId}` | 모임 상세, 참여자 목록과 서버 판정 `canManage` 포함 |
-| PATCH | `/api/meetups/{roomId}` | 모임장 전용 정보·장소·일정·정원 수정 |
+| PATCH | `/api/meetups/{roomId}` | 모임장 전용 프로필 정보·대표 장소·정원 수정 |
 | DELETE | `/api/meetups/{roomId}` | 모임장 전용 모임·채팅·약속·참여 기록 삭제 |
 | POST | `/api/meetups/{roomId}/join` | 참가 |
 | POST | `/api/meetups/{roomId}/leave` | 탈퇴, 성공 시 204 |
@@ -93,7 +93,7 @@ JSON 호환 경로에는 서비스 내부 `/uploads/**` URL을 넣을 수 없다
 `longitude`, `kakaoPlaceId`다. 위도와 경도는 반드시 함께 보내며, 인증 모임 DTO에서만 이 장소
 정보를 돌려준다. `/api/public/meetups`는 정확한 장소 정보를 계속 제외한다.
 참가·대기열 변경은 모임 API만 담당한다. 일반 채팅방 입장·수정 API로 공개 모임의 차단 관계,
-신청 마감, 정원과 대기열, 일정 유효성 규칙을 우회할 수 없다.
+정원과 대기열 규칙을 우회할 수 없다. 회차 일정 변경은 모임 달력 API만 담당한다.
 
 ## 채팅 REST API
 
@@ -117,7 +117,7 @@ JSON 호환 경로에는 서비스 내부 `/uploads/**` URL을 넣을 수 없다
 | GET | `/api/chat/rooms/{roomId}/unread-count` | 방의 미읽음 수 |
 | GET | `/api/chat/unread-counts` | 모든 방의 미읽음 수 |
 
-채팅 첨부는 이미지·영상 외에 PDF, ZIP, Office 문서, TXT, CSV, JSON, Markdown을 지원한다. 이미지 10MB, 영상 100MB, 문서 25MB, 한 메시지 전체 120MB가 상한이다. 메시지 DTO의 `attachments[]`는 URL·썸네일·원래 파일명·MIME·크기·해상도·재생시간·순서를 포함하며 REST 저장 응답과 STOMP 실시간 이벤트의 계약이 같다. `/uploads/chat/**` 조회도 세션과 해당 채팅방 참가자 권한을 확인하며, 응답은 공유 캐시에 저장하지 않는다.
+채팅 첨부는 이미지·영상 외에 PDF, ZIP, Office 문서, TXT, CSV, JSON, Markdown을 지원한다. 이미지 10MB, 영상 30MB·60초·요청당 1개, 문서 25MB, 한 메시지 전체 120MB가 상한이며 영상에는 피드와 같은 1080p 픽셀 예산을 적용한다. 메시지 DTO의 `attachments[]`는 URL·썸네일·원래 파일명·MIME·크기·해상도·재생시간·순서를 포함하며 REST 저장 응답과 STOMP 실시간 이벤트의 계약이 같다. `/uploads/chat/**` 조회도 세션과 해당 채팅방 참가자 권한을 확인하며, 응답은 공유 캐시에 저장하지 않는다.
 
 ## 안전 API
 

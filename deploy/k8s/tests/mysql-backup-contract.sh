@@ -42,7 +42,13 @@ manifest_upload_line="$(grep -nF -m1 'aws s3 cp "$manifest_path"' "$BACKUP" | cu
 
 grep -Fq 'DROP DATABASE IF EXISTS' "$RESTORE"
 grep -Fq 'app_schema_migrations' "$RESTORE"
-grep -Fq 'mysqlcheck --user=root --check' "$RESTORE"
+grep -Fq 'CHECK TABLE' "$RESTORE"
+grep -Fq 'exec mysql --user=root --batch --skip-column-names --raw' "$RESTORE"
+grep -Fq 'checked != expected' "$RESTORE"
+if grep -Fq 'mysqlcheck' < <(grep -v '^#' "$RESTORE"); then
+  echo "Restore verification must work with the MySQL 8.4 image, which does not ship mysqlcheck" >&2
+  exit 1
+fi
 grep -Fq 'mysql/daily/' "$RESTORE"
 grep -Fq 'MYSQL_BACKUP_BUCKET' "$BUILD_BUNDLE"
 grep -Fq 'install-mysql-backup.sh' "$BUILD_BUNDLE"

@@ -306,7 +306,8 @@ public class NotificationServiceImpl implements NotificationService {
     
     private void updateUnreadCountForUser(String chatRoomId, Long userId) {
         try {
-            long unreadCount = messageRepository.countUnreadMessages(chatRoomId, userId);
+            long unreadCount = messageRepository.countVisibleUnreadMessages(
+                    chatRoomId, userId, Message.MessageType.SCHEDULE);
             sendUnreadCountUpdate(chatRoomId, userId, unreadCount);
         } catch (Exception e) {
             log.error("[NotificationService] Failed to update unread count for user {}: {}", userId, e.getMessage(), e);

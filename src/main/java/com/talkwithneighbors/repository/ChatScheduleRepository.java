@@ -14,11 +14,27 @@ import java.time.Instant;
 import com.talkwithneighbors.entity.ChatScheduleStatus;
 
 public interface ChatScheduleRepository extends JpaRepository<ChatSchedule, String> {
+    boolean existsByRoom_Id(String roomId);
+
+    boolean existsByRoom_IdAndStatusAndStartsAt(
+            String roomId,
+            ChatScheduleStatus status,
+            Instant startsAt);
+
     boolean existsByRoom_IdAndCreator_IdAndStatusAndStartsAtAfter(
             String roomId,
             Long creatorId,
             ChatScheduleStatus status,
             Instant startsAt);
+
+    Optional<ChatSchedule> findFirstByRoom_IdAndStatusAndStartsAtAfterOrderByStartsAtAscIdAsc(
+            String roomId,
+            ChatScheduleStatus status,
+            Instant startsAt);
+
+    Optional<ChatSchedule> findFirstByRoom_IdAndStatusOrderByStartsAtDescIdDesc(
+            String roomId,
+            ChatScheduleStatus status);
 
     @EntityGraph(attributePaths = {"creator", "rsvps", "rsvps.user"})
     @Query("""

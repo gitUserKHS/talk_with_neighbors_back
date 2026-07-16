@@ -11,6 +11,7 @@ import org.springframework.stereotype.Repository;
 
 import java.util.List;
 import java.util.Optional;
+import com.talkwithneighbors.entity.User;
 
 /**
  * 채팅 메시지를 관리하는 리포지토리 인터페이스
@@ -27,18 +28,81 @@ public interface MessageRepository extends JpaRepository<Message, String> {
     @Query("SELECT m FROM Message m WHERE m.chatRoom.id = :roomId ORDER BY m.createdAt DESC")
     Page<Message> findByChatRoomIdOrderByCreatedAtDesc(@Param("roomId") String roomId, Pageable pageable);
 
+    @Query("""
+            SELECT m FROM Message m
+            WHERE m.chatRoom.id = :roomId AND m.type <> :excludedType
+            ORDER BY m.createdAt DESC
+            """)
+    Page<Message> findVisibleByChatRoomIdOrderByCreatedAtDesc(
+            @Param("roomId") String roomId,
+            @Param("excludedType") Message.MessageType excludedType,
+            Pageable pageable);
+
     @Query("SELECT m FROM Message m WHERE m.chatRoom.id = :roomId AND m.isDeleted = false ORDER BY m.createdAt DESC")
     List<Message> findActiveByChatRoomIdOrderByCreatedAtDesc(
             @Param("roomId") String roomId, Pageable pageable);
+
+    @Query("""
+            SELECT m FROM Message m
+            WHERE m.chatRoom.id = :roomId
+              AND m.isDeleted = false
+              AND m.type <> :excludedType
+            ORDER BY m.createdAt DESC
+            """)
+    List<Message> findVisibleActiveByChatRoomIdOrderByCreatedAtDesc(
+            @Param("roomId") String roomId,
+            @Param("excludedType") Message.MessageType excludedType,
+            Pageable pageable);
 
     @Query("SELECT DISTINCT m FROM Message m LEFT JOIN FETCH m.attachments WHERE m.chatRoom.id = :roomId")
     List<Message> findAllWithAttachmentsByChatRoomId(@Param("roomId") String roomId);
 
     @Query("SELECT m FROM Message m WHERE m.chatRoom.id = :roomId AND :userId NOT IN (SELECT u FROM m.readByUsers u)")
     List<Message> findUnreadMessages(@Param("roomId") String roomId, @Param("userId") Long userId);
+
+    @Query("""
+            SELECT m FROM Message m
+            WHERE m.chatRoom.id = :roomId
+              AND m.isDeleted = false
+              AND m.type <> :excludedType
+              AND :userId NOT IN (SELECT u FROM m.readByUsers u)
+            """)
+    List<Message> findVisibleUnreadMessages(
+            @Param("roomId") String roomId,
+            @Param("userId") Long userId,
+            @Param("excludedType") Message.MessageType excludedType);
     
     @Query("SELECT COUNT(m) FROM Message m WHERE m.chatRoom.id = :roomId AND :userId NOT IN (SELECT u FROM m.readByUsers u)")
     long countUnreadMessages(@Param("roomId") String roomId, @Param("userId") Long userId);
+
+    @Query("""
+            SELECT COUNT(m) FROM Message m
+            WHERE m.chatRoom.id = :roomId
+              AND m.isDeleted = false
+              AND m.type <> :excludedType
+              AND :userId NOT IN (SELECT u FROM m.readByUsers u)
+            """)
+    long countVisibleUnreadMessages(
+            @Param("roomId") String roomId,
+            @Param("userId") Long userId,
+            @Param("excludedType") Message.MessageType excludedType);
+
+    boolean existsByChatRoom_IdAndTypeAndCreatedAt(
+            String roomId,
+            Message.MessageType type,
+            java.time.LocalDateTime createdAt);
+
+    @Query("""
+            SELECT DISTINCT message.chatRoom.id
+            FROM Message message
+            WHERE message.type = :scheduleType
+              AND message.createdAt = message.chatRoom.lastMessageTime
+              AND :user MEMBER OF message.chatRoom.participants
+            ORDER BY message.chatRoom.id
+            """)
+    List<String> findParticipantRoomIdsWithSchedulePreview(
+            @Param("user") User user,
+            @Param("scheduleType") Message.MessageType scheduleType);
 
     @Query("SELECT m FROM Message m WHERE m.chatRoom.id = :roomId AND m.sender.id = :userId ORDER BY m.createdAt DESC")
     List<Message> findByChatRoomIdAndSenderIdOrderByCreatedAtDesc(

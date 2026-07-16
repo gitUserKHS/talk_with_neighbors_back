@@ -109,10 +109,21 @@ restored_table_count="$(mysql_root_query "SELECT COUNT(*) FROM information_schem
 [[ "$restored_table_count" == "$expected_table_count" ]] || { echo "Restore verification table count does not match the manifest" >&2; exit 1; }
 migration_table_count="$(mysql_root_query "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = '${scratch_schema}' AND table_name = 'app_schema_migrations'")"
 [[ "$migration_table_count" == "1" ]] || { echo "Restore verification is missing app_schema_migrations" >&2; exit 1; }
+table_check_statements="$(mysql_root_query "SELECT CONCAT('CHECK TABLE \`${scratch_schema}\`.\`', REPLACE(table_name, '\`', '\`\`'), '\`;') FROM information_schema.tables WHERE table_schema = '${scratch_schema}' ORDER BY table_name")"
+[[ -n "$table_check_statements" ]] || { echo "Restore verification found no tables to check" >&2; exit 1; }
+# MySQL 8.4 images no longer ship mysqlcheck. Run the equivalent CHECK TABLE
+# statements through the mysql client that is already required for restore.
 # shellcheck disable=SC2016
-k3s kubectl -n "$NAMESPACE" exec statefulset/mysql -- sh -ec \
-  'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" exec mysqlcheck --user=root --check "$1"' \
-  sh "$scratch_schema" >/dev/null
+table_check_output="$(
+  printf '%s\n' "$table_check_statements" |
+    timeout 1800 k3s kubectl -n "$NAMESPACE" exec -i statefulset/mysql -- sh -ec \
+      'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" exec mysql --user=root --batch --skip-column-names --raw'
+)"
+printf '%s\n' "$table_check_output" | awk -F '\t' -v expected="$expected_table_count" '
+  NF < 4 || $3 != "status" || $4 != "OK" { exit 1 }
+  { checked += 1 }
+  END { if (checked != expected) exit 1 }
+' || { echo "Restore verification table check failed" >&2; exit 1; }
 mysql_root_query "DROP DATABASE \`${scratch_schema}\`" >/dev/null
 scratch_schema=""
 
