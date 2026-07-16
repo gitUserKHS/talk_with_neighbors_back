@@ -2,6 +2,7 @@ package com.talkwithneighbors.service;
 
 import com.talkwithneighbors.dto.publiccontent.PublicFeedPostDto;
 import com.talkwithneighbors.dto.publiccontent.PublicMeetupDto;
+import com.talkwithneighbors.dto.feed.FeedMode;
 import com.talkwithneighbors.entity.ChatRoom;
 import com.talkwithneighbors.entity.ChatRoomStatus;
 import com.talkwithneighbors.entity.ChatRoomType;
@@ -12,12 +13,13 @@ import com.talkwithneighbors.repository.PostCommentRepository;
 import com.talkwithneighbors.repository.PostLikeRepository;
 import com.talkwithneighbors.repository.publiccontent.PublicFeedPostRepository;
 import com.talkwithneighbors.repository.publiccontent.PublicMeetupRepository;
+import com.talkwithneighbors.repository.projection.PostEngagementCount;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 
 import java.time.LocalDateTime;
@@ -29,6 +31,10 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.anyList;
 
 @ExtendWith(MockitoExtension.class)
 class PublicContentServiceTest {
@@ -49,10 +55,12 @@ class PublicContentServiceTest {
     void anonymizesMemberFeedPostsAndUsesRealEngagementCounts() {
         PageRequest pageable = PageRequest.of(0, 20);
         FeedPost post = post("post-1", member(), true);
-        when(feedPostRepository.findPublicFeed(pageable))
-                .thenReturn(new PageImpl<>(List.of(post), pageable, 1));
-        when(postLikeRepository.countByPost_Id("post-1")).thenReturn(3L);
-        when(postCommentRepository.countByPost_Id("post-1")).thenReturn(2L);
+        when(feedPostRepository.findPublicFeed(PageRequest.of(0, 500)))
+                .thenReturn(new PageImpl<>(List.of(post), PageRequest.of(0, 500), 1));
+        when(postLikeRepository.countByPostIds(List.of("post-1")))
+                .thenReturn(List.of(new PostEngagementCount("post-1", 3L)));
+        when(postCommentRepository.countByPostIds(List.of("post-1")))
+                .thenReturn(List.of(new PostEngagementCount("post-1", 2L)));
 
         PublicFeedPostDto result = service().getFeed(pageable).getContent().get(0);
 
@@ -66,8 +74,8 @@ class PublicContentServiceTest {
     void labelsSystemOwnedFeedAsOfficialWithoutExposingAnAccountId() {
         PageRequest pageable = PageRequest.of(0, 20);
         FeedPost post = post("official-post", systemOwner(), true);
-        when(feedPostRepository.findPublicFeed(pageable))
-                .thenReturn(new PageImpl<>(List.of(post), pageable, 1));
+        when(feedPostRepository.findPublicFeed(PageRequest.of(0, 500)))
+                .thenReturn(new PageImpl<>(List.of(post), PageRequest.of(0, 500), 1));
 
         PublicFeedPostDto result = service().getFeed(pageable).getContent().get(0);
 
@@ -79,8 +87,8 @@ class PublicContentServiceTest {
     void failsClosedIfARepositoryRegressionReturnsAPrivatePost() {
         PageRequest pageable = PageRequest.of(0, 20);
         FeedPost privatePost = post("private-post", member(), false);
-        when(feedPostRepository.findPublicFeed(pageable))
-                .thenReturn(new PageImpl<>(List.of(privatePost), pageable, 1));
+        when(feedPostRepository.findPublicFeed(PageRequest.of(0, 500)))
+                .thenReturn(new PageImpl<>(List.of(privatePost), PageRequest.of(0, 500), 1));
 
         assertThatThrownBy(() -> service().getFeed(pageable))
                 .isInstanceOf(IllegalArgumentException.class)
@@ -88,12 +96,94 @@ class PublicContentServiceTest {
     }
 
     @Test
-    void keepsEmptyPublicFeedEmptyWithoutAnInMemoryFallback() {
+    void keepsEmptyPublicFeedEmpty() {
         PageRequest pageable = PageRequest.of(0, 20);
-        when(feedPostRepository.findPublicFeed(pageable)).thenReturn(Page.empty(pageable));
+        when(feedPostRepository.findPublicFeed(PageRequest.of(0, 500)))
+                .thenReturn(Page.empty(PageRequest.of(0, 500)));
 
         assertThat(service().getFeed(pageable).getContent()).isEmpty();
         verifyNoInteractions(postLikeRepository, postCommentRepository);
+    }
+
+    @Test
+    void latestModeUsesDatabasePaginationAndDeterministicRepositoryOrder() {
+        PageRequest pageable = PageRequest.of(1, 10);
+        FeedPost post = post("latest-post", member(), true);
+        when(feedPostRepository.findPublicFeed(pageable))
+                .thenReturn(new PageImpl<>(List.of(post), pageable, 11));
+
+        var result = service().getFeed(FeedMode.LATEST, null, pageable);
+
+        assertThat(result.getContent()).extracting("id").containsExactly("latest-post");
+        assertThat(result.getTotalElements()).isEqualTo(11);
+        verify(feedPostRepository).findPublicFeed(pageable);
+    }
+
+    @Test
+    void nearbyPublicModeUsesOnlyRequestScopedCoarseRegion() {
+        PageRequest pageable = PageRequest.of(0, 20);
+        LocalDateTime now = LocalDateTime.now();
+        User seoulAuthor = member();
+        seoulAuthor.setAddress("서울특별시 중구 세종대로");
+        User busanAuthor = member();
+        busanAuthor.setId(8L);
+        busanAuthor.setAddress("부산광역시 중구 중앙대로");
+        FeedPost seoul = post("seoul", seoulAuthor, true);
+        seoul.setCreatedAt(now.minusDays(1));
+        FeedPost busan = post("busan", busanAuthor, true);
+        busan.setCreatedAt(now);
+        when(feedPostRepository.findPublicFeed(PageRequest.of(0, 500)))
+                .thenReturn(new PageImpl<>(List.of(busan, seoul), PageRequest.of(0, 500), 2));
+
+        var result = service().getFeed(FeedMode.NEARBY, "서울특별시", pageable);
+
+        assertThat(result.getContent()).extracting("id").containsExactly("seoul", "busan");
+    }
+
+    @Test
+    void publicCandidateEngagementUsesTwoBatchQueriesInsteadOfPerPostCounts() {
+        PageRequest pageable = PageRequest.of(0, 20);
+        List<FeedPost> candidates = java.util.stream.IntStream.range(0, 25)
+                .mapToObj(index -> post("public-" + index, member(), true))
+                .toList();
+        when(feedPostRepository.findPublicFeed(PageRequest.of(0, 500)))
+                .thenReturn(new PageImpl<>(candidates, PageRequest.of(0, 500), candidates.size()));
+
+        service().getFeed(FeedMode.RECOMMENDED, null, pageable);
+
+        verify(postLikeRepository, times(1)).countByPostIds(anyList());
+        verify(postCommentRepository, times(1)).countByPostIds(anyList());
+        verify(postLikeRepository, never()).countByPost_Id(anyString());
+        verify(postCommentRepository, never()).countByPost_Id(anyString());
+    }
+
+    @Test
+    void recommendedPublicFeedReturnsEmptyForAnExtremePageOffsetWithoutOverflow() {
+        FeedPost post = post("bounded-public", member(), true);
+        when(feedPostRepository.findPublicFeed(PageRequest.of(0, 500)))
+                .thenReturn(new PageImpl<>(List.of(post), PageRequest.of(0, 500), 800));
+
+        var result = service().getFeed(
+                FeedMode.RECOMMENDED,
+                null,
+                PageRequest.of(Integer.MAX_VALUE, 50)
+        );
+
+        assertThat(result.getContent()).isEmpty();
+        assertThat(result.getTotalElements()).isEqualTo(1);
+    }
+
+    @Test
+    void latestPublicFeedRejectsAnUnsupportedDatabaseOffsetBeforeRepositoryAccess() {
+        var result = service().getFeed(
+                FeedMode.LATEST,
+                null,
+                PageRequest.of(Integer.MAX_VALUE, 50)
+        );
+
+        assertThat(result.getContent()).isEmpty();
+        assertThat(result.getTotalElements()).isZero();
+        verifyNoInteractions(feedPostRepository, postLikeRepository, postCommentRepository);
     }
 
     @Test
@@ -176,6 +266,10 @@ class PublicContentServiceTest {
         user.setId(7L);
         user.setUsername("private-account-handle");
         user.setAccountType(UserAccountType.MEMBER);
+        user.setLatitude(37.5665);
+        user.setLongitude(126.9780);
+        user.setAddress("서울특별시 중구");
+        user.setShowNeighborhood(true);
         return user;
     }
 

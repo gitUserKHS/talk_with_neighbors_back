@@ -13,7 +13,7 @@
 
 | 메서드 | 경로 | 공개 범위 |
 |---|---|---|
-| GET | `/api/public/feed?page=0&size=20` | 작성자가 `publicPreview=true`로 동의한 게시글만 제공; 작성자는 `이웃`으로 익명화 |
+| GET | `/api/public/feed?page=0&size=20&mode=RECOMMENDED` | 작성자가 `publicPreview=true`로 동의한 게시글만 제공; `RECOMMENDED`, `NEARBY`, `LATEST` 지원, 선택적 `region`은 시·도 또는 시·도+시·군·구의 정확한 주소 접두부만 요청 범위에서 사용, 작성자는 `이웃`으로 익명화 |
 | GET | `/api/public/meetups?keyword=&interest=&page=0&size=20` | 활성 공개 그룹 모임 제공; 일반 회원 모임 위치는 제외하고 SYSTEM 공식 모임 위치만 공개 |
 
 두 공개 DTO에는 `official: boolean`이 포함된다. `APP_OFFICIAL_CONTENT_ENABLED=true`이면 SYSTEM
@@ -47,7 +47,7 @@
 
 | 메서드 | 경로 | 목적 |
 |---|---|---|
-| GET | `/api/feed?page=0&size=20` | 피드 조회 |
+| GET | `/api/feed?page=0&size=20&mode=RECOMMENDED` | 피드 조회; `RECOMMENDED`, `NEARBY`, `LATEST` 지원, 생략 시 `RECOMMENDED`; 숨김·양방향 차단을 DB에서 먼저 제외하며 정확한 거리는 응답하지 않음 |
 | POST | `/api/feed` | 게시물 생성; JSON은 외부 이미지 URL 호환, multipart는 `post` JSON 파트와 `files` 최대 10개; `publicPreview` 기본값은 `false` |
 | PATCH | `/api/feed/{postId}` | 작성자 전용 본문·태그·공개 미리보기 수정; 기존 미디어 유지 |
 | DELETE | `/api/feed/{postId}` | 작성자 전용 게시물·댓글·좋아요와 서버 소유 미디어 삭제 |

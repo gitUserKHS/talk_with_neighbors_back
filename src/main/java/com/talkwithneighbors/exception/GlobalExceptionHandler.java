@@ -11,6 +11,7 @@ import org.springframework.web.multipart.MaxUploadSizeExceededException;
 import org.springframework.web.multipart.MultipartException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import java.util.Map;
 import java.util.LinkedHashMap;
 
@@ -27,6 +28,12 @@ public class GlobalExceptionHandler {
                 fields.putIfAbsent(error.getField(), error.getDefaultMessage()));
         return ResponseEntity.badRequest()
                 .body(new ValidationErrorResponse("validation_failed", "Request validation failed.", fields));
+    }
+
+    @ExceptionHandler(MethodArgumentTypeMismatchException.class)
+    public ResponseEntity<ErrorResponse> handleTypeMismatch(MethodArgumentTypeMismatchException exception) {
+        return ResponseEntity.badRequest()
+                .body(new ErrorResponse("Invalid request parameter: " + exception.getName()));
     }
 
     @ExceptionHandler(MatchingException.class)

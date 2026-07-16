@@ -81,6 +81,8 @@ class FeedServiceCrudTest {
         assertThat(result.getCaption()).isEqualTo("after");
         assertThat(result.getInterestTags()).containsExactly("cafe", "walk");
         assertThat(result.isPublicPreview()).isTrue();
+        assertThat(result.getNeighborhoodName()).isEqualTo("서울특별시 중구");
+        assertThat(result.getRecommendationReasons()).isEmpty();
         assertThat(result.getMedia()).singleElement()
                 .extracting(media -> media.url())
                 .isEqualTo("/api/media/feed/original.webp");
@@ -210,6 +212,10 @@ class FeedServiceCrudTest {
         user.setId(id);
         user.setUsername(username);
         user.setInterests(new ArrayList<>());
+        user.setLatitude(37.5665);
+        user.setLongitude(126.9780);
+        user.setAddress("서울특별시 중구");
+        user.setShowNeighborhood(true);
         return user;
     }
 }

@@ -28,7 +28,7 @@ flowchart LR
 | 영역 | 기술 | 역할 |
 |---|---|---|
 | 프론트엔드 | React 19, TypeScript, Vite, MUI, Redux Toolkit | SPA 화면과 클라이언트 상태 |
-| API | Java 17, Spring Boot 3.2, Spring MVC | REST API와 업무 규칙 |
+| API | Java 17, Spring Boot 3.5.16, Spring MVC | REST API와 업무 규칙 |
 | 실시간 | Spring WebSocket, SockJS, STOMP | 채팅과 사용자별 알림 |
 | 영속 저장소 | MySQL 8.4, Spring Data JPA | 사용자, 피드, 매칭, 채팅, 알림 데이터 |
 | 미디어 처리 | FFmpeg·FFprobe | 이미지 WebP 압축, 영상 H.264/AAC 변환, WebP 썸네일과 메타데이터 생성 |
