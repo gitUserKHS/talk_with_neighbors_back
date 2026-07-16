@@ -3,6 +3,7 @@ package com.talkwithneighbors.service;
 import com.talkwithneighbors.dto.feed.CreateCommentRequest;
 import com.talkwithneighbors.dto.feed.CreateFeedPostRequest;
 import com.talkwithneighbors.dto.feed.FeedPostDto;
+import com.talkwithneighbors.dto.feed.FeedMode;
 import com.talkwithneighbors.dto.feed.PostCommentDto;
 import com.talkwithneighbors.dto.feed.UpdateCommentRequest;
 import com.talkwithneighbors.dto.feed.UpdateFeedPostRequest;
@@ -20,6 +21,7 @@ import com.talkwithneighbors.repository.PostLikeRepository;
 import com.talkwithneighbors.repository.UserRepository;
 import com.talkwithneighbors.repository.UserBlockRepository;
 import com.talkwithneighbors.repository.HiddenContentRepository;
+import com.talkwithneighbors.repository.projection.PostEngagementCount;
 import com.talkwithneighbors.service.media.storage.MediaStoragePath;
 import com.talkwithneighbors.outbox.DomainEventPublisher;
 import com.talkwithneighbors.entity.SafetyTargetType;
@@ -27,21 +29,26 @@ import com.talkwithneighbors.dto.mypage.MyCommentActivityDto;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalDateTime;
+import java.util.HashSet;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
-import java.util.HashSet;
 import java.util.Set;
 import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
 public class FeedService {
+    private static final int RECOMMENDATION_CANDIDATE_LIMIT = 500;
+
     private final FeedPostRepository feedPostRepository;
     private final PostLikeRepository postLikeRepository;
     private final PostCommentRepository postCommentRepository;
@@ -53,21 +60,61 @@ public class FeedService {
 
     @Transactional(readOnly = true)
     public Page<FeedPostDto> getFeed(Long currentUserId, Pageable pageable) {
+        return getFeed(currentUserId, FeedMode.RECOMMENDED, pageable);
+    }
+
+    @Transactional(readOnly = true)
+    public Page<FeedPostDto> getFeed(Long currentUserId, FeedMode mode, Pageable pageable) {
         User currentUser = getUser(currentUserId);
-        List<String> hiddenPostIds = hiddenContentRepository.findTargetIds(currentUserId, SafetyTargetType.FEED_POST);
+        Set<String> hiddenPostIds = new HashSet<>(hiddenContentRepository.findTargetIds(
+                currentUserId, SafetyTargetType.FEED_POST));
         Set<Long> excludedUserIds = new HashSet<>(userBlockRepository.findExcludedUserIds(currentUserId));
-        List<FeedPostDto> posts = feedPostRepository.findAllByOrderByCreatedAtDesc().stream()
+        FeedMode effectiveMode = mode == null ? FeedMode.RECOMMENDED : mode;
+        LocalDateTime rankedAt = LocalDateTime.now();
+        if (effectiveMode == FeedMode.LATEST) {
+            return latestFeed(currentUser, hiddenPostIds, excludedUserIds, pageable, rankedAt);
+        }
+
+        List<FeedPost> candidates = feedPostRepository.findAllByOrderByCreatedAtDesc(
+                        PageRequest.of(0, RECOMMENDATION_CANDIDATE_LIMIT))
+                .getContent().stream()
                 .filter(post -> !hiddenPostIds.contains(post.getId()))
                 .filter(post -> post.getAuthor() == null || !excludedUserIds.contains(post.getAuthor().getId()))
-                .map(post -> toDto(post, currentUser))
-                .sorted(Comparator
-                        .comparingInt(FeedPostDto::getCompatibilityScore).reversed()
-                        .thenComparing(FeedPostDto::getCreatedAt, Comparator.reverseOrder()))
+                .toList();
+        EngagementSnapshot engagement = loadEngagement(candidates, currentUserId);
+        List<RankedFeedPost> posts = candidates.stream()
+                .map(post -> rank(post, currentUser, effectiveMode, rankedAt, engagement))
+                .sorted((left, right) -> compareRankedPosts(effectiveMode, left, right))
                 .collect(Collectors.toList());
 
         int start = Math.min((int) pageable.getOffset(), posts.size());
         int end = Math.min(start + pageable.getPageSize(), posts.size());
-        return new PageImpl<>(posts.subList(start, end), pageable, posts.size());
+        List<FeedPostDto> content = posts.subList(start, end).stream()
+                .map(RankedFeedPost::dto)
+                .toList();
+        return new PageImpl<>(content, pageable, posts.size());
+    }
+
+    private Page<FeedPostDto> latestFeed(
+            User currentUser,
+            Set<String> hiddenPostIds,
+            Set<Long> excludedUserIds,
+            Pageable pageable,
+            LocalDateTime rankedAt
+    ) {
+        List<FeedPost> posts = feedPostRepository.findAllByOrderByCreatedAtDesc().stream()
+                .filter(post -> !hiddenPostIds.contains(post.getId()))
+                .filter(post -> post.getAuthor() == null || !excludedUserIds.contains(post.getAuthor().getId()))
+                .sorted(this::comparePostsByRecency)
+                .toList();
+        int start = Math.min((int) pageable.getOffset(), posts.size());
+        int end = Math.min(start + pageable.getPageSize(), posts.size());
+        List<FeedPost> pagePosts = posts.subList(start, end);
+        EngagementSnapshot engagement = loadEngagement(pagePosts, currentUser.getId());
+        List<FeedPostDto> content = pagePosts.stream()
+                .map(post -> rank(post, currentUser, FeedMode.LATEST, rankedAt, engagement).dto())
+                .toList();
+        return new PageImpl<>(content, pageable, posts.size());
     }
 
     @Transactional
@@ -294,6 +341,24 @@ public class FeedService {
     }
 
     private FeedPostDto toDto(FeedPost post, User currentUser) {
+        long likeCount = postLikeRepository.countByPost_Id(post.getId());
+        long commentCount = postCommentRepository.countByPost_Id(post.getId());
+        return toDto(post, currentUser, likeCount, commentCount);
+    }
+
+    private FeedPostDto toDto(FeedPost post, User currentUser, long likeCount, long commentCount) {
+        boolean likedByCurrentUser = currentUser != null
+                && postLikeRepository.existsByPost_IdAndUser_Id(post.getId(), currentUser.getId());
+        return toDto(post, currentUser, likeCount, commentCount, likedByCurrentUser);
+    }
+
+    private FeedPostDto toDto(
+            FeedPost post,
+            User currentUser,
+            long likeCount,
+            long commentCount,
+            boolean likedByCurrentUser
+    ) {
         User author = post.getAuthor();
         int compatibilityScore = author != null && currentUser != null
                 ? compatibilityScoreService.calculateScore(currentUser, author, null)
@@ -309,12 +374,107 @@ public class FeedService {
 
         return FeedPostDto.fromEntity(
                 post,
-                postLikeRepository.countByPost_Id(post.getId()),
-                postCommentRepository.countByPost_Id(post.getId()),
-                currentUser != null && postLikeRepository.existsByPost_IdAndUser_Id(post.getId(), currentUser.getId()),
+                likeCount,
+                commentCount,
+                likedByCurrentUser,
                 compatibilityScore,
                 sharedInterests
         );
+    }
+
+    private RankedFeedPost rank(
+            FeedPost post,
+            User currentUser,
+            FeedMode mode,
+            LocalDateTime rankedAt,
+            EngagementSnapshot engagement
+    ) {
+        long likeCount = engagement.likeCount(post.getId());
+        long commentCount = engagement.commentCount(post.getId());
+        FeedPostDto dto = toDto(
+                post,
+                currentUser,
+                likeCount,
+                commentCount,
+                engagement.likedPostIds().contains(post.getId()));
+        FeedRanking.Signals signals = FeedRanking.memberSignals(
+                currentUser, post, likeCount, commentCount, rankedAt);
+        dto.setDistanceKm(FeedRanking.visibleDistanceKm(currentUser, post.getAuthor()));
+        dto.setNeighborhoodName(FeedRanking.visibleNeighborhood(post.getAuthor()));
+        dto.setRecommendationReasons(FeedRanking.recommendationReasons(mode, signals));
+        return new RankedFeedPost(
+                post,
+                dto,
+                signals
+        );
+    }
+
+    private int compareRankedPosts(FeedMode mode, RankedFeedPost left, RankedFeedPost right) {
+        if (mode != FeedMode.LATEST) {
+            int byScore = Double.compare(
+                    FeedRanking.memberScore(mode, right.signals()),
+                    FeedRanking.memberScore(mode, left.signals()));
+            if (byScore != 0) {
+                return byScore;
+            }
+        }
+
+        return comparePostsByRecency(left.post(), right.post());
+    }
+
+    private int comparePostsByRecency(FeedPost left, FeedPost right) {
+        int byCreatedAt = Comparator.nullsLast(Comparator.<LocalDateTime>reverseOrder())
+                .compare(left.getCreatedAt(), right.getCreatedAt());
+        if (byCreatedAt != 0) {
+            return byCreatedAt;
+        }
+        return Comparator.nullsLast(Comparator.<String>reverseOrder())
+                .compare(left.getId(), right.getId());
+    }
+
+    private record RankedFeedPost(
+            FeedPost post,
+            FeedPostDto dto,
+            FeedRanking.Signals signals
+    ) {
+    }
+
+    private EngagementSnapshot loadEngagement(List<FeedPost> posts, Long currentUserId) {
+        List<String> postIds = posts.stream()
+                .map(FeedPost::getId)
+                .filter(Objects::nonNull)
+                .distinct()
+                .toList();
+        if (postIds.isEmpty()) {
+            return EngagementSnapshot.empty();
+        }
+
+        Map<String, Long> likeCounts = postLikeRepository.countByPostIds(postIds).stream()
+                .collect(Collectors.toMap(PostEngagementCount::postId, PostEngagementCount::total));
+        Map<String, Long> commentCounts = postCommentRepository.countByPostIds(postIds).stream()
+                .collect(Collectors.toMap(PostEngagementCount::postId, PostEngagementCount::total));
+        Set<String> likedPostIds = currentUserId == null
+                ? Set.of()
+                : new HashSet<>(postLikeRepository.findLikedPostIds(currentUserId, postIds));
+        return new EngagementSnapshot(likeCounts, commentCounts, likedPostIds);
+    }
+
+    private record EngagementSnapshot(
+            Map<String, Long> likeCounts,
+            Map<String, Long> commentCounts,
+            Set<String> likedPostIds
+    ) {
+        private static EngagementSnapshot empty() {
+            return new EngagementSnapshot(Map.of(), Map.of(), Set.of());
+        }
+
+        private long likeCount(String postId) {
+            return likeCounts.getOrDefault(postId, 0L);
+        }
+
+        private long commentCount(String postId) {
+            return commentCounts.getOrDefault(postId, 0L);
+        }
     }
 
     private User getUser(Long userId) {

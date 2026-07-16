@@ -3,6 +3,7 @@ package com.talkwithneighbors.controller;
 import com.talkwithneighbors.dto.feed.CreateCommentRequest;
 import com.talkwithneighbors.dto.feed.CreateFeedPostRequest;
 import com.talkwithneighbors.dto.feed.FeedPostDto;
+import com.talkwithneighbors.dto.feed.FeedMode;
 import com.talkwithneighbors.dto.feed.PostCommentDto;
 import com.talkwithneighbors.dto.feed.UpdateCommentRequest;
 import com.talkwithneighbors.dto.feed.UpdateFeedPostRequest;
@@ -43,10 +44,11 @@ public class FeedController {
     public ResponseEntity<Page<FeedPostDto>> getFeed(
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size,
+            @RequestParam(defaultValue = "RECOMMENDED") FeedMode mode,
             UserSession userSession
     ) {
         Pageable pageable = PageRequest.of(Math.max(page, 0), Math.min(Math.max(size, 1), 50));
-        return ResponseEntity.ok(feedService.getFeed(userSession.getUserId(), pageable));
+        return ResponseEntity.ok(feedService.getFeed(userSession.getUserId(), mode, pageable));
     }
 
     @PostMapping(consumes = MediaType.APPLICATION_JSON_VALUE)

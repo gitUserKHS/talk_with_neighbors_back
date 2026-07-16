@@ -31,6 +31,9 @@ public class FeedPostDto {
     private boolean likedByCurrentUser;
     private int compatibilityScore;
     private List<String> sharedInterests;
+    private Double distanceKm;
+    private String neighborhoodName;
+    private List<String> recommendationReasons;
 
     public static FeedPostDto fromEntity(
             FeedPost post,
@@ -67,6 +70,7 @@ public class FeedPostDto {
         dto.setLikedByCurrentUser(likedByCurrentUser);
         dto.setCompatibilityScore(compatibilityScore);
         dto.setSharedInterests(sharedInterests != null ? List.copyOf(sharedInterests) : List.of());
+        dto.setRecommendationReasons(List.of());
         return dto;
     }
 }

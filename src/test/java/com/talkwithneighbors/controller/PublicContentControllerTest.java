@@ -3,6 +3,7 @@ package com.talkwithneighbors.controller;
 import com.talkwithneighbors.dto.publiccontent.PublicFeedMediaDto;
 import com.talkwithneighbors.dto.publiccontent.PublicFeedPostDto;
 import com.talkwithneighbors.dto.publiccontent.PublicMeetupDto;
+import com.talkwithneighbors.dto.feed.FeedMode;
 import com.talkwithneighbors.entity.FeedMediaType;
 import com.talkwithneighbors.service.PublicContentService;
 import org.junit.jupiter.api.BeforeEach;
@@ -12,6 +13,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.test.web.servlet.MockMvc;
@@ -25,6 +27,7 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -63,7 +66,7 @@ class PublicContentControllerTest {
                 2,
                 false
         );
-        when(publicContentService.getFeed(any(Pageable.class)))
+        when(publicContentService.getFeed(eq(FeedMode.RECOMMENDED), isNull(), any(Pageable.class)))
                 .thenReturn(new PageImpl<>(List.of(post), PageRequest.of(0, 50), 1));
 
         mockMvc.perform(get("/api/public/feed")
@@ -81,9 +84,23 @@ class PublicContentControllerTest {
                 .andExpect(jsonPath("$.content[0].sharedInterests").doesNotExist());
 
         ArgumentCaptor<Pageable> pageable = ArgumentCaptor.forClass(Pageable.class);
-        verify(publicContentService).getFeed(pageable.capture());
+        verify(publicContentService).getFeed(eq(FeedMode.RECOMMENDED), isNull(), pageable.capture());
         assertThat(pageable.getValue().getPageNumber()).isZero();
         assertThat(pageable.getValue().getPageSize()).isEqualTo(50);
+    }
+
+    @Test
+    void forwardsExplicitPublicFeedModeAndCoarseRegion() throws Exception {
+        when(publicContentService.getFeed(eq(FeedMode.NEARBY), eq("서울 중구"), any(Pageable.class)))
+                .thenReturn(Page.empty(PageRequest.of(0, 20)));
+
+        mockMvc.perform(get("/api/public/feed")
+                        .param("mode", "NEARBY")
+                        .param("region", "서울 중구"))
+                .andExpect(status().isOk());
+
+        verify(publicContentService)
+                .getFeed(eq(FeedMode.NEARBY), eq("서울 중구"), any(Pageable.class));
     }
 
     @Test

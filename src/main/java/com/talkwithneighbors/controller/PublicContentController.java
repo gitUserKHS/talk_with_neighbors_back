@@ -2,6 +2,7 @@ package com.talkwithneighbors.controller;
 
 import com.talkwithneighbors.dto.publiccontent.PublicFeedPostDto;
 import com.talkwithneighbors.dto.publiccontent.PublicMeetupDto;
+import com.talkwithneighbors.dto.feed.FeedMode;
 import com.talkwithneighbors.service.PublicContentService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
@@ -24,9 +25,11 @@ public class PublicContentController {
     @GetMapping("/feed")
     public ResponseEntity<Page<PublicFeedPostDto>> getFeed(
             @RequestParam(defaultValue = "0") int page,
-            @RequestParam(defaultValue = "20") int size
+            @RequestParam(defaultValue = "20") int size,
+            @RequestParam(defaultValue = "RECOMMENDED") FeedMode mode,
+            @RequestParam(required = false) String region
     ) {
-        return ResponseEntity.ok(publicContentService.getFeed(pageable(page, size)));
+        return ResponseEntity.ok(publicContentService.getFeed(mode, region, pageable(page, size)));
     }
 
     @GetMapping("/meetups")

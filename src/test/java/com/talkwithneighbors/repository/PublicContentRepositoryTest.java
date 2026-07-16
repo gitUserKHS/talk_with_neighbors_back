@@ -6,6 +6,7 @@ import com.talkwithneighbors.entity.ChatRoomType;
 import com.talkwithneighbors.entity.ChatRoomStatus;
 import com.talkwithneighbors.entity.FeedPost;
 import com.talkwithneighbors.entity.PostComment;
+import com.talkwithneighbors.entity.PostLike;
 import com.talkwithneighbors.entity.User;
 import com.talkwithneighbors.repository.publiccontent.PublicFeedPostRepository;
 import com.talkwithneighbors.repository.publiccontent.PublicMeetupRepository;
@@ -35,6 +36,12 @@ class PublicContentRepositoryTest {
 
     @Autowired
     PublicMeetupRepository meetupRepository;
+
+    @Autowired
+    PostLikeRepository postLikeRepository;
+
+    @Autowired
+    PostCommentRepository postCommentRepository;
 
     @Test
     void pagesOnlyExplicitPublicPreviewPostsInTheDatabase() {
@@ -116,6 +123,31 @@ class PublicContentRepositoryTest {
                 .isEqualTo(2);
     }
 
+    @Test
+    void batchesEngagementCountsAndCurrentUserLikesForCandidateIds() {
+        User author = persistUser("batch-author");
+        User reader = persistUser("batch-reader");
+        FeedPost first = persistPost("batch-first", author, LocalDateTime.of(2026, 7, 16, 9, 0));
+        FeedPost second = persistPost("batch-second", author, LocalDateTime.of(2026, 7, 16, 10, 0));
+        persistLike(first, reader);
+        persistLike(first, author);
+        persistLike(second, reader);
+        persistComment("batch-comment-1", first, reader, LocalDateTime.of(2026, 7, 16, 9, 30));
+        persistComment("batch-comment-2", first, author, LocalDateTime.of(2026, 7, 16, 9, 40));
+        entityManager.flush();
+        entityManager.clear();
+
+        assertThat(postLikeRepository.countByPostIds(List.of("batch-first", "batch-second")))
+                .extracting(count -> count.postId() + ":" + count.total())
+                .containsExactlyInAnyOrder("batch-first:2", "batch-second:1");
+        assertThat(postCommentRepository.countByPostIds(List.of("batch-first", "batch-second")))
+                .extracting(count -> count.postId() + ":" + count.total())
+                .containsExactly("batch-first:2");
+        assertThat(postLikeRepository.findLikedPostIds(
+                reader.getId(), List.of("batch-first", "batch-second")))
+                .containsExactlyInAnyOrder("batch-first", "batch-second");
+    }
+
     private User persistUser(String username) {
         User user = new User();
         user.setEmail(username + "@example.test");
@@ -152,6 +184,13 @@ class PublicContentRepositoryTest {
         comment.setContent(id);
         comment.setCreatedAt(createdAt);
         entityManager.persist(comment);
+    }
+
+    private void persistLike(FeedPost post, User user) {
+        PostLike like = new PostLike();
+        like.setPost(post);
+        like.setUser(user);
+        entityManager.persist(like);
     }
 
     private ChatRoom persistMeetup(
