@@ -104,6 +104,15 @@ class PublicContentControllerTest {
     }
 
     @Test
+    void rejectsUnknownPublicFeedModeWithBadRequest() throws Exception {
+        mockMvc.perform(get("/api/public/feed")
+                        .param("mode", "POPULAR"))
+                .andExpect(status().isBadRequest());
+
+        verifyNoInteractions(publicContentService);
+    }
+
+    @Test
     void commentsAreNeverExposedByTheGuestApi() throws Exception {
         mockMvc.perform(get("/api/public/feed/post-1/comments"))
                 .andExpect(status().isNotFound());

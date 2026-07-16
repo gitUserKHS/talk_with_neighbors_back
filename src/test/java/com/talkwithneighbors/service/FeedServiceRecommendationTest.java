@@ -27,7 +27,6 @@ import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.when;
-import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -62,9 +61,6 @@ class FeedServiceRecommendationTest {
                 domainEventPublisher
         );
         when(userRepository.findById(viewer.getId())).thenReturn(Optional.of(viewer));
-        lenient().when(hiddenContentRepository.findTargetIds(viewer.getId(), SafetyTargetType.FEED_POST))
-                .thenReturn(List.of());
-        lenient().when(userBlockRepository.findExcludedUserIds(viewer.getId())).thenReturn(List.of());
     }
 
     @Test
@@ -74,10 +70,12 @@ class FeedServiceRecommendationTest {
                 37.5670, 126.9785, "서울특별시 중구"), List.of("books"), now.minusDays(1));
         FeedPost newestFar = post("new", user(3L, List.of("games"),
                 35.1796, 129.0756, "부산광역시 중구"), List.of("games"), now);
-        when(feedPostRepository.findAllByOrderByCreatedAtDesc(PageRequest.of(0, 500)))
+        when(feedPostRepository.findVisibleFeed(
+                viewer.getId(), SafetyTargetType.FEED_POST, PageRequest.of(0, 500)))
                 .thenReturn(new PageImpl<>(List.of(newestFar, nearbyRelevant), PageRequest.of(0, 500), 2));
-        when(feedPostRepository.findAllByOrderByCreatedAtDesc())
-                .thenReturn(List.of(newestFar, nearbyRelevant));
+        when(feedPostRepository.findVisibleFeed(
+                viewer.getId(), SafetyTargetType.FEED_POST, PageRequest.of(0, 20)))
+                .thenReturn(new PageImpl<>(List.of(newestFar, nearbyRelevant), PageRequest.of(0, 20), 2));
 
         var recommended = feedService.getFeed(viewer.getId(), FeedMode.RECOMMENDED, PageRequest.of(0, 20));
         var nearby = feedService.getFeed(viewer.getId(), FeedMode.NEARBY, PageRequest.of(0, 20));
@@ -87,7 +85,6 @@ class FeedServiceRecommendationTest {
         assertThat(nearby.getContent()).extracting("id").containsExactly("near", "new");
         assertThat(latest.getContent()).extracting("id").containsExactly("new", "near");
         assertThat(latest.getTotalElements()).isEqualTo(2);
-        assertThat(nearby.getContent().get(0).getDistanceKm()).isNotNull();
         assertThat(nearby.getContent().get(0).getNeighborhoodName()).isEqualTo("서울특별시 중구");
         assertThat(nearby.getContent().get(0).getRecommendationReasons())
                 .contains("NEARBY", "SHARED_INTERESTS");
@@ -100,16 +97,14 @@ class FeedServiceRecommendationTest {
     void safetyFiltersRunBeforeRankingAndStableIdBreaksTimestampTies() {
         LocalDateTime sameTime = LocalDateTime.now().minusHours(1);
         User allowedAuthor = user(2L, List.of("books"), 37.56, 126.98, "서울특별시 중구");
-        User blockedAuthor = user(3L, List.of("books"), 37.56, 126.98, "서울특별시 중구");
         FeedPost allowedA = post("allowed-a", allowedAuthor, List.of("books"), sameTime);
         FeedPost allowedB = post("allowed-b", allowedAuthor, List.of("books"), sameTime);
-        FeedPost hidden = post("hidden", allowedAuthor, List.of("books"), sameTime.plusMinutes(1));
-        FeedPost blocked = post("blocked", blockedAuthor, List.of("books"), sameTime.plusMinutes(2));
-        when(feedPostRepository.findAllByOrderByCreatedAtDesc())
-                .thenReturn(List.of(blocked, hidden, allowedA, allowedB));
-        when(hiddenContentRepository.findTargetIds(viewer.getId(), SafetyTargetType.FEED_POST))
-                .thenReturn(List.of("hidden"));
-        when(userBlockRepository.findExcludedUserIds(viewer.getId())).thenReturn(List.of(3L));
+        when(feedPostRepository.findVisibleFeed(
+                viewer.getId(), SafetyTargetType.FEED_POST, PageRequest.of(0, 1)))
+                .thenReturn(new PageImpl<>(List.of(allowedB), PageRequest.of(0, 1), 2));
+        when(feedPostRepository.findVisibleFeed(
+                viewer.getId(), SafetyTargetType.FEED_POST, PageRequest.of(1, 1)))
+                .thenReturn(new PageImpl<>(List.of(allowedA), PageRequest.of(1, 1), 2));
 
         var firstPage = feedService.getFeed(viewer.getId(), FeedMode.LATEST, PageRequest.of(0, 1));
         var secondPage = feedService.getFeed(viewer.getId(), FeedMode.LATEST, PageRequest.of(1, 1));
@@ -117,6 +112,10 @@ class FeedServiceRecommendationTest {
         assertThat(firstPage.getContent()).extracting("id").containsExactly("allowed-b");
         assertThat(secondPage.getContent()).extracting("id").containsExactly("allowed-a");
         assertThat(firstPage.getTotalElements()).isEqualTo(2);
+        verify(feedPostRepository).findVisibleFeed(
+                viewer.getId(), SafetyTargetType.FEED_POST, PageRequest.of(0, 1));
+        verify(feedPostRepository).findVisibleFeed(
+                viewer.getId(), SafetyTargetType.FEED_POST, PageRequest.of(1, 1));
     }
 
     @Test
@@ -126,7 +125,8 @@ class FeedServiceRecommendationTest {
         List<FeedPost> candidates = java.util.stream.IntStream.range(0, 25)
                 .mapToObj(index -> post("post-" + index, author, List.of("books"), now.minusMinutes(index)))
                 .toList();
-        when(feedPostRepository.findAllByOrderByCreatedAtDesc(PageRequest.of(0, 500)))
+        when(feedPostRepository.findVisibleFeed(
+                viewer.getId(), SafetyTargetType.FEED_POST, PageRequest.of(0, 500)))
                 .thenReturn(new PageImpl<>(candidates, PageRequest.of(0, 500), candidates.size()));
 
         feedService.getFeed(viewer.getId(), FeedMode.RECOMMENDED, PageRequest.of(0, 20));
@@ -141,6 +141,37 @@ class FeedServiceRecommendationTest {
         assertThat(postIds.getValue()).hasSize(25);
         verify(postLikeRepository, never()).countByPost_Id(anyString());
         verify(postCommentRepository, never()).countByPost_Id(anyString());
+    }
+
+    @Test
+    void recommendationTotalIsTheBoundedCandidateUniverseAndExtremeOffsetIsEmpty() {
+        LocalDateTime now = LocalDateTime.now();
+        User author = user(2L, List.of("books"), 37.56, 126.98, "서울특별시 중구");
+        List<FeedPost> candidates = java.util.stream.IntStream.range(0, 500)
+                .mapToObj(index -> post("bounded-" + index, author, List.of("books"), now.minusMinutes(index)))
+                .toList();
+        when(feedPostRepository.findVisibleFeed(
+                viewer.getId(), SafetyTargetType.FEED_POST, PageRequest.of(0, 500)))
+                .thenReturn(new PageImpl<>(candidates, PageRequest.of(0, 500), 800));
+
+        var result = feedService.getFeed(
+                viewer.getId(), FeedMode.RECOMMENDED, PageRequest.of(Integer.MAX_VALUE, 50));
+
+        assertThat(result.getContent()).isEmpty();
+        assertThat(result.getTotalElements()).isEqualTo(500);
+    }
+
+    @Test
+    void latestFeedRejectsAnUnsupportedDatabaseOffsetBeforeCallingTheRepository() {
+        var result = feedService.getFeed(
+                viewer.getId(), FeedMode.LATEST, PageRequest.of(Integer.MAX_VALUE, 50));
+
+        assertThat(result.getContent()).isEmpty();
+        assertThat(result.getTotalElements()).isZero();
+        verify(feedPostRepository, never()).findVisibleFeed(
+                org.mockito.ArgumentMatchers.anyLong(),
+                org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.any(PageRequest.class));
     }
 
     private User user(Long id, List<String> interests, double latitude, double longitude, String address) {

@@ -55,6 +55,9 @@ public class PublicContentService {
     public Page<PublicFeedPostDto> getFeed(FeedMode mode, String region, Pageable pageable) {
         FeedMode effectiveMode = mode == null ? FeedMode.RECOMMENDED : mode;
         if (effectiveMode == FeedMode.LATEST) {
+            if (pageable.getOffset() > Integer.MAX_VALUE) {
+                return Page.empty(pageable);
+            }
             Page<FeedPost> page = feedPostRepository.findPublicFeed(pageable);
             EngagementSnapshot engagement = loadEngagement(page.getContent());
             List<PublicFeedPostDto> content = page.getContent().stream()
@@ -69,10 +72,10 @@ public class PublicContentService {
                 .getContent();
         EngagementSnapshot engagement = loadEngagement(candidates);
         List<RankedPublicPost> ranked = candidates.stream()
-                .map(post -> rank(post, normalizeRegion(region), rankedAt, engagement))
+                .map(post -> rank(post, region, rankedAt, engagement))
                 .sorted((left, right) -> compareRankedPosts(effectiveMode, left, right))
                 .toList();
-        int start = Math.min((int) pageable.getOffset(), ranked.size());
+        int start = safePageStart(pageable, ranked.size());
         int end = Math.min(start + pageable.getPageSize(), ranked.size());
         List<PublicFeedPostDto> content = ranked.subList(start, end).stream()
                 .map(RankedPublicPost::dto)
@@ -97,9 +100,9 @@ public class PublicContentService {
         return value == null ? "" : value.trim().toLowerCase(Locale.ROOT);
     }
 
-    private String normalizeRegion(String value) {
-        String normalized = normalize(value);
-        return normalized.length() <= 80 ? normalized : normalized.substring(0, 80);
+    private int safePageStart(Pageable pageable, int resultSize) {
+        long offset = pageable.getOffset();
+        return offset >= resultSize ? resultSize : Math.toIntExact(offset);
     }
 
     private PublicFeedPostDto toPublicDto(FeedPost post, EngagementSnapshot engagement) {

@@ -56,13 +56,15 @@ public final class FeedRanking {
     ) {
         User author = post != null ? post.getAuthor() : null;
         InterestSignal interest = interestSignal(viewer, post);
+        double region = canUseMemberLocation(viewer, author)
+                ? coarseRegionSignal(viewer.getAddress(), author.getAddress())
+                : 0.5;
         return new Signals(
                 interest.score(),
                 proximitySignal(viewer, author),
                 recencySignal(post != null ? post.getCreatedAt() : null, now),
                 engagementSignal(likeCount, commentCount),
-                coarseRegionSignal(viewer != null ? viewer.getAddress() : null,
-                        author != null ? author.getAddress() : null),
+                region,
                 interest.shared()
         );
     }
@@ -117,20 +119,9 @@ public final class FeedRanking {
                 + (signals.region() * PUBLIC_REGION_WEIGHT);
     }
 
-    public static Double visibleDistanceKm(User viewer, User author) {
-        if (viewer == null || author == null || Boolean.FALSE.equals(author.getShowNeighborhood())
-                || viewer.getLatitude() == null || viewer.getLongitude() == null
-                || author.getLatitude() == null || author.getLongitude() == null) {
-            return null;
-        }
-        double distance = distanceKm(
-                viewer.getLatitude(), viewer.getLongitude(),
-                author.getLatitude(), author.getLongitude());
-        return Math.round(distance * 10.0) / 10.0;
-    }
-
     public static String visibleNeighborhood(User author) {
-        if (author == null || Boolean.FALSE.equals(author.getShowNeighborhood())) {
+        if (author == null || !Boolean.TRUE.equals(author.getShowNeighborhood())
+                || !hasUsableLocation(author)) {
             return null;
         }
         List<String> parts = addressParts(author.getAddress());
@@ -188,10 +179,7 @@ public final class FeedRanking {
     }
 
     private static double proximitySignal(User viewer, User author) {
-        if (viewer == null || author == null) {
-            return 0.5;
-        }
-        if (Boolean.FALSE.equals(author.getShowNeighborhood())) {
+        if (!canUseMemberLocation(viewer, author)) {
             return 0.5;
         }
 
@@ -222,15 +210,68 @@ public final class FeedRanking {
     }
 
     private static double requestedRegionSignal(String requestedRegion, User author) {
-        String requested = normalizeOne(requestedRegion);
+        List<String> requested = addressParts(requestedRegion);
         if (requested.isEmpty()) {
             return 0.5;
         }
-        if (author == null || Boolean.FALSE.equals(author.getShowNeighborhood())) {
+        if (!isValidCoarseRegionRequest(requested)
+                || author == null
+                || !Boolean.TRUE.equals(author.getShowNeighborhood())
+                || !hasUsableLocation(author)) {
             return 0.0;
         }
-        String authorAddress = normalizeOne(author.getAddress());
-        return !authorAddress.isEmpty() && authorAddress.contains(requested) ? 1.0 : 0.0;
+        List<String> authorRegion = addressParts(author.getAddress());
+        if (authorRegion.size() < requested.size()) {
+            return 0.0;
+        }
+        for (int index = 0; index < requested.size(); index++) {
+            if (!requested.get(index).equals(authorRegion.get(index))) {
+                return 0.0;
+            }
+        }
+        return 1.0;
+    }
+
+    private static boolean canUseMemberLocation(User viewer, User author) {
+        return viewer != null
+                && author != null
+                && Boolean.TRUE.equals(author.getShowNeighborhood())
+                && hasUsableLocation(viewer)
+                && hasUsableLocation(author);
+    }
+
+    private static boolean hasUsableLocation(User user) {
+        if (user == null || user.getLatitude() == null || user.getLongitude() == null
+                || user.getAddress() == null || user.getAddress().isBlank()) {
+            return false;
+        }
+        double latitude = user.getLatitude();
+        double longitude = user.getLongitude();
+        return Double.isFinite(latitude)
+                && Double.isFinite(longitude)
+                && latitude >= -90.0 && latitude <= 90.0
+                && longitude >= -180.0 && longitude <= 180.0
+                && !(Math.abs(latitude) < 0.000001 && Math.abs(longitude) < 0.000001);
+    }
+
+    private static boolean isValidCoarseRegionRequest(List<String> parts) {
+        if (parts.isEmpty() || parts.size() > 2 || !isTopLevelRegion(parts.get(0))) {
+            return false;
+        }
+        return parts.size() == 1 || isLocalRegion(parts.get(1));
+    }
+
+    private static boolean isTopLevelRegion(String value) {
+        return value.endsWith("특별시")
+                || value.endsWith("광역시")
+                || value.endsWith("특별자치시")
+                || value.endsWith("특별자치도")
+                || value.endsWith("도")
+                || value.endsWith("시");
+    }
+
+    private static boolean isLocalRegion(String value) {
+        return value.endsWith("시") || value.endsWith("군") || value.endsWith("구");
     }
 
     private static double coarseRegionSignal(String firstAddress, String secondAddress) {

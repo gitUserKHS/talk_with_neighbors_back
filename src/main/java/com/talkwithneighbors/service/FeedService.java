@@ -66,28 +66,24 @@ public class FeedService {
     @Transactional(readOnly = true)
     public Page<FeedPostDto> getFeed(Long currentUserId, FeedMode mode, Pageable pageable) {
         User currentUser = getUser(currentUserId);
-        Set<String> hiddenPostIds = new HashSet<>(hiddenContentRepository.findTargetIds(
-                currentUserId, SafetyTargetType.FEED_POST));
-        Set<Long> excludedUserIds = new HashSet<>(userBlockRepository.findExcludedUserIds(currentUserId));
         FeedMode effectiveMode = mode == null ? FeedMode.RECOMMENDED : mode;
         LocalDateTime rankedAt = LocalDateTime.now();
         if (effectiveMode == FeedMode.LATEST) {
-            return latestFeed(currentUser, hiddenPostIds, excludedUserIds, pageable, rankedAt);
+            return latestFeed(currentUser, pageable, rankedAt);
         }
 
-        List<FeedPost> candidates = feedPostRepository.findAllByOrderByCreatedAtDesc(
+        List<FeedPost> candidates = feedPostRepository.findVisibleFeed(
+                        currentUserId,
+                        SafetyTargetType.FEED_POST,
                         PageRequest.of(0, RECOMMENDATION_CANDIDATE_LIMIT))
-                .getContent().stream()
-                .filter(post -> !hiddenPostIds.contains(post.getId()))
-                .filter(post -> post.getAuthor() == null || !excludedUserIds.contains(post.getAuthor().getId()))
-                .toList();
+                .getContent();
         EngagementSnapshot engagement = loadEngagement(candidates, currentUserId);
         List<RankedFeedPost> posts = candidates.stream()
                 .map(post -> rank(post, currentUser, effectiveMode, rankedAt, engagement))
                 .sorted((left, right) -> compareRankedPosts(effectiveMode, left, right))
                 .collect(Collectors.toList());
 
-        int start = Math.min((int) pageable.getOffset(), posts.size());
+        int start = safePageStart(pageable, posts.size());
         int end = Math.min(start + pageable.getPageSize(), posts.size());
         List<FeedPostDto> content = posts.subList(start, end).stream()
                 .map(RankedFeedPost::dto)
@@ -97,24 +93,25 @@ public class FeedService {
 
     private Page<FeedPostDto> latestFeed(
             User currentUser,
-            Set<String> hiddenPostIds,
-            Set<Long> excludedUserIds,
             Pageable pageable,
             LocalDateTime rankedAt
     ) {
-        List<FeedPost> posts = feedPostRepository.findAllByOrderByCreatedAtDesc().stream()
-                .filter(post -> !hiddenPostIds.contains(post.getId()))
-                .filter(post -> post.getAuthor() == null || !excludedUserIds.contains(post.getAuthor().getId()))
-                .sorted(this::comparePostsByRecency)
-                .toList();
-        int start = Math.min((int) pageable.getOffset(), posts.size());
-        int end = Math.min(start + pageable.getPageSize(), posts.size());
-        List<FeedPost> pagePosts = posts.subList(start, end);
+        if (pageable.getOffset() > Integer.MAX_VALUE) {
+            return Page.empty(pageable);
+        }
+        Page<FeedPost> page = feedPostRepository.findVisibleFeed(
+                currentUser.getId(), SafetyTargetType.FEED_POST, pageable);
+        List<FeedPost> pagePosts = page.getContent();
         EngagementSnapshot engagement = loadEngagement(pagePosts, currentUser.getId());
         List<FeedPostDto> content = pagePosts.stream()
                 .map(post -> rank(post, currentUser, FeedMode.LATEST, rankedAt, engagement).dto())
                 .toList();
-        return new PageImpl<>(content, pageable, posts.size());
+        return new PageImpl<>(content, pageable, page.getTotalElements());
+    }
+
+    private int safePageStart(Pageable pageable, int resultSize) {
+        long offset = pageable.getOffset();
+        return offset >= resultSize ? resultSize : Math.toIntExact(offset);
     }
 
     @Transactional
@@ -372,7 +369,7 @@ public class FeedService {
             sharedInterests = post.getInterestTags() != null ? post.getInterestTags() : List.of();
         }
 
-        return FeedPostDto.fromEntity(
+        FeedPostDto dto = FeedPostDto.fromEntity(
                 post,
                 likeCount,
                 commentCount,
@@ -380,6 +377,8 @@ public class FeedService {
                 compatibilityScore,
                 sharedInterests
         );
+        dto.setNeighborhoodName(FeedRanking.visibleNeighborhood(author));
+        return dto;
     }
 
     private RankedFeedPost rank(
@@ -399,8 +398,6 @@ public class FeedService {
                 engagement.likedPostIds().contains(post.getId()));
         FeedRanking.Signals signals = FeedRanking.memberSignals(
                 currentUser, post, likeCount, commentCount, rankedAt);
-        dto.setDistanceKm(FeedRanking.visibleDistanceKm(currentUser, post.getAuthor()));
-        dto.setNeighborhoodName(FeedRanking.visibleNeighborhood(post.getAuthor()));
         dto.setRecommendationReasons(FeedRanking.recommendationReasons(mode, signals));
         return new RankedFeedPost(
                 post,

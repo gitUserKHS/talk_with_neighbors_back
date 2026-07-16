@@ -31,7 +31,6 @@ public class FeedPostDto {
     private boolean likedByCurrentUser;
     private int compatibilityScore;
     private List<String> sharedInterests;
-    private Double distanceKm;
     private String neighborhoodName;
     private List<String> recommendationReasons;
 

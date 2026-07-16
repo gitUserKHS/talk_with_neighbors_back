@@ -65,6 +65,27 @@ class PublicContentRepositoryTest {
     }
 
     @Test
+    void publicLatestUsesIdDescendingToBreakCreatedAtTiesAcrossPages() {
+        User author = persistUser("tie-author");
+        LocalDateTime sameTime = LocalDateTime.of(2026, 7, 16, 12, 0);
+        FeedPost first = persistPost("public-tie-a", author, sameTime);
+        FeedPost second = persistPost("public-tie-b", author, sameTime);
+        first.setPublicPreview(true);
+        second.setPublicPreview(true);
+        entityManager.flush();
+        entityManager.clear();
+
+        Page<FeedPost> firstPage = feedPostRepository.findPublicFeed(PageRequest.of(0, 1));
+        Page<FeedPost> secondPage = feedPostRepository.findPublicFeed(PageRequest.of(1, 1));
+
+        assertThat(firstPage.getContent()).extracting(FeedPost::getId)
+                .containsExactly("public-tie-b");
+        assertThat(secondPage.getContent()).extracting(FeedPost::getId)
+                .containsExactly("public-tie-a");
+        assertThat(firstPage.getTotalElements()).isEqualTo(2);
+    }
+
+    @Test
     void databaseDefaultKeepsRowsPrivateWhenVisibilityIsOmitted() {
         User author = persistUser("legacy-neighbor");
         entityManager.flush();

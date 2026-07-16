@@ -158,6 +158,35 @@ class PublicContentServiceTest {
     }
 
     @Test
+    void recommendedPublicFeedReturnsEmptyForAnExtremePageOffsetWithoutOverflow() {
+        FeedPost post = post("bounded-public", member(), true);
+        when(feedPostRepository.findPublicFeed(PageRequest.of(0, 500)))
+                .thenReturn(new PageImpl<>(List.of(post), PageRequest.of(0, 500), 800));
+
+        var result = service().getFeed(
+                FeedMode.RECOMMENDED,
+                null,
+                PageRequest.of(Integer.MAX_VALUE, 50)
+        );
+
+        assertThat(result.getContent()).isEmpty();
+        assertThat(result.getTotalElements()).isEqualTo(1);
+    }
+
+    @Test
+    void latestPublicFeedRejectsAnUnsupportedDatabaseOffsetBeforeRepositoryAccess() {
+        var result = service().getFeed(
+                FeedMode.LATEST,
+                null,
+                PageRequest.of(Integer.MAX_VALUE, 50)
+        );
+
+        assertThat(result.getContent()).isEmpty();
+        assertThat(result.getTotalElements()).isZero();
+        verifyNoInteractions(feedPostRepository, postLikeRepository, postCommentRepository);
+    }
+
+    @Test
     void normalizesMeetupFiltersAndRedactsMemberLocations() {
         PageRequest pageable = PageRequest.of(0, 10);
         ChatRoom room = meetup("member-meetup", member());
@@ -237,6 +266,10 @@ class PublicContentServiceTest {
         user.setId(7L);
         user.setUsername("private-account-handle");
         user.setAccountType(UserAccountType.MEMBER);
+        user.setLatitude(37.5665);
+        user.setLongitude(126.9780);
+        user.setAddress("서울특별시 중구");
+        user.setShowNeighborhood(true);
         return user;
     }
 

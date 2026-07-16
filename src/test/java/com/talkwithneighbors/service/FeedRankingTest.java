@@ -75,8 +75,65 @@ class FeedRankingTest {
                 viewer, post("private-location", author, List.of("books"), now), 0, 0, now);
 
         assertThat(signals.proximity()).isEqualTo(0.5);
-        assertThat(FeedRanking.visibleDistanceKm(viewer, author)).isNull();
         assertThat(FeedRanking.visibleNeighborhood(author)).isNull();
+        assertThat(FeedRanking.recommendationReasons(FeedMode.NEARBY, signals))
+                .doesNotContain("NEARBY");
+    }
+
+    @Test
+    void nullableNeighborhoodConsentFailsClosed() {
+        LocalDateTime now = LocalDateTime.of(2026, 7, 16, 12, 0);
+        User viewer = user(1L, List.of("books"), 37.5665, 126.9780, "서울특별시 중구");
+        User author = user(2L, List.of("books"), 37.5670, 126.9785, "서울특별시 중구");
+        author.setShowNeighborhood(null);
+        FeedPost post = post("nullable-consent", author, List.of("books"), now);
+
+        FeedRanking.Signals member = FeedRanking.memberSignals(viewer, post, 0, 0, now);
+        FeedRanking.Signals guest = FeedRanking.publicSignals(post, 0, 0, "서울특별시 중구", now);
+
+        assertThat(member.proximity()).isEqualTo(0.5);
+        assertThat(member.region()).isEqualTo(0.5);
+        assertThat(guest.region()).isZero();
+        assertThat(FeedRanking.visibleNeighborhood(author)).isNull();
+    }
+
+    @Test
+    void zeroCoordinateSentinelNeverBecomesLocationEvidence() {
+        LocalDateTime now = LocalDateTime.of(2026, 7, 16, 12, 0);
+        User viewer = user(1L, List.of("books"), 37.5665, 126.9780, "서울특별시 중구");
+        User incompleteAuthor = user(2L, List.of("books"), 0.0, 0.0, "서울특별시 중구");
+        FeedPost post = post("incomplete-location", incompleteAuthor, List.of("books"), now);
+
+        FeedRanking.Signals member = FeedRanking.memberSignals(viewer, post, 0, 0, now);
+        FeedRanking.Signals guest = FeedRanking.publicSignals(post, 0, 0, "서울특별시 중구", now);
+
+        assertThat(member.proximity()).isEqualTo(0.5);
+        assertThat(member.region()).isEqualTo(0.5);
+        assertThat(guest.region()).isZero();
+        assertThat(FeedRanking.visibleNeighborhood(incompleteAuthor)).isNull();
+        assertThat(FeedRanking.recommendationReasons(FeedMode.NEARBY, member))
+                .doesNotContain("NEARBY");
+    }
+
+    @Test
+    void publicRegionAcceptsOnlyExactOneOrTwoTokenAdministrativePrefixes() {
+        LocalDateTime now = LocalDateTime.of(2026, 7, 16, 12, 0);
+        User author = user(2L, List.of("books"), 37.5665, 126.9780,
+                "서울특별시 중구 세종대로 110");
+        FeedPost post = post("region", author, List.of("books"), now);
+
+        assertThat(FeedRanking.publicSignals(post, 0, 0, "  서울특별시   중구  ", now).region())
+                .isEqualTo(1.0);
+        assertThat(FeedRanking.publicSignals(post, 0, 0, "서울특별시", now).region())
+                .isEqualTo(1.0);
+        assertThat(FeedRanking.publicSignals(post, 0, 0, null, now).region())
+                .isEqualTo(0.5);
+        assertThat(FeedRanking.publicSignals(post, 0, 0, "중구", now).region()).isZero();
+        assertThat(FeedRanking.publicSignals(post, 0, 0, "세종대로", now).region()).isZero();
+        assertThat(FeedRanking.publicSignals(post, 0, 0,
+                "서울특별시 중구 세종대로", now).region()).isZero();
+        assertThat(FeedRanking.publicSignals(post, 0, 0, "서울특별시 강남구", now).region())
+                .isZero();
     }
 
     @Test
