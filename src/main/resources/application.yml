@@ -9,8 +9,8 @@ spring:
       adjust-dates-to-context-time-zone: false
   servlet:
     multipart:
-      max-file-size: 100MB
-      max-request-size: 205MB
+      max-file-size: 30MB
+      max-request-size: 125MB
       file-size-threshold: 2MB
   datasource:
     url: jdbc:mysql://localhost:3306/talk_with_neighbors?useUnicode=true&characterEncoding=UTF-8&useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true&rewriteBatchedStatements=true&readOnlyPropagatesToServer=false&autoReconnect=true&defaultTransactionIsolation=READ_COMMITTED
@@ -161,8 +161,12 @@ app:
       prefix: ${APP_MEDIA_S3_PREFIX:media}
     ffmpeg-command: ${APP_MEDIA_FFMPEG_COMMAND:ffmpeg}
     ffprobe-command: ${APP_MEDIA_FFPROBE_COMMAND:ffprobe}
-    processing-timeout-seconds: ${APP_MEDIA_PROCESSING_TIMEOUT_SECONDS:180}
-    max-concurrent-processes: ${APP_MEDIA_MAX_CONCURRENT_PROCESSES:2}
+    processing-timeout-seconds: ${APP_MEDIA_PROCESSING_TIMEOUT_SECONDS:90}
+    max-concurrent-processes: ${APP_MEDIA_MAX_CONCURRENT_PROCESSES:1}
+    max-video-bytes: ${APP_MEDIA_MAX_VIDEO_BYTES:31457280}
+    max-video-duration-seconds: ${APP_MEDIA_MAX_VIDEO_DURATION_SECONDS:60}
+    max-video-pixels: ${APP_MEDIA_MAX_VIDEO_PIXELS:2073600}
+    max-video-dimension: ${APP_MEDIA_MAX_VIDEO_DIMENSION:1920}
   session:
     cookie-secure: ${APP_SESSION_COOKIE_SECURE:false}
   outbox:

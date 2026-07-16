@@ -9,6 +9,7 @@ import com.talkwithneighbors.service.media.MediaAsset;
 import com.talkwithneighbors.service.media.MediaAssetKind;
 import com.talkwithneighbors.service.media.MediaProcessingException;
 import com.talkwithneighbors.service.media.MediaProcessingBusyException;
+import com.talkwithneighbors.service.media.MediaProcessingTimeoutException;
 import com.talkwithneighbors.service.media.MediaProcessingRequest;
 import com.talkwithneighbors.service.media.MediaProcessor;
 import com.talkwithneighbors.service.media.ProcessedMedia;
@@ -44,9 +45,9 @@ public class MediaStorageService {
     public static final int MAX_MEDIA_COUNT = 10;
     public static final int MAX_CHAT_ATTACHMENT_COUNT = 5;
     public static final long MAX_IMAGE_BYTES = 10L * 1024 * 1024;
-    public static final long MAX_VIDEO_BYTES = 100L * 1024 * 1024;
+    public static final long DEFAULT_MAX_VIDEO_BYTES = 30L * 1024 * 1024;
     public static final long MAX_FILE_BYTES = 25L * 1024 * 1024;
-    public static final long MAX_TOTAL_BYTES = 200L * 1024 * 1024;
+    public static final long MAX_TOTAL_BYTES = 120L * 1024 * 1024;
     public static final long MAX_CHAT_TOTAL_BYTES = 120L * 1024 * 1024;
 
     private static final Set<String> ZIP_EXTENSIONS = Set.of(".zip", ".docx", ".xlsx", ".pptx");
@@ -72,23 +73,34 @@ public class MediaStorageService {
     private final Path processingDirectory;
     private final MediaProcessor mediaProcessor;
     private final MediaObjectStorage objectStorage;
+    private final long maxVideoBytes;
 
     @Autowired
     public MediaStorageService(
             @Value("${app.media.storage-directory:./uploads}") String storageDirectory,
             MediaProcessor mediaProcessor,
-            MediaObjectStorage objectStorage
+            MediaObjectStorage objectStorage,
+            @Value("${app.media.max-video-bytes:31457280}") long maxVideoBytes
     ) {
         this.rootDirectory = Paths.get(storageDirectory).toAbsolutePath().normalize();
         this.incomingDirectory = rootDirectory.resolve(".incoming").normalize();
         this.processingDirectory = incomingDirectory.resolve("processed").normalize();
         this.mediaProcessor = mediaProcessor;
         this.objectStorage = objectStorage;
+        this.maxVideoBytes = Math.max(1, maxVideoBytes);
         createDirectories(rootDirectory, incomingDirectory, processingDirectory);
     }
 
+    public MediaStorageService(
+            String storageDirectory,
+            MediaProcessor mediaProcessor,
+            MediaObjectStorage objectStorage
+    ) {
+        this(storageDirectory, mediaProcessor, objectStorage, DEFAULT_MAX_VIDEO_BYTES);
+    }
+
     public MediaStorageService(String storageDirectory, MediaProcessor mediaProcessor) {
-        this(storageDirectory, mediaProcessor, new LocalMediaObjectStorage(storageDirectory));
+        this(storageDirectory, mediaProcessor, new LocalMediaObjectStorage(storageDirectory), DEFAULT_MAX_VIDEO_BYTES);
     }
 
     /** Lightweight constructor used by storage validation tests without requiring FFmpeg. */
@@ -205,9 +217,25 @@ public class MediaStorageService {
         List<String> storedKeys = new ArrayList<>();
         List<MediaAsset> storedAssets = new ArrayList<>();
         try {
+            List<DetectedMedia> detectedFiles = new ArrayList<>(files.size());
             for (MultipartFile file : files) {
                 DetectedMedia detected = detect(file, policy.allowFiles());
                 validateFileLimit(file, detected, policy);
+                detectedFiles.add(detected);
+            }
+            long videoCount = detectedFiles.stream()
+                    .filter(detected -> detected.type() == MediaAssetKind.VIDEO)
+                    .count();
+            if (videoCount > 1) {
+                throw new MatchingException(
+                        "동영상은 한 번에 1개만 첨부할 수 있습니다. 사진이나 파일은 함께 첨부할 수 있습니다.",
+                        HttpStatus.BAD_REQUEST
+                );
+            }
+
+            for (int fileIndex = 0; fileIndex < files.size(); fileIndex++) {
+                MultipartFile file = files.get(fileIndex);
+                DetectedMedia detected = detectedFiles.get(fileIndex);
                 String originalName = safeOriginalName(file.getOriginalFilename());
                 String baseName = UUID.randomUUID().toString().toLowerCase(Locale.ROOT);
                 Path incoming = incomingDirectory.resolve(baseName + detected.extension()).normalize();
@@ -283,6 +311,9 @@ public class MediaStorageService {
         } catch (MediaProcessingBusyException exception) {
             rollback(storedPaths, storedKeys);
             throw new MatchingException(exception.getMessage(), HttpStatus.SERVICE_UNAVAILABLE);
+        } catch (MediaProcessingTimeoutException exception) {
+            rollback(storedPaths, storedKeys);
+            throw new MatchingException(exception.getMessage(), HttpStatus.SERVICE_UNAVAILABLE);
         } catch (MediaProcessingException exception) {
             rollback(storedPaths, storedKeys);
             throw new MatchingException(exception.getMessage(), HttpStatus.BAD_REQUEST);
@@ -335,7 +366,7 @@ public class MediaStorageService {
         }
         long maxBytes = switch (detected.type()) {
             case IMAGE -> MAX_IMAGE_BYTES;
-            case VIDEO -> MAX_VIDEO_BYTES;
+            case VIDEO -> maxVideoBytes;
             case FILE -> MAX_FILE_BYTES;
         };
         if (file.getSize() > maxBytes) {

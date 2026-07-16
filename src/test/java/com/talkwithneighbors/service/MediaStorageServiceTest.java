@@ -19,11 +19,14 @@ import java.nio.file.StandardCopyOption;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 class MediaStorageServiceTest {
     @TempDir
@@ -49,7 +52,7 @@ class MediaStorageServiceTest {
     }
 
     @Test
-    void rejectsSpoofedFileAndRemovesFilesStoredEarlierInTheRequest() throws IOException {
+    void rejectsSpoofedFileBeforeStoringEarlierFilesInTheRequest() throws IOException {
         MediaStorageService service = new MediaStorageService(tempDirectory.toString());
         MockMultipartFile image = new MockMultipartFile(
                 "files", "photo.jpg", "image/jpeg", jpegBytes()
@@ -60,8 +63,11 @@ class MediaStorageServiceTest {
 
         assertThrows(MatchingException.class, () -> service.storePostMedia(List.of(image, spoofed)));
 
-        try (var files = Files.list(tempDirectory.resolve("feed"))) {
-            assertEquals(0, files.count());
+        Path feedDirectory = tempDirectory.resolve("feed");
+        if (Files.exists(feedDirectory)) {
+            try (var files = Files.list(feedDirectory)) {
+                assertEquals(0, files.count());
+            }
         }
     }
 
@@ -124,6 +130,77 @@ class MediaStorageServiceTest {
     }
 
     @Test
+    void rejectsMultipleVideosBeforeAnyTranscodeButStillAllowsMixedMedia() {
+        AtomicInteger processingCalls = new AtomicInteger();
+        MediaStorageService service = new MediaStorageService(tempDirectory.toString(), request -> {
+            processingCalls.incrementAndGet();
+            throw new AssertionError("Multiple videos must be rejected before processing starts");
+        });
+
+        MatchingException exception = assertThrows(MatchingException.class, () -> service.storePostMedia(List.of(
+                new MockMultipartFile("files", "first.mp4", "video/mp4", mp4Bytes()),
+                new MockMultipartFile("files", "second.mp4", "video/mp4", mp4Bytes())
+        )));
+
+        assertEquals(org.springframework.http.HttpStatus.BAD_REQUEST, exception.getStatus());
+        assertTrue(exception.getMessage().contains("한 번에 1개"));
+        assertEquals(0, processingCalls.get());
+    }
+
+    @Test
+    void configurableVideoByteLimitReturnsPayloadTooLargeBeforeProcessing() throws IOException {
+        AtomicInteger processingCalls = new AtomicInteger();
+        MediaStorageService service = new MediaStorageService(
+                tempDirectory.toString(),
+                request -> {
+                    processingCalls.incrementAndGet();
+                    throw new AssertionError("Oversized video must be rejected before processing starts");
+                },
+                new RecordingObjectStorage(),
+                1024 * 1024
+        );
+        org.springframework.web.multipart.MultipartFile video = mock(org.springframework.web.multipart.MultipartFile.class);
+        when(video.isEmpty()).thenReturn(false);
+        when(video.getSize()).thenReturn(1024L * 1024 + 1);
+        when(video.getOriginalFilename()).thenReturn("large.mp4");
+        when(video.getContentType()).thenReturn("video/mp4");
+        when(video.getInputStream()).thenAnswer(invocation -> new java.io.ByteArrayInputStream(mp4Bytes()));
+
+        MatchingException exception = assertThrows(
+                MatchingException.class,
+                () -> service.storePostMedia(List.of(video))
+        );
+
+        assertEquals(org.springframework.http.HttpStatus.PAYLOAD_TOO_LARGE, exception.getStatus());
+        assertTrue(exception.getMessage().contains("1MB"));
+        assertEquals(0, processingCalls.get());
+    }
+
+    @Test
+    void defaultVideoByteLimitIsThirtyMegabytes() throws IOException {
+        AtomicInteger processingCalls = new AtomicInteger();
+        MediaStorageService service = new MediaStorageService(tempDirectory.toString(), request -> {
+            processingCalls.incrementAndGet();
+            throw new AssertionError("Oversized video must be rejected before processing starts");
+        });
+        org.springframework.web.multipart.MultipartFile video = mock(org.springframework.web.multipart.MultipartFile.class);
+        when(video.isEmpty()).thenReturn(false);
+        when(video.getSize()).thenReturn(30L * 1024 * 1024 + 1);
+        when(video.getOriginalFilename()).thenReturn("too-large.mp4");
+        when(video.getContentType()).thenReturn("video/mp4");
+        when(video.getInputStream()).thenAnswer(invocation -> new java.io.ByteArrayInputStream(mp4Bytes()));
+
+        MatchingException exception = assertThrows(
+                MatchingException.class,
+                () -> service.storePostMedia(List.of(video))
+        );
+
+        assertEquals(org.springframework.http.HttpStatus.PAYLOAD_TOO_LARGE, exception.getStatus());
+        assertTrue(exception.getMessage().contains("30MB"));
+        assertEquals(0, processingCalls.get());
+    }
+
+    @Test
     void storesProcessedObjectsInRemoteStorageButKeepsStablePublicUrls() throws IOException {
         RecordingObjectStorage remoteStorage = new RecordingObjectStorage();
         MediaStorageService service = new MediaStorageService(
@@ -144,7 +221,7 @@ class MediaStorageServiceTest {
     }
 
     @Test
-    void rollsBackRemoteObjectsWhenLaterFileInSameRequestIsInvalid() {
+    void rejectsInvalidBatchBeforeWritingAnyRemoteObjects() {
         RecordingObjectStorage remoteStorage = new RecordingObjectStorage();
         MediaStorageService service = new MediaStorageService(
                 tempDirectory.toString(), processorWithThumbnail(), remoteStorage);
@@ -158,7 +235,7 @@ class MediaStorageServiceTest {
         assertThrows(MatchingException.class, () -> service.storePostMedia(List.of(valid, spoofed)));
 
         assertTrue(remoteStorage.objects.isEmpty());
-        assertFalse(remoteStorage.deletedKeys.isEmpty());
+        assertTrue(remoteStorage.deletedKeys.isEmpty());
     }
 
     @Test
