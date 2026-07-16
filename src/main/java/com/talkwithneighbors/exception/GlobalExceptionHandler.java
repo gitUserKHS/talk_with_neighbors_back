@@ -78,7 +78,10 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ErrorResponse> handleMaxUploadSize(MaxUploadSizeExceededException e) {
         return ResponseEntity
                 .status(HttpStatus.PAYLOAD_TOO_LARGE)
-                .body(new ErrorResponse("첨부 파일 전체 크기는 200MB를 넘을 수 없어요."));
+                .body(new ErrorResponse(
+                        "한 파일은 최대 30MB(사진 10MB·동영상 30MB·일반 파일 25MB), "
+                                + "첨부 요청 전체는 125MB를 넘을 수 없어요."
+                ));
     }
 
     @ExceptionHandler(MultipartException.class)

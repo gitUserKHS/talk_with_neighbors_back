@@ -51,8 +51,12 @@ flowchart TD
 | `APP_MEDIA_STORAGE_DIRECTORY` | 백엔드 미디어 저장 경로; Compose 기본 `/app/uploads` |
 | `APP_MEDIA_FFMPEG_COMMAND` | FFmpeg 실행 파일; Docker 기본 `ffmpeg` |
 | `APP_MEDIA_FFPROBE_COMMAND` | FFprobe 실행 파일; Docker 기본 `ffprobe` |
-| `APP_MEDIA_PROCESSING_TIMEOUT_SECONDS` | 한 파일 변환 제한 시간; 기본 180초 |
-| `APP_MEDIA_MAX_CONCURRENT_PROCESSES` | 동시 FFmpeg 변환 수; 기본 2, 초과 요청은 잠시 대기 후 503 |
+| `APP_MEDIA_PROCESSING_TIMEOUT_SECONDS` | probe·변환·썸네일을 합친 한 파일 처리 제한 시간; 기본 90초 |
+| `APP_MEDIA_MAX_CONCURRENT_PROCESSES` | 동시 FFmpeg 변환 수; 기본 1, 초과 요청은 잠시 대기 후 503 |
+| `APP_MEDIA_MAX_VIDEO_BYTES` | 입력 동영상 한 개의 최대 크기; 기본 30MB(31457280 bytes) |
+| `APP_MEDIA_MAX_VIDEO_DURATION_SECONDS` | 입력 동영상 최대 재생 시간; 기본 60초 |
+| `APP_MEDIA_MAX_VIDEO_PIXELS` | 입력 동영상 프레임 최대 픽셀 수; 기본 2073600(1920x1080) |
+| `APP_MEDIA_MAX_VIDEO_DIMENSION` | 입력 동영상 긴 변의 최대 길이; 기본 1920px, 세로/가로 동일 적용 |
 | `PUBLIC_ORIGIN` | 운영 HTTPS CORS origin; 기본 `https://talk-with-neighbors.duckdns.org` |
 | `IMAGE_TAG` | 운영 Compose의 GHCR 태그 |
 

@@ -58,7 +58,7 @@
 | PATCH | `/api/feed/comments/{commentId}` | 작성자 전용 댓글 수정 |
 | DELETE | `/api/feed/comments/{commentId}` | 작성자 전용 댓글 삭제 |
 
-multipart 업로드 지원 형식은 JPG, PNG, GIF, WebP, MP4, WebM, MOV다. 사진은 파일당 10MB, 동영상은 파일당 100MB, 요청 전체는 200MB로 제한한다. 정적 이미지는 WebP, 영상은 MP4(H.264/AAC)로 변환한다. 응답의 `media[]`에는 `url`, `thumbnailUrl`, `type`, `contentType`, `sizeBytes`, `width`, `height`, `durationSeconds`, `sortOrder`가 포함되며 `/uploads/**`는 Nginx를 거쳐 제공된다.
+multipart 업로드 지원 형식은 JPG, PNG, GIF, WebP, MP4, WebM, MOV다. 사진은 파일당 10MB, 동영상은 파일당 30MB·요청당 1개, 서비스 검증 기준 요청 전체는 120MB로 제한한다. multipart 파서는 파일당 30MB·요청당 125MB에서 먼저 차단한다. 동영상은 60초, 긴 변 1920px, 총 2073600픽셀 이하만 허용한다. 정적 이미지는 WebP, 영상은 MP4(H.264/AAC)로 변환한다. 응답의 `media[]`에는 `url`, `thumbnailUrl`, `type`, `contentType`, `sizeBytes`, `width`, `height`, `durationSeconds`, `sortOrder`가 포함되며 `/uploads/**`는 Nginx를 거쳐 제공된다.
 
 JSON 호환 경로에는 서비스 내부 `/uploads/**` URL을 넣을 수 없다. 서버가 소유한 미디어는 multipart 업로드로만 만들고, 삭제 시에도 해당 게시물에 연결된 `feed/` prefix 객체만 정리해 다른 프로필·채팅·게시물 미디어를 건드리지 않는다.
 
@@ -117,7 +117,7 @@ JSON 호환 경로에는 서비스 내부 `/uploads/**` URL을 넣을 수 없다
 | GET | `/api/chat/rooms/{roomId}/unread-count` | 방의 미읽음 수 |
 | GET | `/api/chat/unread-counts` | 모든 방의 미읽음 수 |
 
-채팅 첨부는 이미지·영상 외에 PDF, ZIP, Office 문서, TXT, CSV, JSON, Markdown을 지원한다. 이미지 10MB, 영상 100MB, 문서 25MB, 한 메시지 전체 120MB가 상한이다. 메시지 DTO의 `attachments[]`는 URL·썸네일·원래 파일명·MIME·크기·해상도·재생시간·순서를 포함하며 REST 저장 응답과 STOMP 실시간 이벤트의 계약이 같다. `/uploads/chat/**` 조회도 세션과 해당 채팅방 참가자 권한을 확인하며, 응답은 공유 캐시에 저장하지 않는다.
+채팅 첨부는 이미지·영상 외에 PDF, ZIP, Office 문서, TXT, CSV, JSON, Markdown을 지원한다. 이미지 10MB, 영상 30MB·60초·요청당 1개, 문서 25MB, 한 메시지 전체 120MB가 상한이며 영상에는 피드와 같은 1080p 픽셀 예산을 적용한다. 메시지 DTO의 `attachments[]`는 URL·썸네일·원래 파일명·MIME·크기·해상도·재생시간·순서를 포함하며 REST 저장 응답과 STOMP 실시간 이벤트의 계약이 같다. `/uploads/chat/**` 조회도 세션과 해당 채팅방 참가자 권한을 확인하며, 응답은 공유 캐시에 저장하지 않는다.
 
 ## 안전 API
 
