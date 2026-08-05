@@ -30,6 +30,15 @@ repositories {
 }
 
 dependencies {
+	constraints {
+		// web-push 5.1.1이 2019년의 jose4j 0.7.0과 httpclient 4.5.13을 끌고 온다.
+		// 둘 다 공개된 취약점이 있어 컨테이너 스캔을 통과하지 못하므로 최신 패치로 올린다.
+		implementation('org.bitbucket.b_c:jose4j:0.9.6') {
+			because 'CVE-2023-31582 is fixed in 0.9.3 and later'
+		}
+		implementation('org.apache.httpcomponents:httpclient:4.5.14')
+	}
+
 	implementation 'org.springframework.boot:spring-boot-starter-web'
 	implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
 	implementation 'org.springframework.boot:spring-boot-starter-security'
@@ -47,6 +56,12 @@ dependencies {
 	implementation 'org.springframework.session:spring-session-jdbc'
 	implementation 'com.mysql:mysql-connector-j'
 	implementation 'com.fasterxml.jackson.datatype:jackson-datatype-hibernate6'
+	// VAPID 서명과 페이로드 암호화를 직접 구현하지 않으려고 Web Push 표준 구현을 쓴다.
+	// 동기 PushService만 사용하므로 비동기 클라이언트와 CLI 파서는 이미지에서 걷어낸다.
+	implementation('nl.martijndwars:web-push:5.1.1') {
+		exclude group: 'org.asynchttpclient'
+		exclude group: 'com.beust', module: 'jcommander'
+	}
 	
 	runtimeOnly 'com.h2database:h2'
 	

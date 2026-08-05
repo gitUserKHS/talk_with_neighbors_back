@@ -154,6 +154,12 @@ app:
       proof-cookie-secure: ${APP_AUTH_EMAIL_PROOF_COOKIE_SECURE:true}
       request-limit-per-window: ${APP_AUTH_EMAIL_REQUEST_LIMIT:5}
       request-window: ${APP_AUTH_EMAIL_REQUEST_WINDOW:PT10M}
+  push:
+    # VAPID 키가 모두 설정되어야 실제로 발송한다. 키가 없으면 구독 UI도 나타나지 않는다.
+    enabled: ${APP_PUSH_ENABLED:false}
+    public-key: ${APP_PUSH_PUBLIC_KEY:}
+    private-key: ${APP_PUSH_PRIVATE_KEY:}
+    subject: ${APP_PUSH_SUBJECT:}
   official-content:
     enabled: ${APP_OFFICIAL_CONTENT_ENABLED:false}
   media:
