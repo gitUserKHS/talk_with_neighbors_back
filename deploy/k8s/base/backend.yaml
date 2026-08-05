@@ -104,6 +104,11 @@ spec:
                 configMapKeyRef:
                   name: runtime-config
                   key: public-origin
+            - name: APP_ADMIN_EMAILS
+              valueFrom:
+                configMapKeyRef:
+                  name: runtime-config
+                  key: admin-emails
             - name: APP_AUTH_EMAIL_ENABLED
               valueFrom:
                 configMapKeyRef:

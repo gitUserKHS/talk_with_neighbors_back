@@ -14,6 +14,7 @@ readonly MYSQL_ROOT_PASSWORD="${MYSQL_ROOT_PASSWORD:?MYSQL_ROOT_PASSWORD is requ
 readonly AUTH_EMAIL_REQUIRED="${AUTH_EMAIL_REQUIRED:-false}"
 readonly EMAIL_VERIFICATION_HMAC_SECRET="${EMAIL_VERIFICATION_HMAC_SECRET:-}"
 readonly EMAIL_VERIFICATION_FROM="${EMAIL_VERIFICATION_FROM:-}"
+readonly ADMIN_EMAILS="${ADMIN_EMAILS:-}"
 
 [[ "$PUBLIC_ORIGIN" =~ ^https://([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]] || { echo "PUBLIC_ORIGIN must be a lowercase HTTPS DNS origin without a port or path" >&2; exit 1; }
 [[ -z "$ACME_EMAIL" || "$ACME_EMAIL" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,63}$ ]] || { echo "ACME_EMAIL must be empty or a valid ACME contact address" >&2; exit 1; }
@@ -27,6 +28,7 @@ if [[ "$AUTH_EMAIL_REQUIRED" == "true" ]]; then
   (( ${#EMAIL_VERIFICATION_HMAC_SECRET} >= 32 )) || { echo "EMAIL_VERIFICATION_HMAC_SECRET must contain at least 32 characters" >&2; exit 1; }
   [[ "$EMAIL_VERIFICATION_FROM" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,63}$ ]] || { echo "EMAIL_VERIFICATION_FROM must be a valid verified SES address" >&2; exit 1; }
 fi
+[[ -z "$ADMIN_EMAILS" || "$ADMIN_EMAILS" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,63}(,[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,63})*$ ]] || { echo "ADMIN_EMAILS must be empty or a comma-separated list of email addresses" >&2; exit 1; }
 [[ -z "${GOOGLE_OAUTH_CLIENT_ID:-}" && -z "${GOOGLE_OAUTH_CLIENT_SECRET:-}" || -n "${GOOGLE_OAUTH_CLIENT_ID:-}" && -n "${GOOGLE_OAUTH_CLIENT_SECRET:-}" ]] || { echo "Set both Google OAuth credentials or neither" >&2; exit 1; }
 [[ -z "${KAKAO_OAUTH_CLIENT_ID:-}" && -z "${KAKAO_OAUTH_CLIENT_SECRET:-}" || -n "${KAKAO_OAUTH_CLIENT_ID:-}" && -n "${KAKAO_OAUTH_CLIENT_SECRET:-}" ]] || { echo "Set both Kakao OAuth credentials or neither" >&2; exit 1; }
 
@@ -87,7 +89,8 @@ jq -n \
   --arg region "$AWS_REGION" \
   --arg bucket "$MEDIA_BUCKET" \
   --arg emailRequired "$AUTH_EMAIL_REQUIRED" \
-  '{apiVersion:"v1",kind:"ConfigMap",metadata:{name:"runtime-config",namespace:"talk-with-neighbors"},data:{"public-origin":$origin,"cookie-secure":"true","auth-email-enabled":$emailRequired,"auth-email-required":$emailRequired,"auth-email-sender":(if $emailRequired == "true" then "ses" else "disabled" end),"media-storage-type":"s3","media-s3-region":$region,"media-s3-bucket":$bucket,"media-s3-prefix":"media"}}' \
+  --arg adminEmails "$ADMIN_EMAILS" \
+  '{apiVersion:"v1",kind:"ConfigMap",metadata:{name:"runtime-config",namespace:"talk-with-neighbors"},data:{"public-origin":$origin,"cookie-secure":"true","auth-email-enabled":$emailRequired,"auth-email-required":$emailRequired,"auth-email-sender":(if $emailRequired == "true" then "ses" else "disabled" end),"admin-emails":$adminEmails,"media-storage-type":"s3","media-s3-region":$region,"media-s3-bucket":$bucket,"media-s3-prefix":"media"}}' \
   > "$bundle/runtime-config.json"
 jq -n \
   --arg mysql "$MYSQL_PASSWORD" \
