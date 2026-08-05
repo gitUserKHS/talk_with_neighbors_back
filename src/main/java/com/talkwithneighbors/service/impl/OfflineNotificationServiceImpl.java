@@ -35,6 +35,7 @@ public class OfflineNotificationServiceImpl implements OfflineNotificationServic
     private final ObjectMapper objectMapper;
     private final RedisSessionService redisSessionService;
     private final com.talkwithneighbors.repository.UserRepository userRepository;
+    private final com.talkwithneighbors.push.WebPushService webPushService;
     
     @Override
     @Transactional
@@ -77,6 +78,11 @@ public class OfflineNotificationServiceImpl implements OfflineNotificationServic
             
             log.info("[OfflineNotificationService] ✅ Successfully saved offline notification: id={}, userId={}, type={}", 
                      savedNotification.getId(), userId, type);
+
+            // 이 지점에 도달했다는 것은 사용자가 웹소켓으로 받지 못했다는 뜻이다.
+            // 브라우저를 닫아 둔 사이를 메우려고 푸시를 함께 보낸다. 실패해도 알림함 저장은 유지된다.
+            webPushService.sendToUser(userId, "이웃톡", message, actionUrl);
+
             return savedNotification;
         } catch (Exception e) {
             log.error("[OfflineNotificationService] ❌ CRITICAL ERROR: Failed to save offline notification for userId: {}, type: {}: {}", 
