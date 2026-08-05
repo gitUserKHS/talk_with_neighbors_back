@@ -126,6 +126,9 @@ logging:
     ROOT: WARN  # 다른 로그 노이즈 줄이기
 
 app:
+  admin:
+    # 신고 검토 큐에 접근할 운영자 이메일. 쉼표로 구분하며 비우면 아무도 접근할 수 없다.
+    emails: ${APP_ADMIN_EMAILS:}
   auth:
     oauth:
       public-base-url: ${APP_PUBLIC_BASE_URL:http://localhost:8080}

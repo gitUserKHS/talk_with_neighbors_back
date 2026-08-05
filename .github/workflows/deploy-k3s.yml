@@ -640,6 +640,7 @@ jobs:
           EMAIL_VERIFICATION_HMAC_SECRET: ${{ secrets.EMAIL_VERIFICATION_HMAC_SECRET }}
           EMAIL_VERIFICATION_FROM: ${{ secrets.EMAIL_VERIFICATION_FROM }}
           AUTH_EMAIL_REQUIRED: ${{ vars.AUTH_EMAIL_REQUIRED || 'false' }}
+          ADMIN_EMAILS: ${{ vars.ADMIN_EMAILS }}
           GOOGLE_OAUTH_CLIENT_ID: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
           GOOGLE_OAUTH_CLIENT_SECRET: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
           KAKAO_OAUTH_CLIENT_ID: ${{ secrets.KAKAO_OAUTH_CLIENT_ID }}
@@ -660,6 +661,7 @@ jobs:
             (( ${#EMAIL_VERIFICATION_HMAC_SECRET} >= 32 )) || { echo "EMAIL_VERIFICATION_HMAC_SECRET must contain at least 32 characters" >&2; exit 1; }
             [[ "$EMAIL_VERIFICATION_FROM" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,63}$ ]] || { echo "EMAIL_VERIFICATION_FROM must be a valid address" >&2; exit 1; }
           fi
+          [[ -z "$ADMIN_EMAILS" || "$ADMIN_EMAILS" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,63}(,[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,63})*$ ]] || { echo "ADMIN_EMAILS must be empty or a comma-separated list of email addresses" >&2; exit 1; }
           [[ -z "$GOOGLE_OAUTH_CLIENT_ID" && -z "$GOOGLE_OAUTH_CLIENT_SECRET" || -n "$GOOGLE_OAUTH_CLIENT_ID" && -n "$GOOGLE_OAUTH_CLIENT_SECRET" ]] || { echo "Set both Google OAuth secrets or neither" >&2; exit 1; }
           [[ -z "$KAKAO_OAUTH_CLIENT_ID" && -z "$KAKAO_OAUTH_CLIENT_SECRET" || -n "$KAKAO_OAUTH_CLIENT_ID" && -n "$KAKAO_OAUTH_CLIENT_SECRET" ]] || { echo "Set both Kakao OAuth secrets or neither" >&2; exit 1; }
           [[ -z "$GHCR_USERNAME" && -z "$GHCR_TOKEN" || -n "$GHCR_USERNAME" && -n "$GHCR_TOKEN" ]] || { echo "Set both GHCR credentials or neither" >&2; exit 1; }
@@ -766,6 +768,7 @@ jobs:
           EMAIL_VERIFICATION_HMAC_SECRET: ${{ secrets.EMAIL_VERIFICATION_HMAC_SECRET }}
           EMAIL_VERIFICATION_FROM: ${{ secrets.EMAIL_VERIFICATION_FROM }}
           AUTH_EMAIL_REQUIRED: ${{ vars.AUTH_EMAIL_REQUIRED || 'false' }}
+          ADMIN_EMAILS: ${{ vars.ADMIN_EMAILS }}
           GOOGLE_OAUTH_CLIENT_ID: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
           GOOGLE_OAUTH_CLIENT_SECRET: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
           KAKAO_OAUTH_CLIENT_ID: ${{ secrets.KAKAO_OAUTH_CLIENT_ID }}
