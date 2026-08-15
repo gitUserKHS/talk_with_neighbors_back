@@ -62,7 +62,7 @@ dependencies {
 	implementation 'com.fasterxml.jackson.datatype:jackson-datatype-hibernate6'
 	// VAPID 서명과 페이로드 암호화를 직접 구현하지 않으려고 Web Push 표준 구현을 쓴다.
 	// 동기 PushService만 사용하므로 비동기 클라이언트와 CLI 파서는 이미지에서 걷어낸다.
-	implementation('nl.martijndwars:web-push:5.1.1') {
+	implementation('nl.martijndwars:web-push:5.1.2') {
 		exclude group: 'org.asynchttpclient'
 		exclude group: 'com.beust', module: 'jcommander'
 	}
