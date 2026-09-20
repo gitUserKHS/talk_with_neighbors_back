@@ -851,15 +851,15 @@ resource "aws_iam_instance_profile" "app" {
   role = aws_iam_role.instance.name
 }
 
+# The node has no Elastic IP: an auto-assigned public IPv4 costs nothing while
+# the instance is stopped but changes on every start, so the DuckDNS record
+# follows it (deploy/k8s/duckdns-update.sh).
 resource "aws_instance" "app" {
   ami                         = local.ubuntu_arm64_ami_id
   instance_type               = var.instance_type
   availability_zone           = var.availability_zone
   subnet_id                   = aws_subnet.public.id
   vpc_security_group_ids      = [aws_security_group.app.id]
-  # Auto-assigned public IPv4 only. An Elastic IP would keep the address fixed
-  # but is billed for every hour the instance sits stopped; DuckDNS follows
-  # the new address instead (deploy/k8s/duckdns-update.sh).
   associate_public_ip_address = true
   iam_instance_profile        = aws_iam_instance_profile.app.name
   monitoring                  = false
