@@ -1,0 +1,22 @@
+[Unit]
+Description=Talk With Neighbors DuckDNS record refresh for the auto-assigned public IP
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/etc/talk-with-neighbors/duckdns.conf
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/talk-with-neighbors/duckdns.conf
+ExecStart=/usr/local/sbin/talk-with-neighbors-duckdns-update
+UMask=0077
+Nice=10
+TimeoutStartSec=2min
+PrivateTmp=true
+PrivateDevices=true
+ProtectHome=true
+ProtectSystem=strict
+NoNewPrivileges=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

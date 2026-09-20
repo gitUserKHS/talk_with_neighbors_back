@@ -369,6 +369,7 @@ jobs:
       INSTANCE_ID: ${{ vars.EC2_INSTANCE_ID }}
       DEPLOY_BUCKET: ${{ vars.DEPLOY_BUCKET }}
       PUBLIC_ORIGIN_INPUT: ${{ vars.PUBLIC_ORIGIN || 'https://talk-with-neighbors.duckdns.org' }}
+      DUCKDNS_TOKEN_PARAMETER: ${{ vars.DUCKDNS_TOKEN_PARAMETER || '/talk-with-neighbors/duckdns/token' }}
       DISPATCH_FRONTEND_IMAGE: ${{ github.event.client_payload.frontend_image }}
       SOURCE_REPOSITORY: ${{ github.event.client_payload.source_repository }}
       SOURCE_REF: ${{ github.event.client_payload.source_ref }}
@@ -469,24 +470,12 @@ jobs:
           fi
           [[ "$state" == "running" ]] || { echo "EC2 is $state; frontend-only deployment requires the existing node to be startable" >&2; exit 1; }
 
-          public_ip="$(aws ec2 describe-instances --instance-ids "$INSTANCE_ID" --query 'Reservations[0].Instances[0].PublicIpAddress' --output text)"
-          [[ "$public_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "EC2 has no public IPv4 address" >&2; exit 1; }
-          elastic_ip="$(aws ec2 describe-addresses --filters "Name=instance-id,Values=$INSTANCE_ID" --query 'Addresses[0].PublicIp' --output text)"
-          [[ "$elastic_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ && "$elastic_ip" == "$public_ip" ]] || { echo "The existing node does not have its declared Elastic IP" >&2; exit 1; }
           public_origin="$PUBLIC_ORIGIN_INPUT"
           [[ "$public_origin" =~ ^https://([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]] || { echo "PUBLIC_ORIGIN must be a lowercase HTTPS DNS origin without a port or path" >&2; exit 1; }
           public_host="${public_origin#https://}"
-
-          dns_matches=false
-          for _ in {1..30}; do
-            resolved_ips="$(getent ahostsv4 "$public_host" 2>/dev/null | awk '{print $1}' | sort -u)"
-            if [[ "$resolved_ips" == "$elastic_ip" ]]; then
-              dns_matches=true
-              break
-            fi
-            sleep 10
-          done
-          [[ "$dns_matches" == "true" ]] || { echo "The public DNS record does not point to the existing Elastic IP" >&2; exit 1; }
+          # The node has no Elastic IP, so every start hands it a new public
+          # address; point the record at it before touching the cluster.
+          bash deploy/k8s/sync-public-dns.sh "$INSTANCE_ID" "$public_host" "$DUCKDNS_TOKEN_PARAMETER"
 
           ping_status=""
           for _ in {1..60}; do
@@ -579,6 +568,7 @@ jobs:
       BACKEND_IMAGE: ${{ github.event_name == 'workflow_dispatch' && inputs.backend_image || '' }}
       FRONTEND_IMAGE: ${{ github.event_name == 'workflow_dispatch' && inputs.frontend_image || '' }}
       PUBLIC_ORIGIN_INPUT: ${{ (github.event_name == 'workflow_dispatch' && inputs.public_origin) || vars.PUBLIC_ORIGIN || 'https://talk-with-neighbors.duckdns.org' }}
+      DUCKDNS_TOKEN_PARAMETER: ${{ vars.DUCKDNS_TOKEN_PARAMETER || '/talk-with-neighbors/duckdns/token' }}
       ACME_EMAIL: ${{ vars.ACME_EMAIL }}
       START_IF_STOPPED: ${{ github.event_name == 'workflow_run' && 'true' || inputs.start_if_stopped }}
       REINITIALIZE_K3S_NETWORK: ${{ github.event_name == 'workflow_run' && 'false' || inputs.reinitialize_k3s_network }}
@@ -730,24 +720,12 @@ jobs:
           fi
           [[ "$state" == "running" ]] || { echo "EC2 is $state. Start it or select start_if_stopped." >&2; exit 1; }
 
-          public_ip="$(aws ec2 describe-instances --instance-ids "$INSTANCE_ID" --query 'Reservations[0].Instances[0].PublicIpAddress' --output text)"
-          [[ "$public_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "EC2 has no public IPv4 address" >&2; exit 1; }
-          elastic_ip="$(aws ec2 describe-addresses --filters "Name=instance-id,Values=$INSTANCE_ID" --query 'Addresses[0].PublicIp' --output text)"
-          [[ "$elastic_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ && "$elastic_ip" == "$public_ip" ]] || { echo "Apply Terraform so the instance has its declared Elastic IP before HTTPS deployment" >&2; exit 1; }
           public_origin="$PUBLIC_ORIGIN_INPUT"
           [[ "$public_origin" =~ ^https://([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]] || { echo "public_origin must be a lowercase HTTPS DNS origin without a port or path" >&2; exit 1; }
           public_host="${public_origin#https://}"
-
-          dns_matches=false
-          for _ in {1..30}; do
-            resolved_ips="$(getent ahostsv4 "$public_host" 2>/dev/null | awk '{print $1}' | sort -u)"
-            if [[ "$resolved_ips" == "$elastic_ip" ]]; then
-              dns_matches=true
-              break
-            fi
-            sleep 10
-          done
-          [[ "$dns_matches" == "true" ]] || { echo "Update the ${public_host} A record to Elastic IP ${elastic_ip} and wait for propagation" >&2; exit 1; }
+          # The node has no Elastic IP, so every start hands it a new public
+          # address; HTTPS and ACME need the record to follow it first.
+          bash deploy/k8s/sync-public-dns.sh "$INSTANCE_ID" "$public_host" "$DUCKDNS_TOKEN_PARAMETER"
 
           for _ in {1..60}; do
             ping_status="$(aws ssm describe-instance-information --filters "Key=InstanceIds,Values=$INSTANCE_ID" --query 'InstanceInformationList[0].PingStatus' --output text 2>/dev/null || true)"

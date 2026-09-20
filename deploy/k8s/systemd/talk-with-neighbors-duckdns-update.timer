@@ -1,0 +1,11 @@
+[Unit]
+Description=Keep the DuckDNS record pointed at the node after every start
+
+[Timer]
+OnBootSec=45s
+OnUnitActiveSec=5min
+AccuracySec=30s
+Unit=talk-with-neighbors-duckdns-update.service
+
+[Install]
+WantedBy=timers.target

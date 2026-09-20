@@ -7,6 +7,12 @@ mock_provider "aws" {
     }
   }
 
+  mock_data "aws_caller_identity" {
+    defaults = {
+      account_id = "123456789012"
+    }
+  }
+
   mock_data "aws_ssm_parameter" {
     defaults = {
       value = "ami-0123456789abcdef0"
@@ -43,8 +49,40 @@ run "secure_low_cost_defaults" {
   }
 
   assert {
-    condition     = aws_eip.app.domain == "vpc"
-    error_message = "The portfolio node must allocate a VPC Elastic IP that survives stop/start."
+    condition     = aws_instance.app.associate_public_ip_address == true
+    error_message = "The portfolio node must use an auto-assigned public IPv4 address, which is free while stopped; an Elastic IP is billed during every stopped hour."
+  }
+
+  assert {
+    condition = (
+      toset(one([
+        for statement in data.aws_iam_policy_document.instance_s3.statement : statement.resources
+        if statement.sid == "ReadDuckDnsToken"
+      ])) == toset(["arn:aws:ssm:ap-northeast-2:123456789012:parameter/talk-with-neighbors/duckdns/token"]) &&
+      toset(one([
+        for statement in data.aws_iam_policy_document.instance_s3.statement : statement.actions
+        if statement.sid == "ReadDuckDnsToken"
+      ])) == toset(["ssm:GetParameter"])
+    )
+    error_message = "The EC2 role must read exactly the DuckDNS token parameter so the record can follow the auto-assigned public IP."
+  }
+
+  assert {
+    condition = (
+      toset(one([
+        for statement in data.aws_iam_policy_document.github_deploy.statement : statement.resources
+        if statement.sid == "ReadDuckDnsToken"
+      ])) == toset(["arn:aws:ssm:ap-northeast-2:123456789012:parameter/talk-with-neighbors/duckdns/token"]) &&
+      !contains(flatten([
+        for statement in data.aws_iam_policy_document.github_deploy.statement : statement.actions
+      ]), "ec2:DescribeAddresses")
+    )
+    error_message = "The deploy role must read the DuckDNS token parameter and no longer needs Elastic IP lookups."
+  }
+
+  assert {
+    condition     = output.duckdns_token_parameter_name == "/talk-with-neighbors/duckdns/token"
+    error_message = "The DuckDNS token parameter name must be exported for the operator runbook."
   }
 
   assert {
@@ -218,6 +256,39 @@ run "budget_email_opt_in" {
     condition     = length(aws_budgets_budget.monthly) == 1
     error_message = "Supplying a budget email must create one monthly cost budget."
   }
+}
+
+run "duckdns_token_parameter_opt_out" {
+  command = plan
+
+  variables {
+    duckdns_token_parameter_name = null
+  }
+
+  assert {
+    condition = (
+      length([
+        for statement in data.aws_iam_policy_document.instance_s3.statement : statement
+        if statement.sid == "ReadDuckDnsToken"
+      ]) == 0 &&
+      length([
+        for statement in data.aws_iam_policy_document.github_deploy.statement : statement
+        if statement.sid == "ReadDuckDnsToken"
+      ]) == 0 &&
+      output.duckdns_token_parameter_name == null
+    )
+    error_message = "Opting out of DuckDNS automation must grant no SSM parameter access."
+  }
+}
+
+run "reject_relative_duckdns_parameter_name" {
+  command = plan
+
+  variables {
+    duckdns_token_parameter_name = "talk-with-neighbors/duckdns/token"
+  }
+
+  expect_failures = [var.duckdns_token_parameter_name]
 }
 
 run "ses_sender_identity_opt_in" {

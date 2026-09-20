@@ -15,6 +15,9 @@ readonly AUTH_EMAIL_REQUIRED="${AUTH_EMAIL_REQUIRED:-false}"
 readonly EMAIL_VERIFICATION_HMAC_SECRET="${EMAIL_VERIFICATION_HMAC_SECRET:-}"
 readonly EMAIL_VERIFICATION_FROM="${EMAIL_VERIFICATION_FROM:-}"
 readonly ADMIN_EMAILS="${ADMIN_EMAILS:-}"
+# SSM Parameter Store name of the DuckDNS token. The node reads it through its
+# instance role so the DNS record can follow the auto-assigned public IP.
+readonly DUCKDNS_TOKEN_PARAMETER="${DUCKDNS_TOKEN_PARAMETER:-/talk-with-neighbors/duckdns/token}"
 
 [[ "$PUBLIC_ORIGIN" =~ ^https://([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]] || { echo "PUBLIC_ORIGIN must be a lowercase HTTPS DNS origin without a port or path" >&2; exit 1; }
 [[ -z "$ACME_EMAIL" || "$ACME_EMAIL" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,63}$ ]] || { echo "ACME_EMAIL must be empty or a valid ACME contact address" >&2; exit 1; }
@@ -29,6 +32,7 @@ if [[ "$AUTH_EMAIL_REQUIRED" == "true" ]]; then
   [[ "$EMAIL_VERIFICATION_FROM" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,63}$ ]] || { echo "EMAIL_VERIFICATION_FROM must be a valid verified SES address" >&2; exit 1; }
 fi
 [[ -z "$ADMIN_EMAILS" || "$ADMIN_EMAILS" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,63}(,[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,63})*$ ]] || { echo "ADMIN_EMAILS must be empty or a comma-separated list of email addresses" >&2; exit 1; }
+[[ -z "$DUCKDNS_TOKEN_PARAMETER" || "$DUCKDNS_TOKEN_PARAMETER" =~ ^/[A-Za-z0-9_./-]+$ ]] || { echo "DUCKDNS_TOKEN_PARAMETER must be empty or a fully qualified SSM parameter name" >&2; exit 1; }
 [[ -z "${GOOGLE_OAUTH_CLIENT_ID:-}" && -z "${GOOGLE_OAUTH_CLIENT_SECRET:-}" || -n "${GOOGLE_OAUTH_CLIENT_ID:-}" && -n "${GOOGLE_OAUTH_CLIENT_SECRET:-}" ]] || { echo "Set both Google OAuth credentials or neither" >&2; exit 1; }
 [[ -z "${KAKAO_OAUTH_CLIENT_ID:-}" && -z "${KAKAO_OAUTH_CLIENT_SECRET:-}" || -n "${KAKAO_OAUTH_CLIENT_ID:-}" && -n "${KAKAO_OAUTH_CLIENT_SECRET:-}" ]] || { echo "Set both Kakao OAuth credentials or neither" >&2; exit 1; }
 
@@ -53,6 +57,8 @@ cp -R "$SCRIPT_DIR/database-migrations" "$bundle/database-migrations"
 cp -R "$SCRIPT_DIR/systemd" "$bundle/systemd"
 cp \
   "$SCRIPT_DIR/deploy-on-node.sh" \
+  "$SCRIPT_DIR/duckdns-update.sh" \
+  "$SCRIPT_DIR/install-duckdns-update.sh" \
   "$SCRIPT_DIR/install-mysql-backup.sh" \
   "$SCRIPT_DIR/k3s-network-common.sh" \
   "$SCRIPT_DIR/k3s-server-config.yaml" \
@@ -69,6 +75,14 @@ cp \
 } > "$bundle/mysql-backup.conf"
 
 readonly PUBLIC_HOST="${PUBLIC_ORIGIN#https://}"
+# Only DuckDNS hosts get the on-node updater; other providers keep their
+# records current by other means and the installer disables the timer.
+if [[ -n "$DUCKDNS_TOKEN_PARAMETER" && "$PUBLIC_HOST" =~ ^([a-z0-9-]+)\.duckdns\.org$ ]]; then
+  {
+    printf 'DUCKDNS_DOMAIN=%s\n' "${BASH_REMATCH[1]}"
+    printf 'DUCKDNS_TOKEN_PARAMETER=%s\n' "$DUCKDNS_TOKEN_PARAMETER"
+  } > "$bundle/duckdns.conf"
+fi
 grep -Fq "talk-with-neighbors.duckdns.org" "$bundle/base/ingress.yaml"
 grep -Fq "REPLACE_ACME_EMAIL_ARGUMENT" "$bundle/traefik-config.yaml"
 sed -i "s/talk-with-neighbors\.duckdns\.org/${PUBLIC_HOST}/g" "$bundle/base/ingress.yaml"

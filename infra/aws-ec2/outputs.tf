@@ -4,13 +4,13 @@ output "instance_id" {
 }
 
 output "instance_public_ip" {
-  description = "Stable Elastic IP associated with the single portfolio node."
-  value       = aws_eip.app.public_ip
+  description = "Public IPv4 address auto-assigned to the node at the last apply or refresh. It changes on every stop/start and is not billed while the node is stopped; the DuckDNS record follows it automatically."
+  value       = aws_instance.app.public_ip
 }
 
-output "elastic_ip_allocation_id" {
-  description = "Elastic IP allocation associated with the portfolio node."
-  value       = aws_eip.app.id
+output "duckdns_token_parameter_name" {
+  description = "SSM SecureString parameter that must hold the DuckDNS token; null when no DNS automation is granted."
+  value       = var.duckdns_token_parameter_name
 }
 
 output "application_https_url" {

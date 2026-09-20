@@ -40,8 +40,12 @@ fi
 [[ "$(stat -c '%u:%a' "$MONITOR_STARTED_AT")" == "0:600" ]] || { echo "Backup monitor installation marker permissions are invalid" >&2; exit 1; }
 grep -Eq '^[0-9]{10}$' "$MONITOR_STARTED_AT" || { echo "Backup monitor installation marker is invalid" >&2; exit 1; }
 install -o root -g root -m 0600 "$CONFIG_SOURCE" /etc/talk-with-neighbors/mysql-backup.conf
-for unit in "$SYSTEMD_SOURCE"/*.service "$SYSTEMD_SOURCE"/*.timer; do
-  install -o root -g root -m 0644 "$unit" "/etc/systemd/system/$(basename "$unit")"
+for unit in \
+  talk-with-neighbors-mysql-backup.service \
+  talk-with-neighbors-mysql-backup.timer \
+  talk-with-neighbors-mysql-restore-verify.service \
+  talk-with-neighbors-mysql-restore-verify.timer; do
+  install -o root -g root -m 0644 "$SYSTEMD_SOURCE/$unit" "/etc/systemd/system/$unit"
 done
 
 systemctl daemon-reload

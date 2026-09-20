@@ -24,6 +24,12 @@ github_owner       = "gitUserKHS"
 github_repository  = "talk_with_neighbors_back"
 github_environment = "production"
 
+# No Elastic IP is allocated: an auto-assigned public IPv4 is free while the
+# node is stopped. Store the DuckDNS token in this SSM SecureString parameter
+# (outside Terraform) so the record follows the address after every start:
+#   aws ssm put-parameter --region ap-northeast-2 --name /talk-with-neighbors/duckdns/token --type SecureString --value "<token>"
+duckdns_token_parameter_name = "/talk-with-neighbors/duckdns/token"
+
 # Set this when the AWS account already has the GitHub Actions OIDC provider.
 # github_oidc_provider_arn = "arn:aws:iam::123456789012:oidc-provider/token.actions.githubusercontent.com"
 

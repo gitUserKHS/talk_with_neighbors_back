@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       action:
-        description: "status=상태만 확인 / start=켜기 / stop=끄기(컴퓨팅 과금 정지)"
+        description: "status=상태만 확인 / start=켜기(DuckDNS 자동 갱신) / stop=끄기(컴퓨팅·퍼블릭 IPv4 과금 정지)"
         required: true
         default: status
         type: choice
@@ -25,18 +25,23 @@ jobs:
   control:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     environment: production
     env:
       AWS_REGION: ${{ vars.AWS_REGION || 'ap-northeast-2' }}
       AWS_ROLE_ARN: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
       INSTANCE_ID: ${{ vars.EC2_INSTANCE_ID }}
+      PUBLIC_ORIGIN: ${{ vars.PUBLIC_ORIGIN || 'https://talk-with-neighbors.duckdns.org' }}
+      DUCKDNS_TOKEN_PARAMETER: ${{ vars.DUCKDNS_TOKEN_PARAMETER || '/talk-with-neighbors/duckdns/token' }}
     steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
       - name: Validate configuration
         shell: bash
         run: |
           [[ "$INSTANCE_ID" =~ ^i-[a-f0-9]{8,17}$ ]] || { echo "EC2_INSTANCE_ID is missing or invalid" >&2; exit 1; }
           [[ -n "$AWS_ROLE_ARN" ]] || { echo "AWS_DEPLOY_ROLE_ARN is required" >&2; exit 1; }
+          [[ "$PUBLIC_ORIGIN" =~ ^https://([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]] || { echo "PUBLIC_ORIGIN must be a lowercase HTTPS DNS origin without a port or path" >&2; exit 1; }
 
       - name: Configure short-lived AWS credentials
         uses: aws-actions/configure-aws-credentials@517a711dbcd0e402f90c77e7e2f81e849156e31d # v6
@@ -81,11 +86,23 @@ jobs:
           echo "state=$final" >> "$GITHUB_OUTPUT"
           echo "public_ip=$public_ip" >> "$GITHUB_OUTPUT"
 
+      - name: Point DNS at the node's new public IP
+        # Without an Elastic IP every start hands the node a new address, so
+        # a start (even of an already running node) re-syncs the DuckDNS record.
+        if: inputs.action == 'start' && steps.power.outputs.state == 'running'
+        id: dns
+        shell: bash
+        run: |
+          set -euo pipefail
+          public_host="${PUBLIC_ORIGIN#https://}"
+          bash deploy/k8s/sync-public-dns.sh "$INSTANCE_ID" "$public_host" "$DUCKDNS_TOKEN_PARAMETER"
+
       - name: Write power summary
+        if: always() && steps.power.outcome == 'success'
         env:
-          PUBLIC_ORIGIN: ${{ vars.PUBLIC_ORIGIN || 'https://talk-with-neighbors.duckdns.org' }}
           STATE: ${{ steps.power.outputs.state }}
           PUBLIC_IP: ${{ steps.power.outputs.public_ip }}
+          DNS_OUTCOME: ${{ steps.dns.outcome }}
         shell: bash
         run: |
           {
@@ -96,13 +113,16 @@ jobs:
             # link: it redirects to TLS and then fails certificate validation.
             echo "- 주소: <$PUBLIC_ORIGIN>"
             if [[ "$PUBLIC_IP" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-              echo "- Elastic IP: \`$PUBLIC_IP\` (중지/시작 후에도 유지되므로 DNS 갱신이 필요 없습니다)"
+              echo "- 퍼블릭 IPv4: \`$PUBLIC_IP\` (Elastic IP를 쓰지 않으므로 켤 때마다 바뀔 수 있습니다)"
             fi
+            case "$DNS_OUTCOME" in
+              success) echo "- DNS: DuckDNS 레코드가 현재 주소를 가리키는 것을 확인했습니다." ;;
+              failure) echo "- DNS: **갱신 실패**. SSM 파라미터 \`$DUCKDNS_TOKEN_PARAMETER\`에 DuckDNS 토큰이 있는지 확인하거나 A 레코드를 직접 갱신한 뒤 \`start\`를 다시 실행하세요." ;;
+            esac
             echo ""
             if [[ "$STATE" == "stopped" ]]; then
-              echo "중지 상태에서는 EC2 컴퓨팅 요금이 멈춥니다."
-              echo "EBS 볼륨과 퍼블릭 IPv4 요금은 계속 발생합니다."
+              echo "중지 상태에서는 EC2 컴퓨팅과 퍼블릭 IPv4 요금이 멈추고 EBS 볼륨 요금만 계속 발생합니다."
             elif [[ "$STATE" == "running" ]]; then
-              echo "사용하지 않는 동안에는 \`stop\`으로 컴퓨팅 요금을 아낄 수 있습니다."
+              echo "사용하지 않는 동안에는 \`stop\`으로 컴퓨팅과 퍼블릭 IPv4 요금을 아낄 수 있습니다."
             fi
           } >> "$GITHUB_STEP_SUMMARY"
