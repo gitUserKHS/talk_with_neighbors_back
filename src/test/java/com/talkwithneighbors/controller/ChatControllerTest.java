@@ -14,6 +14,7 @@ import com.talkwithneighbors.security.UserSession;
 import com.talkwithneighbors.service.ChatService;
 import com.talkwithneighbors.service.MediaStorageService;
 import com.talkwithneighbors.service.RedisSessionService;
+import com.talkwithneighbors.service.RoomParticipantCache;
 import com.talkwithneighbors.service.SessionValidationService;
 import com.talkwithneighbors.service.UserService;
 import org.junit.jupiter.api.BeforeEach;
@@ -61,7 +62,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 )
 @AutoConfigureMockMvc
 @ActiveProfiles("test")
-@Import({ChatExceptionHandler.class, com.talkwithneighbors.config.TestSecurityConfig.class})
+@Import(com.talkwithneighbors.config.TestSecurityConfig.class)
 class ChatControllerTest {
     private static final String SESSION_ID = "mock-session-id";
 
@@ -91,6 +92,9 @@ class ChatControllerTest {
 
     @MockBean
     private MessageRepository messageRepository;
+
+    @MockBean
+    private RoomParticipantCache roomParticipantCache;
 
     @MockBean
     private org.springframework.session.SessionRepository<?> sessionRepository;

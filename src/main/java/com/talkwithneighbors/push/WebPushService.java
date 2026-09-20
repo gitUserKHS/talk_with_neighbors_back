@@ -111,12 +111,20 @@ public class WebPushService {
         }
     }
 
-    private String payload(String title, String body, String url) {
-        Map<String, String> data = new LinkedHashMap<>();
+    /**
+     * 서비스 워커가 그대로 알림 옵션으로 쓰는 페이로드.
+     *
+     * tag는 같은 방·같은 글의 알림만 서로 대체하고 다른 곳의 알림은 따로 쌓이게 한다.
+     * renotify는 대체된 알림이 다시 소리·진동을 내게 한다.
+     */
+    String payload(String title, String body, String url) {
+        Map<String, Object> data = new LinkedHashMap<>();
         data.put("title", title);
         data.put("body", body);
         if (url != null && !url.isBlank()) {
             data.put("url", url);
+            data.put("tag", tagFor(url));
+            data.put("renotify", true);
         }
         try {
             return objectMapper.writeValueAsString(data);
@@ -124,6 +132,18 @@ public class WebPushService {
             // 제목만이라도 전달되도록 최소 형태로 물러난다.
             return "{\"title\":\"이웃톡\"}";
         }
+    }
+
+    private static String tagFor(String url) {
+        if (url.startsWith("/chat/")) {
+            String roomId = url.substring("/chat/".length());
+            int end = 0;
+            while (end < roomId.length() && "/?#".indexOf(roomId.charAt(end)) < 0) {
+                end++;
+            }
+            return "chat:" + roomId.substring(0, end);
+        }
+        return "twn:" + url;
     }
 
     /** PushService는 스레드 안전하고 생성 비용이 있어 한 번만 만든다. */

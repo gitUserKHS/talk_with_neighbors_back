@@ -14,6 +14,9 @@ import com.talkwithneighbors.entity.ChatAttachmentType;
 import com.talkwithneighbors.entity.User;
 import com.talkwithneighbors.exception.ChatException;
 import com.talkwithneighbors.repository.ChatRoomRepository;
+import com.talkwithneighbors.repository.ChatScheduleRepository;
+import com.talkwithneighbors.repository.ChatScheduleRsvpRepository;
+import com.talkwithneighbors.repository.MeetupWaitlistRepository;
 import com.talkwithneighbors.repository.MessageRepository;
 import com.talkwithneighbors.repository.UserRepository;
 import com.talkwithneighbors.repository.UserBlockRepository;
@@ -26,6 +29,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -37,6 +41,7 @@ import org.springframework.http.HttpStatus;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.time.LocalDateTime;
 
@@ -70,6 +75,15 @@ class ChatServiceTest {
 
     @Mock
     private DomainEventPublisher domainEventPublisher;
+
+    @Mock
+    private ChatScheduleRepository chatScheduleRepository;
+
+    @Mock
+    private ChatScheduleRsvpRepository chatScheduleRsvpRepository;
+
+    @Mock
+    private MeetupWaitlistRepository meetupWaitlistRepository;
 
     @InjectMocks
     private ChatServiceImpl chatService;
@@ -219,6 +233,76 @@ class ChatServiceTest {
         order.verify(chatRoomRepository).save(testChatRoom);
         order.verify(chatRoomRepository)
                 .findByParticipantsContainingOrderByLastMessageTimeDesc(testUser, pageable);
+    }
+
+    @Test
+    void joinRoomPersistsEnterMessageAndPublishesCommitEvent() {
+        User newcomer = new User();
+        newcomer.setId(3L);
+        newcomer.setUsername("newcomer");
+        testChatRoom.setType(ChatRoomType.GROUP);
+        testChatRoom.setPublicRoom(true);
+        when(userRepository.findById(newcomer.getId())).thenReturn(Optional.of(newcomer));
+        when(chatRoomRepository.findByIdForUpdate(testChatRoom.getId())).thenReturn(Optional.of(testChatRoom));
+        when(messageRepository.save(any(Message.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        chatService.joinRoom(testChatRoom.getId(), newcomer.getId().toString());
+
+        ArgumentCaptor<Message> savedMessage = ArgumentCaptor.forClass(Message.class);
+        verify(messageRepository).save(savedMessage.capture());
+        assertEquals(Message.MessageType.ENTER, savedMessage.getValue().getType());
+        assertEquals("newcomer님이 입장했어요", savedMessage.getValue().getContent());
+        assertSame(newcomer, savedMessage.getValue().getSender());
+        assertSame(testChatRoom, savedMessage.getValue().getChatRoom());
+        assertEquals(Set.of(1L, 2L, 3L), savedMessage.getValue().getReadByUsers());
+        assertTrue(testChatRoom.getParticipants().contains(newcomer));
+        assertEquals("newcomer님이 입장했어요", testChatRoom.getLastMessage());
+        assertEquals(savedMessage.getValue().getCreatedAt(), testChatRoom.getLastMessageTime());
+        verify(chatRoomRepository).save(testChatRoom);
+
+        ArgumentCaptor<ChatMessageCommittedEvent> committedEvent =
+                ArgumentCaptor.forClass(ChatMessageCommittedEvent.class);
+        verify(applicationEventPublisher).publishEvent(committedEvent.capture());
+        assertEquals(Message.MessageType.ENTER, committedEvent.getValue().message().getType());
+        assertEquals("newcomer님이 입장했어요", committedEvent.getValue().message().getContent());
+        assertEquals(testChatRoom.getId(), committedEvent.getValue().roomId());
+        assertEquals(newcomer.getId(), committedEvent.getValue().senderId());
+        assertEquals(Set.of(1L, 2L, 3L), Set.copyOf(committedEvent.getValue().participantIds()));
+        verifyNoInteractions(messagingTemplate, notificationService);
+    }
+
+    @Test
+    void leaveRoomPersistsLeaveMessage() {
+        User leaver = testChatRoom.getParticipants().stream()
+                .filter(user -> !user.getId().equals(testUser.getId()))
+                .findFirst()
+                .orElseThrow();
+        when(userRepository.findById(leaver.getId())).thenReturn(Optional.of(leaver));
+        when(chatRoomRepository.findById(testChatRoom.getId())).thenReturn(Optional.of(testChatRoom));
+        when(messageRepository.save(any(Message.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        chatService.leaveRoom(testChatRoom.getId(), leaver.getId().toString());
+
+        ArgumentCaptor<Message> savedMessage = ArgumentCaptor.forClass(Message.class);
+        verify(messageRepository).save(savedMessage.capture());
+        assertEquals(Message.MessageType.LEAVE, savedMessage.getValue().getType());
+        assertEquals("participantUser님이 나갔어요", savedMessage.getValue().getContent());
+        assertSame(leaver, savedMessage.getValue().getSender());
+        assertEquals(Set.of(testUser.getId(), leaver.getId()), savedMessage.getValue().getReadByUsers());
+        assertFalse(testChatRoom.getParticipants().contains(leaver));
+        assertEquals("participantUser님이 나갔어요", testChatRoom.getLastMessage());
+        assertEquals(savedMessage.getValue().getCreatedAt(), testChatRoom.getLastMessageTime());
+        verify(chatScheduleRsvpRepository)
+                .deleteBySchedule_Room_IdAndUser_Id(testChatRoom.getId(), leaver.getId());
+        verify(chatRoomRepository).save(testChatRoom);
+
+        ArgumentCaptor<ChatMessageCommittedEvent> committedEvent =
+                ArgumentCaptor.forClass(ChatMessageCommittedEvent.class);
+        verify(applicationEventPublisher).publishEvent(committedEvent.capture());
+        assertEquals(Message.MessageType.LEAVE, committedEvent.getValue().message().getType());
+        assertEquals(leaver.getId(), committedEvent.getValue().senderId());
+        assertEquals(List.of(testUser.getId()), committedEvent.getValue().participantIds());
+        verifyNoInteractions(messagingTemplate, notificationService);
     }
 
     @Test

@@ -1,5 +1,6 @@
 package com.talkwithneighbors.push;
 
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -8,6 +9,7 @@ import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -119,10 +121,45 @@ class WebPushServiceTest {
     }
 
     @Test
+    void chatPayloadIsTaggedPerRoomAndAsksToRenotify() throws Exception {
+        Map<String, Object> payload = readPayload(service.payload("이웃톡", "새 메시지", "/chat/room-1"));
+
+        // 방마다 다른 태그를 써야 다른 방의 푸시가 하나로 합쳐지지 않는다.
+        assertThat(payload)
+                .containsEntry("title", "이웃톡")
+                .containsEntry("body", "새 메시지")
+                .containsEntry("url", "/chat/room-1")
+                .containsEntry("tag", "chat:room-1")
+                .containsEntry("renotify", true);
+    }
+
+    @Test
+    void nonChatPayloadIsTaggedByItsUrl() throws Exception {
+        Map<String, Object> payload = readPayload(service.payload("이웃톡", "새 댓글", "/feed/post-9"));
+
+        assertThat(payload)
+                .containsEntry("tag", "twn:/feed/post-9")
+                .containsEntry("renotify", true);
+    }
+
+    @Test
+    void payloadWithoutUrlCarriesNoTag() throws Exception {
+        Map<String, Object> payload = readPayload(service.payload("이웃톡", "공지", null));
+
+        assertThat(payload)
+                .containsEntry("title", "이웃톡")
+                .doesNotContainKeys("url", "tag", "renotify");
+    }
+
+    @Test
     void unsubscribeRemovesOnlyTheCallersEndpoint() {
         service.unsubscribe(7L, "https://push.example.test/a");
 
         verify(repository).deleteByUserIdAndEndpoint(7L, "https://push.example.test/a");
         verify(repository, never()).deleteByEndpoint(any());
+    }
+
+    private Map<String, Object> readPayload(String json) throws Exception {
+        return new ObjectMapper().readValue(json, new TypeReference<Map<String, Object>>() {});
     }
 }

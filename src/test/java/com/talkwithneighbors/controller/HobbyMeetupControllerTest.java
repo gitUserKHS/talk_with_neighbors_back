@@ -34,7 +34,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @WebMvcTest(controllers = HobbyMeetupController.class)
 @AutoConfigureMockMvc
 @ActiveProfiles("test")
-@Import({TestSecurityConfig.class, ChatExceptionHandler.class})
+@Import(TestSecurityConfig.class)
 class HobbyMeetupControllerTest {
     private static final String SESSION_ID = "meetup-session";
 

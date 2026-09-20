@@ -12,7 +12,10 @@ import java.time.LocalDateTime;
  * 사용자가 온라인으로 돌아왔을 때 쌓인 알림들을 전송하기 위해 사용됩니다.
  */
 @Entity
-@Table(name = "offline_notifications")
+@Table(name = "offline_notifications", indexes = {
+        @Index(name = "idx_offline_notifications_user_expires_created", columnList = "user_id, expires_at, created_at"),
+        @Index(name = "idx_offline_notifications_user_sent_expires", columnList = "user_id, is_sent, expires_at")
+})
 @Getter
 @Setter
 @NoArgsConstructor
@@ -115,6 +118,8 @@ public class OfflineNotification {
         ROOM_DELETED,          // 채팅방 삭제
         SYSTEM_NOTICE,         // 시스템 공지
         MEETUP_REMINDER,
-        MEETUP_WAITLIST_PROMOTED
+        MEETUP_WAITLIST_PROMOTED,
+        POST_COMMENTED,        // 내 게시글에 새 댓글
+        POST_LIKED             // 내 게시글에 좋아요
     }
 } 

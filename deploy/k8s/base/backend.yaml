@@ -202,6 +202,8 @@ spec:
               value: "1920"
             - name: SERVER_TOMCAT_THREADS_MAX
               value: "50"
+            - name: SERVER_COMPRESSION_ENABLED
+              value: "true"
             - name: SERVER_TOMCAT_THREADS_MIN_SPARE
               value: "5"
             - name: JAVA_OPTS

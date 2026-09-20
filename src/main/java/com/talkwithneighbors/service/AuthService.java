@@ -12,8 +12,6 @@ import com.talkwithneighbors.auth.session.SessionIssuer;
 import com.talkwithneighbors.exception.AuthException;
 import com.talkwithneighbors.outbox.DomainEventPublisher;
 import com.talkwithneighbors.repository.UserRepository;
-import com.talkwithneighbors.security.UserSession;
-import jakarta.servlet.http.HttpSession;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
@@ -43,90 +41,83 @@ public class AuthService {
 
     @Transactional(rollbackFor = Exception.class)
     public AuthResponse register(RegisterRequestDto request, String emailProof) {
-        try {
-            String normalizedEmail = request.getEmail().trim().toLowerCase(Locale.ROOT);
-            if (emailVerificationService.registrationRequired()
-                    && !emailVerificationService.availability().enabled()) {
-                throw new AuthException("Email registration is temporarily unavailable.", HttpStatus.SERVICE_UNAVAILABLE);
-            }
-            if (emailVerificationService.registrationRequired()
-                    || emailVerificationService.availability().enabled()) {
-                emailVerificationService.consumeProof(normalizedEmail, emailProof);
-            }
-            // 이메일과 사용자명 중복 체크
-            boolean emailExists = userRepository.existsByEmail(normalizedEmail);
-            boolean usernameExists = userRepository.existsByUsername(request.getUsername());
-            
-            if (emailExists || usernameExists) {
-                log.warn("Registration failed: emailExists={}, usernameExists={}", emailExists, usernameExists);
-                throw new AuthException(
-                    String.format("이메일 중복: %s, 사용자명 중복: %s", 
-                        emailExists ? "있음" : "없음", 
-                        usernameExists ? "있음" : "없음"), 
-                    HttpStatus.CONFLICT
-                );
-            }
-
-            User user = new User();
-            user.setEmail(normalizedEmail);
-            user.setUsername(request.getUsername());
-            user.setPassword(passwordEncoder.encode(request.getPassword()));
-            user.setAccountType(UserAccountType.MEMBER);
-            user.setPasswordLoginEnabled(true);
-            
-            // 기본값 설정
-            user.setAge(0);  // 임시 값
-            user.setGender("");  // 임시 값
-            user.setLatitude(0.0);  // 임시 값
-            user.setLongitude(0.0);  // 임시 값
-            user.setAddress("");  // 임시 값
-
-            User savedUser = userRepository.save(user);
-            log.info("User registered successfully: {}", savedUser.getId());
-            
-            // 새로운 세션 ID 생성
-            String sessionId = sessionIssuer.issue(savedUser);
-            
-            // 회원가입 후 바로 오프라인 알림 전송 (선택적, 필요하다면 추가)
-            // offlineNotificationService.sendPendingNotifications(savedUser.getId());
-            
-            return new AuthResponse(UserDto.fromEntity(savedUser), sessionId);
-        } catch (Exception e) {
-            log.error("Error during user registration", e);
-            throw e;
+        String normalizedEmail = request.getEmail().trim().toLowerCase(Locale.ROOT);
+        if (emailVerificationService.registrationRequired()
+                && !emailVerificationService.availability().enabled()) {
+            throw new AuthException("Email registration is temporarily unavailable.", HttpStatus.SERVICE_UNAVAILABLE);
         }
+        boolean emailProofConsumed = emailVerificationService.registrationRequired()
+                || emailVerificationService.availability().enabled();
+        if (emailProofConsumed) {
+            emailVerificationService.consumeProof(normalizedEmail, emailProof);
+        }
+        // 이메일과 사용자명 중복 체크
+        boolean emailExists = userRepository.existsByEmail(normalizedEmail);
+        boolean usernameExists = userRepository.existsByUsername(request.getUsername());
+
+        if (emailExists || usernameExists) {
+            log.warn("Registration failed: emailExists={}, usernameExists={}", emailExists, usernameExists);
+            throw registrationConflict(emailExists, emailProofConsumed);
+        }
+
+        User user = new User();
+        user.setEmail(normalizedEmail);
+        user.setUsername(request.getUsername());
+        user.setPassword(passwordEncoder.encode(request.getPassword()));
+        user.setAccountType(UserAccountType.MEMBER);
+        user.setPasswordLoginEnabled(true);
+
+        // 기본값 설정
+        user.setAge(0);  // 임시 값
+        user.setGender("");  // 임시 값
+        user.setLatitude(0.0);  // 임시 값
+        user.setLongitude(0.0);  // 임시 값
+        user.setAddress("");  // 임시 값
+
+        User savedUser = userRepository.save(user);
+        log.info("User registered successfully: {}", savedUser.getId());
+
+        // 새로운 세션 ID 생성
+        String sessionId = sessionIssuer.issue(savedUser);
+
+        return new AuthResponse(UserDto.fromEntity(savedUser), sessionId);
+    }
+
+    /**
+     * 이메일 소유가 증명된 요청에만 어느 항목이 겹치는지 알려 준다. 증명 없이 가입하는 경로에서는
+     * 같은 응답으로 묶어 이메일 존재 여부를 유추하지 못하게 한다.
+     */
+    private AuthException registrationConflict(boolean emailExists, boolean emailProofConsumed) {
+        if (!emailProofConsumed) {
+            return new AuthException("이미 사용 중인 이메일 또는 닉네임이에요.", HttpStatus.CONFLICT, "REGISTRATION_CONFLICT");
+        }
+        if (emailExists) {
+            return new AuthException("이미 사용 중인 이메일이에요.", HttpStatus.CONFLICT, "EMAIL_ALREADY_IN_USE");
+        }
+        return new AuthException("이미 사용 중인 닉네임이에요.", HttpStatus.CONFLICT, "USERNAME_ALREADY_IN_USE");
     }
 
     @Transactional(rollbackFor = Exception.class)
     public AuthResponse login(LoginRequestDto request) {
-        try {
-            String normalizedEmail = request.getEmail().trim().toLowerCase(Locale.ROOT);
-            User user = userRepository.findByEmail(normalizedEmail)
-                    .orElseThrow(() -> new AuthException("이메일 또는 비밀번호가 올바르지 않습니다.", HttpStatus.UNAUTHORIZED));
+        String normalizedEmail = request.getEmail().trim().toLowerCase(Locale.ROOT);
+        User user = userRepository.findByEmail(normalizedEmail)
+                .orElseThrow(this::badCredentials);
 
-            if (user.getAccountType() == UserAccountType.SYSTEM
-                    || Boolean.FALSE.equals(user.getPasswordLoginEnabled())
-                    || !passwordEncoder.matches(request.getPassword(), user.getPassword())) {
-                throw new AuthException("이메일 또는 비밀번호가 올바르지 않습니다.", HttpStatus.UNAUTHORIZED);
-            }
-
-            // 새로운 세션 ID 생성
-            String sessionId = sessionIssuer.issue(user);
-            
-            // 로그인 성공 후 오프라인 알림 전송 -> SessionConnectedEvent 리스너에서 처리하도록 변경
-            // try {
-            //     log.info("[AuthService.login] Attempting to send pending notifications for user: {}", user.getId());
-            //     offlineNotificationService.sendPendingNotifications(user.getId());
-            // } catch (Exception e) {
-            //     log.error("[AuthService.login] Error sending pending notifications for user {}: {}", user.getId(), e.getMessage(), e);
-            //     // 알림 전송 실패가 로그인 전체를 실패시키지는 않도록 예외 처리
-            // }
-            
-            return new AuthResponse(UserDto.fromEntity(user), sessionId);
-        } catch (Exception e) {
-            log.error("Login error occurred", e);
-            throw e;
+        if (user.getAccountType() == UserAccountType.SYSTEM
+                || Boolean.FALSE.equals(user.getPasswordLoginEnabled())
+                || !passwordEncoder.matches(request.getPassword(), user.getPassword())) {
+            throw badCredentials();
         }
+
+        // 새로운 세션 ID 생성
+        String sessionId = sessionIssuer.issue(user);
+
+        // 로그인 성공 후 오프라인 알림 전송은 SessionConnectedEvent 리스너에서 처리한다.
+        return new AuthResponse(UserDto.fromEntity(user), sessionId);
+    }
+
+    private AuthException badCredentials() {
+        return new AuthException("이메일 또는 비밀번호가 올바르지 않습니다.", HttpStatus.UNAUTHORIZED, "BAD_CREDENTIALS");
     }
 
     public void logout(String sessionId) {
@@ -134,35 +125,24 @@ public class AuthService {
     }
 
     @Transactional(readOnly = true)
-    public UserDto getCurrentUser(String sessionId) {
-        UserSession userSession = redisSessionService.getSession(sessionId);
-        if (userSession == null) {
-            throw new AuthException("세션을 찾을 수 없습니다.", HttpStatus.NOT_FOUND);
-        }
-        User user = userRepository.findById(userSession.getUserId())
-                .orElseThrow(() -> new AuthException("사용자를 찾을 수 없습니다.", HttpStatus.NOT_FOUND));
-        return UserDto.fromEntity(user);
+    public UserDto getCurrentUser(Long userId) {
+        return UserDto.fromEntity(requireUser(userId));
     }
 
     @Transactional(rollbackFor = Exception.class)
-    public UserDto updateNickname(String sessionId, String rawNickname) {
-        User user = requireSessionUser(sessionId);
+    public UserDto updateNickname(Long userId, String rawNickname) {
+        User user = requireUser(userId);
         boolean changed = applyNickname(user, rawNickname, true);
         if (!changed) return UserDto.fromEntity(user);
 
         User updatedUser = saveNicknameChange(user);
-        redisSessionService.updateSession(sessionId, updatedUser.getId(), updatedUser.getUsername());
+        redisSessionService.refreshUserSessions(updatedUser.getId(), updatedUser.getUsername());
         return UserDto.fromEntity(updatedUser);
     }
 
     @Transactional(rollbackFor = Exception.class)
-    public UserDto updateProfile(String sessionId, UserDto request) {
-        UserSession userSession = redisSessionService.getSession(sessionId);
-        if (userSession == null) {
-            throw new AuthException("세션을 찾을 수 없습니다.", HttpStatus.NOT_FOUND);
-        }
-        User user = userRepository.findById(userSession.getUserId())
-                .orElseThrow(() -> new AuthException("사용자를 찾을 수 없습니다.", HttpStatus.NOT_FOUND));
+    public UserDto updateProfile(Long userId, UserDto request) {
+        User user = requireUser(userId);
 
         boolean nicknameChanged = request.getUsername() != null
                 && applyNickname(user, request.getUsername(), false);
@@ -177,17 +157,13 @@ public class AuthService {
 
         User updatedUser = nicknameChanged ? saveNicknameChange(user) : userRepository.save(user);
         if (nicknameChanged) {
-            redisSessionService.updateSession(sessionId, updatedUser.getId(), updatedUser.getUsername());
+            redisSessionService.refreshUserSessions(updatedUser.getId(), updatedUser.getUsername());
         }
         return UserDto.fromEntity(updatedUser);
     }
 
-    private User requireSessionUser(String sessionId) {
-        UserSession userSession = redisSessionService.getSession(sessionId);
-        if (userSession == null) {
-            throw new AuthException("세션을 찾을 수 없습니다.", HttpStatus.NOT_FOUND);
-        }
-        return userRepository.findById(userSession.getUserId())
+    private User requireUser(Long userId) {
+        return userRepository.findById(userId)
                 .orElseThrow(() -> new AuthException("사용자를 찾을 수 없습니다.", HttpStatus.NOT_FOUND));
     }
 
@@ -248,13 +224,8 @@ public class AuthService {
     }
 
     @Transactional(rollbackFor = Exception.class)
-    public UserDto updateProfileImage(String sessionId, String profileImageUrl) {
-        UserSession userSession = redisSessionService.getSession(sessionId);
-        if (userSession == null) {
-            throw new AuthException("세션을 찾을 수 없습니다.", HttpStatus.NOT_FOUND);
-        }
-        User user = userRepository.findById(userSession.getUserId())
-                .orElseThrow(() -> new AuthException("사용자를 찾을 수 없습니다.", HttpStatus.NOT_FOUND));
+    public UserDto updateProfileImage(Long userId, String profileImageUrl) {
+        User user = requireUser(userId);
 
         String previousImageUrl = user.getProfileImage();
         user.setProfileImage(profileImageUrl);
@@ -271,9 +242,7 @@ public class AuthService {
 
     @Transactional(readOnly = true)
     public UserDto getUserById(Long userId) {
-        User user = userRepository.findById(userId)
-                .orElseThrow(() -> new AuthException("사용자를 찾을 수 없습니다.", HttpStatus.NOT_FOUND));
-        return UserDto.fromEntity(user);
+        return UserDto.fromEntity(requireUser(userId));
     }
 
     /**
@@ -287,10 +256,10 @@ public class AuthService {
         // and verifies email through the challenge flow to avoid enumeration.
         boolean emailExists = false;
         boolean usernameExists = userRepository.existsByUsername(username);
-        
+
         return new DuplicateCheckResponse(emailExists, usernameExists);
     }
-    
+
     /**
      * 중복 체크 결과를 담는 내부 클래스
      */

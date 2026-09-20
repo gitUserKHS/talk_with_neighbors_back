@@ -83,6 +83,16 @@ public interface OfflineNotificationRepository extends JpaRepository<OfflineNoti
                                                           @Param("type") OfflineNotification.NotificationType type, 
                                                           @Param("data") String data);
 
+    /**
+     * 전송 여부와 무관하게 아직 만료되지 않은 같은 타입·같은 데이터의 알림 조회.
+     * 좋아요처럼 취소 후 다시 눌러도 같은 알림이 반복되면 안 되는 타입의 중복 방지용.
+     */
+    @Query("SELECT on FROM OfflineNotification on WHERE on.userId = :userId AND on.type = :type AND on.data = :data AND on.expiresAt > :now")
+    List<OfflineNotification> findActiveNotifications(@Param("userId") Long userId,
+                                                       @Param("type") OfflineNotification.NotificationType type,
+                                                       @Param("data") String data,
+                                                       @Param("now") LocalDateTime now);
+
     Page<OfflineNotification> findByUserIdAndExpiresAtAfterOrderByCreatedAtDesc(
             Long userId, LocalDateTime now, Pageable pageable);
 

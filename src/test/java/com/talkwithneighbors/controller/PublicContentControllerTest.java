@@ -25,6 +25,7 @@ import java.time.ZoneOffset;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.hamcrest.Matchers.containsString;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
@@ -32,6 +33,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -73,6 +75,8 @@ class PublicContentControllerTest {
                         .param("page", "-2")
                         .param("size", "500"))
                 .andExpect(status().isOk())
+                .andExpect(header().string("Cache-Control", containsString("max-age=60")))
+                .andExpect(header().string("Cache-Control", containsString("public")))
                 .andExpect(jsonPath("$.content[0].id").value("post-1"))
                 .andExpect(jsonPath("$.content[0].authorDisplayName").value("이웃"))
                 .andExpect(jsonPath("$.content[0].official").value(false))
@@ -147,6 +151,7 @@ class PublicContentControllerTest {
                         .param("keyword", "book")
                         .param("interest", "books"))
                 .andExpect(status().isOk())
+                .andExpect(header().string("Cache-Control", containsString("max-age=60")))
                 .andExpect(jsonPath("$.content[0].id").value("meetup-1"))
                 .andExpect(jsonPath("$.content[0].official").value(false))
                 .andExpect(jsonPath("$.content[0].demo").doesNotExist())

@@ -132,6 +132,15 @@ public interface ChatRoomRepository extends JpaRepository<ChatRoom, String> {
 
     @Query("SELECT size(cr.participants) FROM ChatRoom cr WHERE cr.id = :roomId")
     Integer getParticipantCount(@Param("roomId") String roomId);
+
+    /**
+     * 채팅방 참가자 ID만 조회합니다. 타이핑 신호처럼 엔티티가 필요 없는 fan-out 경로에서
+     * 참가자 컬렉션을 통째로 로드하지 않기 위해 사용합니다.
+     * @param roomId 채팅방 ID
+     * @return 참가자 사용자 ID 목록
+     */
+    @Query("select p.id from ChatRoom r join r.participants p where r.id = :roomId")
+    List<Long> findParticipantIds(@Param("roomId") String roomId);
     
     // === 매칭 관련 메서드 추가 ===
     /**

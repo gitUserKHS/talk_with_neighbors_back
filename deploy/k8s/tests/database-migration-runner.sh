@@ -84,6 +84,13 @@ if [[ "$interactive" == "true" ]]; then
     grep -Fq "MD5(CONCAT('legacy-chat-schedule-message:', pending.schedule_id))" <<<"$migration_sql"
     grep -Fq 'message.schedule_id = pending.schedule_id' <<<"$migration_sql"
     printf 'calendar-backfill\n' >> "$apply_log"
+  elif grep -Fq 'idx_offline_notifications_user_expires_created' <<<"$migration_sql"; then
+    grep -Fq 'ALGORITHM=INPLACE, LOCK=NONE' <<<"$migration_sql"
+    grep -Fq '@offline_notifications_table_exists = 0' <<<"$migration_sql"
+    grep -Fq "'SELECT 1'" <<<"$migration_sql"
+    grep -Fq '`media_url`(191)' <<<"$migration_sql"
+    grep -Fq '`thumbnail_url`(191)' <<<"$migration_sql"
+    printf 'hot-path-indexes\n' >> "$apply_log"
   else
     echo 'unexpected migration SQL' >&2
     exit 2
@@ -135,6 +142,8 @@ migration="$fixture/database-migrations/V2026071501__migrate_message_type_to_var
 expected_checksum="$(sha256sum -- "$migration" | awk '{print $1}')"
 calendar_migration="$fixture/database-migrations/V2026071601__backfill_chat_schedule_calendar.sql"
 calendar_checksum="$(sha256sum -- "$calendar_migration" | awk '{print $1}')"
+hot_path_migration="$fixture/database-migrations/V2026092001__add_hot_path_indexes.sql"
+hot_path_checksum="$(sha256sum -- "$hot_path_migration" | awk '{print $1}')"
 
 missing_schema_state="$test_root/missing-schema-state"
 mkdir -p -- "$missing_schema_state"
@@ -162,17 +171,21 @@ export FAKE_CALENDAR_SCHEMA_FINGERPRINT='14:18:4:9:2'
 first_output="$(bash "$fixture/run-database-migrations.sh")"
 grep -Fq 'Database migration applied: V2026071501__migrate_message_type_to_varchar.sql' <<<"$first_output"
 grep -Fq 'Database migration applied: V2026071601__backfill_chat_schedule_calendar.sql' <<<"$first_output"
+grep -Fq 'Database migration applied: V2026092001__add_hot_path_indexes.sql' <<<"$first_output"
 grep -Fxq "V2026071501"$'\t'"migrate_message_type_to_varchar"$'\t'"$expected_checksum" "$state/ledger.tsv"
 grep -Fxq "V2026071601"$'\t'"backfill_chat_schedule_calendar"$'\t'"$calendar_checksum" "$state/ledger.tsv"
-[[ "$(wc -l < "$state/ledger.tsv")" -eq 2 ]]
-[[ "$(wc -l < "$state/apply.log")" -eq 2 ]]
+grep -Fxq "V2026092001"$'\t'"add_hot_path_indexes"$'\t'"$hot_path_checksum" "$state/ledger.tsv"
+[[ "$(wc -l < "$state/ledger.tsv")" -eq 3 ]]
+[[ "$(wc -l < "$state/apply.log")" -eq 3 ]]
 grep -Fxq 'messages-absent-noop' "$state/apply.log"
 grep -Fxq 'calendar-backfill' "$state/apply.log"
+grep -Fxq 'hot-path-indexes' "$state/apply.log"
 
 second_output="$(bash "$fixture/run-database-migrations.sh")"
 grep -Fq 'Database migration already applied: V2026071501__migrate_message_type_to_varchar.sql' <<<"$second_output"
-[[ "$(wc -l < "$state/ledger.tsv")" -eq 2 ]]
-[[ "$(wc -l < "$state/apply.log")" -eq 2 ]]
+grep -Fq 'Database migration already applied: V2026092001__add_hot_path_indexes.sql' <<<"$second_output"
+[[ "$(wc -l < "$state/ledger.tsv")" -eq 3 ]]
+[[ "$(wc -l < "$state/apply.log")" -eq 3 ]]
 
 renamed_migration="$fixture/database-migrations/V2026071501__renamed_description.sql"
 mv -- "$migration" "$renamed_migration"
@@ -182,8 +195,8 @@ description_drift_status=$?
 set -e
 [[ "$description_drift_status" -ne 0 ]] || { echo "description drift unexpectedly succeeded" >&2; exit 1; }
 grep -Fq 'Database migration description drift: V2026071501__renamed_description.sql' <<<"$description_drift_output"
-[[ "$(wc -l < "$state/ledger.tsv")" -eq 2 ]]
-[[ "$(wc -l < "$state/apply.log")" -eq 2 ]]
+[[ "$(wc -l < "$state/ledger.tsv")" -eq 3 ]]
+[[ "$(wc -l < "$state/apply.log")" -eq 3 ]]
 mv -- "$renamed_migration" "$migration"
 
 printf '\n-- deliberate checksum drift for the test fixture\n' >> "$migration"
@@ -193,7 +206,7 @@ drift_status=$?
 set -e
 [[ "$drift_status" -ne 0 ]] || { echo "checksum drift unexpectedly succeeded" >&2; exit 1; }
 grep -Fq 'Database migration checksum drift: V2026071501__migrate_message_type_to_varchar.sql' <<<"$drift_output"
-[[ "$(wc -l < "$state/ledger.tsv")" -eq 2 ]]
-[[ "$(wc -l < "$state/apply.log")" -eq 2 ]]
+[[ "$(wc -l < "$state/ledger.tsv")" -eq 3 ]]
+[[ "$(wc -l < "$state/apply.log")" -eq 3 ]]
 
 echo "Database migration runner handles first apply, messages-table-absent no-op, schema preflight, repeat, and metadata drift"

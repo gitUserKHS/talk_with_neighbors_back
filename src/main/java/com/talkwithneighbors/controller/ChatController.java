@@ -4,6 +4,7 @@ import com.talkwithneighbors.dto.ChatMessageDto;
 import com.talkwithneighbors.dto.ChatRoomDto;
 import com.talkwithneighbors.dto.CreateRoomRequest;
 import com.talkwithneighbors.dto.MessageDto;
+import com.talkwithneighbors.dto.TypingSignalDto;
 import com.talkwithneighbors.dto.UpdateChatRoomRequest;
 import com.talkwithneighbors.dto.UpdateChatMessageRequest;
 import com.talkwithneighbors.entity.ChatRoom;
@@ -15,6 +16,7 @@ import com.talkwithneighbors.repository.MessageRepository;
 import com.talkwithneighbors.service.ChatService;
 import com.talkwithneighbors.service.MediaStorageService;
 import com.talkwithneighbors.service.RedisSessionService;
+import com.talkwithneighbors.service.RoomParticipantCache;
 import com.talkwithneighbors.service.UserService;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
@@ -32,6 +34,7 @@ import org.springframework.messaging.handler.annotation.Header;
 import org.springframework.web.multipart.MultipartFile;
 
 import jakarta.servlet.http.HttpServletRequest;
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.HashMap;
@@ -50,6 +53,7 @@ public class ChatController extends BaseController {
     private final SimpMessagingTemplate messagingTemplate;
     private final MessageRepository messageRepository;
     private final MediaStorageService mediaStorageService;
+    private final RoomParticipantCache roomParticipantCache;
 
     @Autowired
     public ChatController(ChatService chatService, 
@@ -57,13 +61,15 @@ public class ChatController extends BaseController {
                          UserService userService, 
                          SimpMessagingTemplate messagingTemplate,
                          MessageRepository messageRepository,
-                         MediaStorageService mediaStorageService) {
+                         MediaStorageService mediaStorageService,
+                         RoomParticipantCache roomParticipantCache) {
         this.chatService = chatService;
         this.redisSessionService = redisSessionService;
         this.userService = userService;
         this.messagingTemplate = messagingTemplate;
         this.messageRepository = messageRepository;
         this.mediaStorageService = mediaStorageService;
+        this.roomParticipantCache = roomParticipantCache;
     }
 
     @PostMapping("/rooms")
@@ -524,6 +530,40 @@ public class ChatController extends BaseController {
             
         } catch (Exception e) {
             log.error("[ChatController] Error in WebSocket enterRoom: {}", e.getMessage(), e);
+        }
+    }
+
+    /**
+     * 타이핑 신호 릴레이. 저장·로그 없이 같은 방의 다른 참가자에게만 전달한다.
+     * 키 입력마다 들어오므로 참가자 확인은 RoomParticipantCache(30초 TTL)로만 하고,
+     * 잘못된 요청은 조용히 버린다.
+     */
+    @MessageMapping("/chat.typing")
+    public void typing(@Payload Map<String, String> payload,
+                       @Header("simpSessionAttributes") Map<String, Object> sessionAttributes) {
+        try {
+            String roomId = payload.get("roomId");
+            String userIdString = (String) sessionAttributes.get("userId");
+            if (roomId == null || roomId.isBlank() || userIdString == null) {
+                return;
+            }
+
+            Long userId = Long.parseLong(userIdString);
+            List<Long> participantIds = roomParticipantCache.participantIds(roomId);
+            if (!participantIds.contains(userId)) {
+                return;
+            }
+
+            TypingSignalDto signal = TypingSignalDto.of(
+                    roomId, userId, roomParticipantCache.participantName(roomId, userId), LocalDateTime.now());
+            String destination = "/queue/chat/room/" + roomId;
+            for (Long participantId : participantIds) {
+                if (!participantId.equals(userId)) {
+                    messagingTemplate.convertAndSendToUser(participantId.toString(), destination, signal);
+                }
+            }
+        } catch (Exception e) {
+            log.debug("[ChatController] Dropped WebSocket typing signal: {}", e.getMessage());
         }
     }
 

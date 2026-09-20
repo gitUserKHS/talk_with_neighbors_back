@@ -52,7 +52,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @TestPropertySource(properties = {
     "spring.session.store-type=none"
 })
-@Import({TestSecurityConfig.class, TestConfig.class})
+@Import({TestSecurityConfig.class, TestConfig.class, MockArgumentResolverConfig.class})
 @ActiveProfiles("test")
 class AuthControllerTest {
 
@@ -180,8 +180,8 @@ class AuthControllerTest {
         // given
         String sessionId = "test-session-id";
         
-        // 단순히 세션 ID 기반 사용자 조회 테스트 (인증 로직 없음)
-        when(authService.getCurrentUser(sessionId)).thenReturn(userDto);
+        // MockArgumentResolverConfig가 userId 1L의 UserSession을 주입한다.
+        when(authService.getCurrentUser(1L)).thenReturn(userDto);
 
         // when & then
         mockMvc.perform(get("/api/auth/me")
@@ -196,14 +196,14 @@ class AuthControllerTest {
     void getCurrentUserFail() throws Exception {
         // given
         String sessionId = "invalid-session-id";
-        when(authService.getCurrentUser(sessionId))
-                .thenThrow(new AuthException("세션을 찾을 수 없습니다.", HttpStatus.NOT_FOUND));
+        when(authService.getCurrentUser(1L))
+                .thenThrow(new AuthException("사용자를 찾을 수 없습니다.", HttpStatus.NOT_FOUND));
 
         // when & then
         mockMvc.perform(get("/api/auth/me")
                 .cookie(new Cookie("TWN_SESSION", sessionId)))
                 .andExpect(status().isNotFound())
-                .andExpect(jsonPath("$.message").value("세션을 찾을 수 없습니다."));
+                .andExpect(jsonPath("$.message").value("사용자를 찾을 수 없습니다."));
     }
 
     @Test
@@ -226,13 +226,15 @@ class AuthControllerTest {
     void loginFailWrongPassword() throws Exception {
         // given
         when(authService.login(any(LoginRequestDto.class)))
-                .thenThrow(new AuthException("이메일 또는 비밀번호가 올바르지 않습니다.", HttpStatus.UNAUTHORIZED));
+                .thenThrow(new AuthException(
+                        "이메일 또는 비밀번호가 올바르지 않습니다.", HttpStatus.UNAUTHORIZED, "BAD_CREDENTIALS"));
 
         // when & then
         mockMvc.perform(post("/api/auth/login")
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(loginRequestDto)))
                 .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("BAD_CREDENTIALS"))
                 .andExpect(jsonPath("$.message").value("이메일 또는 비밀번호가 올바르지 않습니다."));
     }
 
@@ -271,7 +273,7 @@ class AuthControllerTest {
     void updateProfileWithAuthentication() throws Exception {
         // given
         String sessionId = "test-session-id";
-        when(authService.updateProfile(eq(sessionId), any(UserDto.class))).thenReturn(userDto);
+        when(authService.updateProfile(eq(1L), any(UserDto.class))).thenReturn(userDto);
 
         // when & then
         mockMvc.perform(put("/api/auth/profile")
@@ -286,7 +288,7 @@ class AuthControllerTest {
     void updateNicknameUsesTheAuthenticatedSession() throws Exception {
         userDto.setUsername("다윤이웃");
         userDto.setNicknameSetupRequired(false);
-        when(authService.updateNickname("test-session-id", "다윤이웃")).thenReturn(userDto);
+        when(authService.updateNickname(1L, "다윤이웃")).thenReturn(userDto);
 
         mockMvc.perform(put("/api/auth/profile/nickname")
                 .cookie(new Cookie("TWN_SESSION", "test-session-id"))
@@ -310,7 +312,7 @@ class AuthControllerTest {
 
     @Test
     void duplicateNicknameReturnsStableConflictCode() throws Exception {
-        when(authService.updateNickname("test-session-id", "이미사용중"))
+        when(authService.updateNickname(1L, "이미사용중"))
                 .thenThrow(new NicknameException(
                         "USERNAME_ALREADY_IN_USE", "이미 사용 중인 닉네임이에요.", HttpStatus.CONFLICT));
 

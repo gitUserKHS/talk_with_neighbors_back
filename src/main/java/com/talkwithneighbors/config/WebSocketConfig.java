@@ -5,13 +5,14 @@ import com.talkwithneighbors.handler.SessionCookieHandshakeInterceptor;
 import com.talkwithneighbors.interceptor.CustomAuthenticationChannelInterceptor;
 import com.talkwithneighbors.service.RedisSessionService;
 import com.talkwithneighbors.websocket.AuthenticatedWebSocketSessionRegistry;
+import jakarta.annotation.PreDestroy;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.messaging.Message;
 import org.springframework.messaging.simp.config.ChannelRegistration;
 import org.springframework.messaging.simp.config.MessageBrokerRegistry;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 import org.springframework.security.authorization.AuthorizationManager;
 import org.springframework.security.messaging.access.intercept.AuthorizationChannelInterceptor;
 import org.springframework.security.messaging.context.SecurityContextChannelInterceptor;
@@ -40,29 +41,35 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
     @Autowired
     private AuthenticatedWebSocketSessionRegistry authenticatedWebSocketSessionRegistry;
 
+    // 하트비트 전용 스케줄러. 빈으로 노출하면 @Scheduled 작업이 이 풀을 함께 쓰게 되므로 내부에만 둔다.
+    private ThreadPoolTaskScheduler heartbeatScheduler;
+
     @Override
     public void configureMessageBroker(MessageBrokerRegistry config) {
         // 메시지 브로커 설정
         // /user is a logical user-destination prefix. Registering it with the
         // simple broker as well causes duplicate subscription handling and can
         // drop session-specific deliveries under concurrent connections.
+        ThreadPoolTaskScheduler scheduler = new ThreadPoolTaskScheduler();
+        scheduler.setPoolSize(2);
+        scheduler.setThreadNamePrefix("ws-heartbeat-");
+        scheduler.initialize();
+        heartbeatScheduler = scheduler;
+
         config.enableSimpleBroker("/topic", "/queue")
               .setHeartbeatValue(new long[]{10000, 10000}) // 10초 하트비트
-              .setTaskScheduler(taskScheduler()); // 명시적 태스크 스케줄러 설정
+              .setTaskScheduler(scheduler); // 하트비트 전용 태스크 스케줄러
         // 클라이언트에서 서버로 메시지를 보낼 때의 prefix
         config.setApplicationDestinationPrefixes("/app");
         // 특정 사용자에게 메시지를 보낼 때의 prefix
         config.setUserDestinationPrefix("/user");
     }
 
-    @Bean
-    public org.springframework.scheduling.TaskScheduler taskScheduler() {
-        org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler scheduler = 
-            new org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler();
-        scheduler.setPoolSize(10);
-        scheduler.setThreadNamePrefix("websocket-");
-        scheduler.initialize();
-        return scheduler;
+    @PreDestroy
+    public void shutdownHeartbeatScheduler() {
+        if (heartbeatScheduler != null) {
+            heartbeatScheduler.shutdown();
+        }
     }
 
     @Override

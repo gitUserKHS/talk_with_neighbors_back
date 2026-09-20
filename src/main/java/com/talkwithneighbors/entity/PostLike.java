@@ -6,6 +6,7 @@ import jakarta.persistence.FetchType;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
+import jakarta.persistence.Index;
 import jakarta.persistence.JoinColumn;
 import jakarta.persistence.ManyToOne;
 import jakarta.persistence.PrePersist;
@@ -20,7 +21,8 @@ import java.time.LocalDateTime;
 @Entity
 @Table(
     name = "post_likes",
-    uniqueConstraints = @UniqueConstraint(name = "uk_post_like_post_user", columnNames = {"post_id", "user_id"})
+    uniqueConstraints = @UniqueConstraint(name = "uk_post_like_post_user", columnNames = {"post_id", "user_id"}),
+    indexes = @Index(name = "idx_post_likes_user_created", columnList = "user_id,created_at")
 )
 @Getter
 @Setter

@@ -9,11 +9,12 @@ readonly DEPLOY_DIR="$SCRIPT_DIR/.."
 readonly RUNNER="$DEPLOY_DIR/run-database-migrations.sh"
 readonly MIGRATION="$DEPLOY_DIR/database-migrations/V2026071501__migrate_message_type_to_varchar.sql"
 readonly CALENDAR_MIGRATION="$DEPLOY_DIR/database-migrations/V2026071601__backfill_chat_schedule_calendar.sql"
+readonly HOT_PATH_MIGRATION="$DEPLOY_DIR/database-migrations/V2026092001__add_hot_path_indexes.sql"
 readonly DEPLOY_ON_NODE="$DEPLOY_DIR/deploy-on-node.sh"
 readonly BUILD_BUNDLE="$DEPLOY_DIR/build-bundle.sh"
 readonly BACKEND_MANIFEST="$DEPLOY_DIR/base/backend.yaml"
 
-for required in "$RUNNER" "$MIGRATION" "$CALENDAR_MIGRATION" "$DEPLOY_ON_NODE" "$BUILD_BUNDLE" "$BACKEND_MANIFEST"; do
+for required in "$RUNNER" "$MIGRATION" "$CALENDAR_MIGRATION" "$HOT_PATH_MIGRATION" "$DEPLOY_ON_NODE" "$BUILD_BUNDLE" "$BACKEND_MANIFEST"; do
   [[ -s "$required" ]] || { echo "Missing database migration contract file: $required" >&2; exit 1; }
 done
 
@@ -59,6 +60,12 @@ commit_line="$(grep -nF -m1 'COMMIT;' "$CALENDAR_MIGRATION" | cut -d: -f1)"
   echo "Calendar backfill must lock its room snapshot inside one transaction" >&2
   exit 1
 }
+grep -Fq '@offline_notifications_table_exists = 0' "$HOT_PATH_MIGRATION"
+grep -Fq 'idx_offline_notifications_user_expires_created' "$HOT_PATH_MIGRATION"
+grep -Fq 'idx_offline_notifications_user_sent_expires' "$HOT_PATH_MIGRATION"
+grep -Fq 'ALGORITHM=INPLACE, LOCK=NONE' "$HOT_PATH_MIGRATION"
+grep -Fq '`media_url`(191)' "$HOT_PATH_MIGRATION"
+grep -Fq '`thumbnail_url`(191)' "$HOT_PATH_MIGRATION"
 grep -Fq 'bash "$RELEASE_DIR/run-database-migrations.sh"' "$DEPLOY_ON_NODE"
 grep -Fq 'RUN_DATABASE_MIGRATIONS' "$DEPLOY_ON_NODE"
 grep -Fq 'Database migrations skipped for guarded application rollback; the database is never downgraded' "$DEPLOY_ON_NODE"

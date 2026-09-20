@@ -103,6 +103,11 @@ public class FeedController {
         return ResponseEntity.ok(feedService.unlikePost(userSession.getUserId(), postId));
     }
 
+    @GetMapping("/{postId}")
+    public ResponseEntity<FeedPostDto> getPost(@PathVariable String postId, UserSession userSession) {
+        return ResponseEntity.ok(feedService.getPostForViewer(userSession.getUserId(), postId));
+    }
+
     @GetMapping("/{postId}/comments")
     public ResponseEntity<List<PostCommentDto>> getComments(@PathVariable String postId, UserSession userSession) {
         return ResponseEntity.ok(feedService.getComments(userSession.getUserId(), postId));

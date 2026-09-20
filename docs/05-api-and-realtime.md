@@ -49,6 +49,7 @@
 |---|---|---|
 | GET | `/api/feed?page=0&size=20&mode=RECOMMENDED` | 피드 조회; `RECOMMENDED`, `NEARBY`, `LATEST` 지원, 생략 시 `RECOMMENDED`; 숨김·양방향 차단을 DB에서 먼저 제외하며 정확한 거리는 응답하지 않음 |
 | POST | `/api/feed` | 게시물 생성; JSON은 외부 이미지 URL 호환, multipart는 `post` JSON 파트와 `files` 최대 10개; `publicPreview` 기본값은 `false` |
+| GET | `/api/feed/{postId}` | 게시물 단건 조회; 없거나 숨긴 글은 404 `FEED_POST_NOT_FOUND`, 차단 관계는 403 `FEED_BLOCKED` |
 | PATCH | `/api/feed/{postId}` | 작성자 전용 본문·태그·공개 미리보기 수정; 기존 미디어 유지 |
 | DELETE | `/api/feed/{postId}` | 작성자 전용 게시물·댓글·좋아요와 서버 소유 미디어 삭제 |
 | POST | `/api/feed/{postId}/likes` | 좋아요 |
@@ -110,9 +111,9 @@ JSON 호환 경로에는 서비스 내부 `/uploads/**` URL을 넣을 수 없다
 | POST | `/api/chat/rooms/{roomId}/join` | 입장 |
 | POST | `/api/chat/rooms/{roomId}/leave` | 퇴장 |
 | DELETE | `/api/chat/rooms/{roomId}` | 방 삭제 |
-| GET | `/api/chat/rooms/{roomId}/messages` | 메시지 페이지 |
+| GET | `/api/chat/rooms/{roomId}/messages` | 메시지 페이지 (읽기 전용, 읽음 처리 없음) |
 | POST | `/api/chat/rooms/{roomId}/messages` | JSON 텍스트 또는 `message` JSON 파트 + `files` 최대 5개 multipart 저장 |
-| POST | `/api/chat/rooms/{roomId}/messages/read` | 방 전체 읽음 |
+| POST | `/api/chat/rooms/{roomId}/messages/read` | 방 전체 읽음 (`INSERT ... SELECT` 한 문장, 커밋 뒤 `ROOM_READ` 한 번) |
 | POST | `/api/chat/rooms/{roomId}/messages/{messageId}/read` | 메시지 하나 읽음 |
 | GET | `/api/chat/rooms/{roomId}/unread-count` | 방의 미읽음 수 |
 | GET | `/api/chat/unread-counts` | 모든 방의 미읽음 수 |
@@ -157,6 +158,7 @@ JSON 호환 경로에는 서비스 내부 `/uploads/**` URL을 넣을 수 없다
 - `/app/chat.enterRoom`
 - `/app/chat.leaveRoom`
 - `/app/chat.deleteRoom`
+- `/app/chat.typing` (본문 `{"roomId"}`, 타이핑 신호 릴레이)
 - `/app/client/ready`
 
 클라이언트 구독 목적지:
@@ -166,6 +168,10 @@ JSON 호환 경로에는 서비스 내부 `/uploads/**` URL을 넣을 수 없다
 - `/user/queue/chat-updates`
 - `/user/queue/match-notifications`
 - `/user/queue/system-notifications`
+
+`/user/queue/chat/room/{roomId}`에는 메시지 프레임 외에 `type: "TYPING"` 신호 프레임도 흐른다. 클라이언트가 `/app/chat.typing`에 `{"roomId":"<uuid>"}`를 보내면 서버는 참가자 캐시(방마다 30초 TTL, 최대 500개 방)로 참가 여부만 확인하고, 보낸 사람을 제외한 참가자에게 `{"type":"TYPING","roomId":"<uuid>","userId":<long>,"senderName":"<username>","expiresAt":"<ISO-8601 LocalDateTime, now+4s>"}`를 전달한다. DB에 저장하지 않고 DEBUG 위로 로그도 남기지 않으며, 클라이언트는 방마다 2초에 한 번만 신호를 보내고 마지막 신호로부터 4초 뒤 표시를 지운다.
+
+같은 큐로 `type: "ROOM_READ"` 프레임도 흐른다. `POST /api/chat/rooms/{roomId}/messages/read`나 `/app/chat.enterRoom`으로 방 전체를 읽음 처리하면 서버는 `message_read_by`에 `INSERT ... SELECT ... WHERE NOT EXISTS` 한 문장으로 본인이 보내지 않은 삭제되지 않은 미읽음 메시지 행을 한꺼번에 넣고, 새로 넣은 행이 있을 때만 트랜잭션 커밋 뒤에 읽은 사람을 제외한 참가자 각각에게 `{"type":"ROOM_READ","roomId":"<uuid>","readByUserId":<long>,"readAt":"<ISO-8601 LocalDateTime>"}`를 한 번씩 보낸다. 읽은 본인은 `/user/queue/chat-updates`의 `UNREAD_COUNT_UPDATE`(`{chatRoomId, unreadCount: 0}`)로 갱신된다. 이 경로에서는 메시지별 `MESSAGE_READ_STATUS_UPDATE`를 더 이상 보내지 않으며, 그 프레임은 메시지 하나를 읽는 `POST .../messages/{messageId}/read`와 `/app/chat.markAsRead`에서만 유지된다. `GET /api/chat/rooms/{roomId}/messages`는 읽기 전용이라 읽음 처리를 하지 않으므로 클라이언트는 방을 열 때 메시지 페이지 조회와 함께 `POST .../messages/read`를 보내고, `ROOM_READ`를 받으면 화면의 모든 메시지 `readByUsers`에 `readByUserId`를 더한다.
 
 ## 남은 계약·보안 과제
 

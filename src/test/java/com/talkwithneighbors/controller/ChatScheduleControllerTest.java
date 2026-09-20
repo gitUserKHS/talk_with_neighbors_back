@@ -40,7 +40,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @WebMvcTest(controllers = ChatScheduleController.class)
 @AutoConfigureMockMvc
 @ActiveProfiles("test")
-@Import({TestSecurityConfig.class, ChatExceptionHandler.class})
+@Import(TestSecurityConfig.class)
 class ChatScheduleControllerTest {
     private static final String SESSION_ID = "schedule-session";
 

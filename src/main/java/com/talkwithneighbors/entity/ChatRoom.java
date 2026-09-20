@@ -19,7 +19,13 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
  * 사용자 간의 대화 공간을 생성하고 관리합니다.
  */
 @Entity
-@Table(name = "chat_rooms")
+@Table(
+        name = "chat_rooms",
+        indexes = {
+                @Index(name = "idx_chat_rooms_last_message_time", columnList = "last_message_time"),
+                @Index(name = "idx_chat_rooms_public_type_scheduled", columnList = "is_public,type,scheduled_at")
+        }
+)
 @Getter
 @Setter
 @NoArgsConstructor

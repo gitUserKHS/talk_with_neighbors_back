@@ -18,7 +18,10 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
  */
 @JsonIgnoreProperties({"interests", "createdRooms", "joinedRooms", "sentMessages"})
 @Entity
-@Table(name = "users")
+@Table(
+        name = "users",
+        indexes = @Index(name = "idx_users_online_last", columnList = "is_online,last_online_at")
+)
 @Getter
 @Setter
 @NoArgsConstructor

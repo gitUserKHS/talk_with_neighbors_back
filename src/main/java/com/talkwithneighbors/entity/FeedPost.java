@@ -6,6 +6,7 @@ import jakarta.persistence.ElementCollection;
 import jakarta.persistence.Entity;
 import jakarta.persistence.FetchType;
 import jakarta.persistence.Id;
+import jakarta.persistence.Index;
 import jakarta.persistence.JoinColumn;
 import jakarta.persistence.ManyToOne;
 import jakarta.persistence.OrderColumn;
@@ -22,7 +23,14 @@ import java.util.List;
 import java.util.UUID;
 
 @Entity
-@Table(name = "feed_posts")
+@Table(
+        name = "feed_posts",
+        indexes = {
+                @Index(name = "idx_feed_posts_created_id", columnList = "created_at,id"),
+                @Index(name = "idx_feed_posts_public_created", columnList = "public_preview,created_at,id"),
+                @Index(name = "idx_feed_posts_author_created", columnList = "author_id,created_at")
+        }
+)
 @Getter
 @Setter
 @NoArgsConstructor

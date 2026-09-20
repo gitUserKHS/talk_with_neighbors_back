@@ -27,7 +27,7 @@ public class PasswordResetController {
     public record ConfirmRequest(
             @NotBlank @Email @Size(max = 320) String email,
             @NotBlank @Size(min = 6, max = 6) String code,
-            @NotBlank @Size(min = 8, max = 100) String newPassword
+            @NotBlank @Size(min = 8, max = 72) String newPassword
     ) {
     }
 
