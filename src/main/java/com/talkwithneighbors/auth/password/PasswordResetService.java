@@ -130,6 +130,8 @@ public class PasswordResetService {
 
         User user = userRepository.findByEmail(normalized).orElseThrow(this::invalidCode);
         user.setPassword(passwordEncoder.encode(newPassword));
+        // 소셜 로그인으로만 가입한 계정도 재설정 뒤에는 새 비밀번호로 로그인할 수 있어야 한다.
+        user.setPasswordLoginEnabled(true);
         userRepository.save(user);
 
         challenge.consume(now);

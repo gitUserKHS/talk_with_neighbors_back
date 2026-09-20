@@ -12,7 +12,10 @@ import java.time.LocalDateTime;
  * Redis와 연동하여 사용자의 로그인 상태를 관리합니다.
  */
 @Entity
-@Table(name = "sessions")
+@Table(
+        name = "sessions",
+        indexes = @Index(name = "idx_sessions_expires", columnList = "expires_at")
+)
 @Getter
 @Setter
 @NoArgsConstructor

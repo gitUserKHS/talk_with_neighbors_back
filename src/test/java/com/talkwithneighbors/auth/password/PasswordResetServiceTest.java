@@ -13,7 +13,10 @@ import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.password.PasswordEncoder;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.time.Duration;
+import java.util.HexFormat;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -158,6 +161,28 @@ class PasswordResetServiceTest {
         assertThatThrownBy(() -> service.confirmReset("ghost@example.test", "000000", "long-enough-password"))
                 .isInstanceOf(AuthException.class)
                 .hasMessageContaining("인증번호가 올바르지 않거나 만료되었습니다");
+    }
+
+    @Test
+    void resetEnablesPasswordLoginForSocialOnlyAccount() throws Exception {
+        String code = "123456";
+        String codeHash = HexFormat.of().formatHex(
+                MessageDigest.getInstance("SHA-256").digest(code.getBytes(StandardCharsets.UTF_8)));
+        PasswordResetChallenge challenge = PasswordResetChallenge.issue(
+                "member@example.test", codeHash, java.time.Instant.now(), properties);
+        when(challengeRepository.findByEmailNormalized("member@example.test"))
+                .thenReturn(Optional.of(challenge));
+        User socialOnly = member("member@example.test");
+        socialOnly.setPasswordLoginEnabled(false);
+        when(userRepository.findByEmail("member@example.test")).thenReturn(Optional.of(socialOnly));
+        when(passwordEncoder.encode("long-enough-password")).thenReturn("new-hash");
+
+        service.confirmReset("member@example.test", code, "long-enough-password");
+
+        assertThat(socialOnly.getPassword()).isEqualTo("new-hash");
+        assertThat(socialOnly.getPasswordLoginEnabled()).isTrue();
+        verify(userRepository).save(socialOnly);
+        verify(redisSessionService).removeUserSessions("5");
     }
 
     @Test

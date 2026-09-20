@@ -19,6 +19,7 @@ import com.talkwithneighbors.repository.UserRepository;
 import com.talkwithneighbors.repository.ChatScheduleRepository;
 import com.talkwithneighbors.repository.ChatScheduleRsvpRepository;
 import com.talkwithneighbors.entity.ChatScheduleStatus;
+import com.talkwithneighbors.service.ChatReadBroadcaster;
 import com.talkwithneighbors.service.NotificationService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -84,8 +85,11 @@ class ChatServiceImplTest {
     @Mock
     private MeetupWaitlistRepository meetupWaitlistRepository;
 
+    @Mock
+    private ChatReadBroadcaster chatReadBroadcaster;
+
     @InjectMocks
-    private ChatServiceImpl chatService;
+private ChatServiceImpl chatService;
 
     private final String testRoomId = "test-room-123";
     private final String testUserIdString = "1";
@@ -183,15 +187,13 @@ class ChatServiceImplTest {
         when(chatRoomRepository.findById(testRoomId)).thenReturn(Optional.of(testRoom));
         when(messageRepository.findVisibleByChatRoomIdOrderByCreatedAtDesc(
                 testRoomId, Message.MessageType.SCHEDULE, pageable)).thenReturn(messagePage);
-        when(messageRepository.saveAll(anyList())).thenAnswer(invocation -> invocation.getArgument(0));
-
 
         Page<MessageDto> result = chatService.getMessagesByRoomId(testRoomId, testUserIdString, pageable);
 
         assertNotNull(result);
         assertEquals(1, result.getContent().size());
         assertEquals(message1.getId(), result.getContent().get(0).getId());
-        assertTrue(result.getContent().get(0).isReadByCurrentUser(), "Message should be marked as read by current user");
+        assertTrue(result.getContent().get(0).isReadByCurrentUser(), "Own message is already read by its sender");
 
         verify(userRepository).findById(testUserIdLong);
         verify(chatRoomRepository).findById(testRoomId);
@@ -200,13 +202,13 @@ class ChatServiceImplTest {
     }
     
     @Test
-    void testGetMessagesByRoomId_whenUserIsParticipant_MessageFromAnotherUser_MarkedAsRead() {
+    void testGetMessagesByRoomId_whenUserIsParticipant_MessageFromAnotherUser_isReadOnly() {
         User currentUser = createUser(testUserIdLong, "currentUser");
         User otherUser = createUser(2L, "otherUser");
         ChatRoom testRoom = createChatRoom(testRoomId, otherUser, new HashSet<>(List.of(currentUser, otherUser)));
 
         Message messageFromOtherUser = createMessage(UUID.randomUUID().toString(), testRoom, otherUser);
-        messageFromOtherUser.getReadByUsers().remove(currentUser.getId()); 
+        messageFromOtherUser.getReadByUsers().remove(currentUser.getId());
 
         List<Message> messages = List.of(messageFromOtherUser);
         Page<Message> messagePage = new PageImpl<>(messages, pageable, messages.size());
@@ -215,19 +217,67 @@ class ChatServiceImplTest {
         when(chatRoomRepository.findById(testRoomId)).thenReturn(Optional.of(testRoom));
         when(messageRepository.findVisibleByChatRoomIdOrderByCreatedAtDesc(
                 testRoomId, Message.MessageType.SCHEDULE, pageable)).thenReturn(messagePage);
-        when(messageRepository.saveAll(anyList())).thenAnswer(invocation -> invocation.getArgument(0));
 
         Page<MessageDto> result = chatService.getMessagesByRoomId(testRoomId, testUserIdString, pageable);
 
         assertNotNull(result);
         assertEquals(1, result.getContent().size());
-        assertTrue(result.getContent().get(0).isReadByCurrentUser());
+        assertFalse(result.getContent().get(0).isReadByCurrentUser(),
+                "GET /messages must not mark anything as read; the client POSTs /messages/read separately");
+        assertFalse(messageFromOtherUser.getReadByUsers().contains(currentUser.getId()));
 
-        ArgumentCaptor<List<Message>> captor = ArgumentCaptor.forClass(List.class);
-        verify(messageRepository).saveAll(captor.capture());
-        List<Message> capturedMessages = captor.getValue();
-        assertFalse(capturedMessages.isEmpty());
-        assertTrue(capturedMessages.get(0).getReadByUsers().contains(currentUser.getId()));
+        verify(messageRepository, never()).saveAll(anyList());
+        verify(messageRepository, never()).save(any(Message.class));
+        verify(messageRepository, never()).markAllVisibleAsRead(anyString(), any());
+        verifyNoInteractions(notificationService, chatReadBroadcaster);
+    }
+
+    @Test
+    void markAllMessagesInRoomAsReadUsesOneBulkStatementAndOneBroadcast() {
+        when(userRepository.findById(creator.getId())).thenReturn(Optional.of(creator));
+        when(chatRoomRepository.findByIdAndParticipantsContaining(room.getId(), creator))
+                .thenReturn(Optional.of(room));
+        when(messageRepository.markAllVisibleAsRead(room.getId(), creator.getId())).thenReturn(200);
+
+        chatService.markAllMessagesInRoomAsRead(room.getId(), creator.getId().toString());
+
+        verify(messageRepository, times(1)).markAllVisibleAsRead(room.getId(), creator.getId());
+        verify(messageRepository, never()).findByChatRoomIdOrderByCreatedAtDesc(anyString(), any());
+        verify(messageRepository, never()).saveAll(anyList());
+        ArgumentCaptor<List<Long>> participantCaptor = ArgumentCaptor.forClass(List.class);
+        verify(chatReadBroadcaster, times(1)).broadcastRoomRead(
+                eq(room.getId()), eq(creator.getId()), any(LocalDateTime.class), participantCaptor.capture());
+        assertEquals(Set.of(creator.getId(), participant.getId()), Set.copyOf(participantCaptor.getValue()));
+        verify(notificationService).sendUnreadCountUpdate(room.getId(), creator.getId(), 0);
+        verify(notificationService, never()).sendMessageReadStatusUpdate(anyString(), anyString(), any());
+    }
+
+    @Test
+    void markAllMessagesInRoomAsReadSendsNothingWhenNoRowWasInserted() {
+        when(userRepository.findById(creator.getId())).thenReturn(Optional.of(creator));
+        when(chatRoomRepository.findByIdAndParticipantsContaining(room.getId(), creator))
+                .thenReturn(Optional.of(room));
+        when(messageRepository.markAllVisibleAsRead(room.getId(), creator.getId())).thenReturn(0);
+
+        chatService.markAllMessagesInRoomAsRead(room.getId(), creator.getId().toString());
+
+        verify(messageRepository).markAllVisibleAsRead(room.getId(), creator.getId());
+        verifyNoInteractions(chatReadBroadcaster, notificationService);
+    }
+
+    @Test
+    void markAllMessagesInRoomAsReadRejectsNonParticipantBeforeTouchingMessages() {
+        User outsider = createUser(9L, "outsider");
+        when(userRepository.findById(9L)).thenReturn(Optional.of(outsider));
+        when(chatRoomRepository.findByIdAndParticipantsContaining(room.getId(), outsider))
+                .thenReturn(Optional.empty());
+
+        ChatException exception = assertThrows(ChatException.class,
+                () -> chatService.markAllMessagesInRoomAsRead(room.getId(), "9"));
+
+        assertEquals(HttpStatus.NOT_FOUND, exception.getStatus());
+        verify(messageRepository, never()).markAllVisibleAsRead(anyString(), any());
+        verifyNoInteractions(chatReadBroadcaster, notificationService);
     }
 
 

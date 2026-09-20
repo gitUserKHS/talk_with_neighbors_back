@@ -7,7 +7,6 @@ import com.talkwithneighbors.entity.User;
 import com.talkwithneighbors.entity.UserAccountType;
 import com.talkwithneighbors.exception.AuthException;
 import com.talkwithneighbors.repository.UserRepository;
-import com.talkwithneighbors.security.UserSession;
 import com.talkwithneighbors.auth.email.EmailVerificationService;
 import com.talkwithneighbors.auth.nickname.NicknameException;
 import com.talkwithneighbors.auth.session.SessionIssuer;
@@ -101,7 +100,26 @@ class AuthServiceTest {
         when(userRepository.existsByUsername(anyString())).thenReturn(false);
 
         // when & then
-        assertThrows(AuthException.class, () -> authService.register(registerRequestDto, null));
+        AuthException exception = assertThrows(AuthException.class,
+                () -> authService.register(registerRequestDto, null));
+
+        // 이메일 증명 없이 가입하는 경로에서는 어느 항목이 겹치는지 알려 주지 않는다.
+        assertEquals("REGISTRATION_CONFLICT", exception.getCode());
+        assertEquals(HttpStatus.CONFLICT, exception.getStatus());
+    }
+
+    @Test
+    void verifiedEmailRegistrationNamesTheDuplicatedField() {
+        when(emailVerificationService.availability())
+                .thenReturn(new EmailVerificationService.Availability(true, "ready"));
+        when(userRepository.existsByEmail(anyString())).thenReturn(true);
+        when(userRepository.existsByUsername(anyString())).thenReturn(false);
+
+        AuthException exception = assertThrows(AuthException.class,
+                () -> authService.register(registerRequestDto, "proof"));
+
+        verify(emailVerificationService).consumeProof("test@example.com", "proof");
+        assertEquals("EMAIL_ALREADY_IN_USE", exception.getCode());
     }
 
     @Test
@@ -130,7 +148,9 @@ class AuthServiceTest {
         when(passwordEncoder.matches(anyString(), anyString())).thenReturn(false);
 
         // when & then
-        assertThrows(AuthException.class, () -> authService.login(loginRequestDto));
+        AuthException exception = assertThrows(AuthException.class, () -> authService.login(loginRequestDto));
+        assertEquals("BAD_CREDENTIALS", exception.getCode());
+        assertEquals(HttpStatus.UNAUTHORIZED, exception.getStatus());
     }
 
     @Test
@@ -151,7 +171,8 @@ class AuthServiceTest {
         when(userRepository.findByEmail(anyString())).thenReturn(Optional.empty());
 
         // when & then
-        assertThrows(AuthException.class, () -> authService.login(loginRequestDto));
+        AuthException exception = assertThrows(AuthException.class, () -> authService.login(loginRequestDto));
+        assertEquals("BAD_CREDENTIALS", exception.getCode());
     }
 
     @Test
@@ -170,60 +191,51 @@ class AuthServiceTest {
     @DisplayName("현재 사용자 정보 조회 성공 테스트")
     void getCurrentUserSuccess() {
         // given
-        String sessionId = "test-session-id";
-        UserSession userSession = UserSession.of(testUser.getId(), testUser.getUsername(), testUser.getEmail(), testUser.getUsername());
-        when(redisSessionService.getSession(anyString())).thenReturn(userSession);
-        when(userRepository.findById(anyLong())).thenReturn(Optional.of(testUser));
+        when(userRepository.findById(1L)).thenReturn(Optional.of(testUser));
 
         // when
-        UserDto userDto = authService.getCurrentUser(sessionId);
+        UserDto userDto = authService.getCurrentUser(1L);
 
         // then
         assertNotNull(userDto);
         assertEquals(testUser.getEmail(), userDto.getEmail());
         assertEquals(testUser.getUsername(), userDto.getUsername());
+        verifyNoInteractions(redisSessionService);
     }
 
     @Test
-    @DisplayName("세션이 없는 경우 현재 사용자 정보 조회 실패 테스트")
-    void getCurrentUserFailWithNoSession() {
+    @DisplayName("사용자가 없는 경우 현재 사용자 정보 조회 실패 테스트")
+    void getCurrentUserFailWithUnknownUser() {
         // given
-        String sessionId = "test-session-id";
-        when(redisSessionService.getSession(anyString())).thenReturn(null);
+        when(userRepository.findById(1L)).thenReturn(Optional.empty());
 
         // when & then
-        assertThrows(AuthException.class, () -> authService.getCurrentUser(sessionId));
+        assertThrows(AuthException.class, () -> authService.getCurrentUser(1L));
     }
 
     @Test
     void requiredNicknameCanBeReplacedWithoutResettingTheSession() {
         testUser.setUsername("kakao_defaultname");
         testUser.setNicknameSetupRequired(true);
-        UserSession session = UserSession.of(
-                testUser.getId(), testUser.getUsername(), testUser.getEmail(), testUser.getUsername());
-        when(redisSessionService.getSession("test-session-id")).thenReturn(session);
         when(userRepository.findById(testUser.getId())).thenReturn(Optional.of(testUser));
         when(userRepository.existsByUsernameAndIdNot("다윤이웃", testUser.getId())).thenReturn(false);
         when(userRepository.saveAndFlush(testUser)).thenReturn(testUser);
 
-        UserDto updated = authService.updateNickname("test-session-id", "  다윤이웃  ");
+        UserDto updated = authService.updateNickname(testUser.getId(), "  다윤이웃  ");
 
         assertEquals("다윤이웃", updated.getUsername());
         assertFalse(updated.isNicknameSetupRequired());
-        verify(redisSessionService).updateSession("test-session-id", testUser.getId(), "다윤이웃");
+        verify(redisSessionService).refreshUserSessions(testUser.getId(), "다윤이웃");
     }
 
     @Test
     void requiredNicknameCannotConfirmTheGeneratedValueUnchanged() {
         testUser.setUsername("kakao_defaultname");
         testUser.setNicknameSetupRequired(true);
-        UserSession session = UserSession.of(
-                testUser.getId(), testUser.getUsername(), testUser.getEmail(), testUser.getUsername());
-        when(redisSessionService.getSession("test-session-id")).thenReturn(session);
         when(userRepository.findById(testUser.getId())).thenReturn(Optional.of(testUser));
 
         NicknameException exception = assertThrows(NicknameException.class, () ->
-                authService.updateNickname("test-session-id", "kakao_defaultname"));
+                authService.updateNickname(testUser.getId(), "kakao_defaultname"));
 
         assertEquals("NICKNAME_CHANGE_REQUIRED", exception.getCode());
         verify(userRepository, never()).saveAndFlush(any());
@@ -232,15 +244,12 @@ class AuthServiceTest {
     @Test
     void nicknameRejectsWhitespaceAndInvisibleFormatCharacters() {
         testUser.setNicknameSetupRequired(true);
-        UserSession session = UserSession.of(
-                testUser.getId(), testUser.getUsername(), testUser.getEmail(), testUser.getUsername());
-        when(redisSessionService.getSession("test-session-id")).thenReturn(session);
         when(userRepository.findById(testUser.getId())).thenReturn(Optional.of(testUser));
 
         NicknameException spaced = assertThrows(NicknameException.class, () ->
-                authService.updateNickname("test-session-id", "다 윤"));
+                authService.updateNickname(testUser.getId(), "다 윤"));
         NicknameException invisible = assertThrows(NicknameException.class, () ->
-                authService.updateNickname("test-session-id", "다\u200B윤"));
+                authService.updateNickname(testUser.getId(), "다​윤"));
 
         assertEquals("NICKNAME_INVALID", spaced.getCode());
         assertEquals("NICKNAME_INVALID", invisible.getCode());
@@ -250,14 +259,11 @@ class AuthServiceTest {
     @Test
     void duplicateNicknameReturnsStableConflict() {
         testUser.setNicknameSetupRequired(true);
-        UserSession session = UserSession.of(
-                testUser.getId(), testUser.getUsername(), testUser.getEmail(), testUser.getUsername());
-        when(redisSessionService.getSession("test-session-id")).thenReturn(session);
         when(userRepository.findById(testUser.getId())).thenReturn(Optional.of(testUser));
         when(userRepository.existsByUsernameAndIdNot("이미사용중", testUser.getId())).thenReturn(true);
 
         NicknameException exception = assertThrows(NicknameException.class, () ->
-                authService.updateNickname("test-session-id", "이미사용중"));
+                authService.updateNickname(testUser.getId(), "이미사용중"));
 
         assertEquals("USERNAME_ALREADY_IN_USE", exception.getCode());
         assertEquals(HttpStatus.CONFLICT, exception.getStatus());
@@ -266,15 +272,12 @@ class AuthServiceTest {
     @Test
     void databaseNicknameRaceAlsoReturnsStableConflict() {
         testUser.setNicknameSetupRequired(true);
-        UserSession session = UserSession.of(
-                testUser.getId(), testUser.getUsername(), testUser.getEmail(), testUser.getUsername());
-        when(redisSessionService.getSession("test-session-id")).thenReturn(session);
         when(userRepository.findById(testUser.getId())).thenReturn(Optional.of(testUser));
         when(userRepository.existsByUsernameAndIdNot("동시요청", testUser.getId())).thenReturn(false);
         when(userRepository.saveAndFlush(testUser)).thenThrow(new DataIntegrityViolationException("duplicate"));
 
         NicknameException exception = assertThrows(NicknameException.class, () ->
-                authService.updateNickname("test-session-id", "동시요청"));
+                authService.updateNickname(testUser.getId(), "동시요청"));
 
         assertEquals("USERNAME_ALREADY_IN_USE", exception.getCode());
     }

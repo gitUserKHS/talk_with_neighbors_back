@@ -13,6 +13,13 @@ import lombok.NoArgsConstructor;
 @NoArgsConstructor
 @AllArgsConstructor
 public class MessageAttachment {
+    /**
+     * URL 조회용 인덱스 {@code idx_message_attachments_media_url}과
+     * {@code idx_message_attachments_thumbnail_url}은 운영 마이그레이션
+     * {@code V2026092001__add_hot_path_indexes.sql}이 191자 prefix 인덱스로만 만든다.
+     * {@code @Index}는 prefix 길이를 표현할 수 없고 utf8mb4 VARCHAR(1000) 전체 키는
+     * MySQL의 3072바이트 한도를 넘으므로 여기서는 미러하지 않는다.
+     */
     @Column(name = "media_url", nullable = false, length = 1000)
     private String url;
 

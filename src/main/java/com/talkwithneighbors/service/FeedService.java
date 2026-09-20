@@ -8,12 +8,15 @@ import com.talkwithneighbors.dto.feed.PostCommentDto;
 import com.talkwithneighbors.dto.feed.UpdateCommentRequest;
 import com.talkwithneighbors.dto.feed.UpdateFeedPostRequest;
 import com.talkwithneighbors.domain.event.MediaFilesDeletedEvent;
+import com.talkwithneighbors.domain.event.PostCommentedEvent;
+import com.talkwithneighbors.domain.event.PostLikedEvent;
 import com.talkwithneighbors.entity.FeedMediaType;
 import com.talkwithneighbors.entity.FeedPost;
 import com.talkwithneighbors.entity.FeedPostMedia;
 import com.talkwithneighbors.entity.PostComment;
 import com.talkwithneighbors.entity.PostLike;
 import com.talkwithneighbors.entity.User;
+import com.talkwithneighbors.entity.UserAccountType;
 import com.talkwithneighbors.exception.MatchingException;
 import com.talkwithneighbors.repository.FeedPostRepository;
 import com.talkwithneighbors.repository.PostCommentRepository;
@@ -48,6 +51,7 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class FeedService {
     private static final int RECOMMENDATION_CANDIDATE_LIMIT = 500;
+    private static final int COMMENT_SNIPPET_LENGTH = 40;
 
     private final FeedPostRepository feedPostRepository;
     private final PostLikeRepository postLikeRepository;
@@ -112,6 +116,23 @@ public class FeedService {
     private int safePageStart(Pageable pageable, int resultSize) {
         long offset = pageable.getOffset();
         return offset >= resultSize ? resultSize : Math.toIntExact(offset);
+    }
+
+    /**
+     * 게시글 하나를 피드 항목과 같은 형태로 돌려준다. 존재하지 않거나 조회자가 숨긴 글은
+     * 구분 없이 404(FEED_POST_NOT_FOUND)로 응답해 숨김 여부가 새어 나가지 않게 한다.
+     */
+    @Transactional(readOnly = true)
+    public FeedPostDto getPostForViewer(Long viewerId, String postId) {
+        FeedPost post = feedPostRepository.findById(postId)
+                .orElseThrow(this::postNotFoundForViewer);
+        requireCanInteract(viewerId, post);
+        if (hiddenContentRepository.findTargetIds(viewerId, SafetyTargetType.FEED_POST).contains(postId)) {
+            throw postNotFoundForViewer();
+        }
+        User viewer = getUser(viewerId);
+        EngagementSnapshot engagement = loadEngagement(List.of(post), viewerId);
+        return rank(post, viewer, FeedMode.LATEST, LocalDateTime.now(), engagement).dto();
     }
 
     @Transactional
@@ -180,6 +201,10 @@ public class FeedService {
             like.setPost(post);
             like.setUser(user);
             postLikeRepository.save(like);
+            if (shouldNotifyAuthor(post, currentUserId)) {
+                domainEventPublisher.publish(PostLikedEvent.create(
+                        postId, post.getAuthor().getId(), currentUserId, user.getUsername()));
+            }
         }
         return toDto(post, user);
     }
@@ -240,11 +265,22 @@ public class FeedService {
 
         FeedPost post = getPost(postId);
         requireCanInteract(currentUserId, post);
+        User commenter = getUser(currentUserId);
         PostComment comment = new PostComment();
         comment.setPost(post);
-        comment.setAuthor(getUser(currentUserId));
+        comment.setAuthor(commenter);
         comment.setContent(request.getContent().trim());
-        return PostCommentDto.fromEntity(postCommentRepository.save(comment));
+        PostComment saved = postCommentRepository.save(comment);
+        if (shouldNotifyAuthor(post, currentUserId)) {
+            domainEventPublisher.publish(PostCommentedEvent.create(
+                    postId,
+                    saved.getId(),
+                    post.getAuthor().getId(),
+                    currentUserId,
+                    commenter.getUsername(),
+                    snippet(saved.getContent())));
+        }
+        return PostCommentDto.fromEntity(saved);
     }
 
     @Transactional
@@ -486,8 +522,39 @@ public class FeedService {
 
     private void requireCanInteract(Long currentUserId, FeedPost post) {
         if (post.getAuthor() != null && userBlockRepository.existsBetween(currentUserId, post.getAuthor().getId())) {
-            throw new MatchingException("차단 관계인 사용자와는 상호작용할 수 없어요.", HttpStatus.FORBIDDEN);
+            throw new MatchingException(
+                    "차단 관계인 사용자와는 상호작용할 수 없어요.",
+                    HttpStatus.FORBIDDEN,
+                    "FEED_BLOCKED");
         }
+    }
+
+    /**
+     * 본인 글에 남긴 반응이나 시스템 계정이 올린 글에는 알림을 보내지 않는다.
+     */
+    private boolean shouldNotifyAuthor(FeedPost post, Long actorId) {
+        User author = post.getAuthor();
+        return author != null
+                && author.getId() != null
+                && !author.getId().equals(actorId)
+                && author.getAccountType() != UserAccountType.SYSTEM;
+    }
+
+    private String snippet(String content) {
+        if (content == null) {
+            return "";
+        }
+        String flattened = content.replaceAll("\\s+", " ").trim();
+        return flattened.length() <= COMMENT_SNIPPET_LENGTH
+                ? flattened
+                : flattened.substring(0, COMMENT_SNIPPET_LENGTH) + "\u2026";
+    }
+
+    private MatchingException postNotFoundForViewer() {
+        return new MatchingException(
+                "삭제되었거나 볼 수 없는 글이에요.",
+                HttpStatus.NOT_FOUND,
+                "FEED_POST_NOT_FOUND");
     }
 
     private List<String> cleanTags(List<String> tags) {

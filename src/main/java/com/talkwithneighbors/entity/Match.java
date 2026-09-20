@@ -11,7 +11,13 @@ import java.time.LocalDateTime;
  * 두 사용자 간의 매칭 상태와 시간 정보를 저장합니다.
  */
 @Entity
-@Table(name = "matches")
+@Table(
+        name = "matches",
+        indexes = {
+                @Index(name = "idx_matches_status_expires", columnList = "status,expires_at"),
+                @Index(name = "idx_matches_users_status", columnList = "user1_id,user2_id,status")
+        }
+)
 @Getter
 @Setter
 @NoArgsConstructor

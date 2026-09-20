@@ -16,13 +16,26 @@ variable "aws_region" {
 }
 
 variable "application_domain" {
-  description = "Public DNS name whose A record points to the portfolio node Elastic IP."
+  description = "Public DNS name whose A record follows the portfolio node's auto-assigned public IPv4 address."
   type        = string
   default     = "talk-with-neighbors.duckdns.org"
 
   validation {
     condition     = can(regex("^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?[.])+[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$", var.application_domain))
     error_message = "application_domain must be a lowercase DNS name without a scheme, port, or path."
+  }
+}
+
+variable "duckdns_token_parameter_name" {
+  description = "SSM Parameter Store name (SecureString, created outside Terraform with aws ssm put-parameter) holding the DuckDNS token. The EC2 role and the GitHub deploy role receive ssm:GetParameter on it so the public DNS record follows the auto-assigned public IP after every stop/start. Set to null to grant nothing."
+  type        = string
+  default     = "/talk-with-neighbors/duckdns/token"
+
+  # RE2 rejects a repetition count above 1000, so the name is bounded by its
+  # shape rather than by a {1,2048} quantifier; AWS enforces the real limit.
+  validation {
+    condition     = var.duckdns_token_parameter_name == null || can(regex("^/[A-Za-z0-9_./-]+$", var.duckdns_token_parameter_name))
+    error_message = "duckdns_token_parameter_name must be a fully qualified SSM parameter name that starts with /."
   }
 }
 

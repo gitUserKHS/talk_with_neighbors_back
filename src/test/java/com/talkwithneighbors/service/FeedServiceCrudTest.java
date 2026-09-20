@@ -1,14 +1,20 @@
 package com.talkwithneighbors.service;
 
+import com.talkwithneighbors.dto.feed.CreateCommentRequest;
 import com.talkwithneighbors.dto.feed.CreateFeedPostRequest;
 import com.talkwithneighbors.dto.feed.UpdateCommentRequest;
 import com.talkwithneighbors.dto.feed.UpdateFeedPostRequest;
 import com.talkwithneighbors.domain.event.MediaFilesDeletedEvent;
+import com.talkwithneighbors.domain.event.PostCommentedEvent;
+import com.talkwithneighbors.domain.event.PostLikedEvent;
 import com.talkwithneighbors.entity.FeedMediaType;
 import com.talkwithneighbors.entity.FeedPost;
 import com.talkwithneighbors.entity.FeedPostMedia;
 import com.talkwithneighbors.entity.PostComment;
+import com.talkwithneighbors.entity.PostLike;
+import com.talkwithneighbors.entity.SafetyTargetType;
 import com.talkwithneighbors.entity.User;
+import com.talkwithneighbors.entity.UserAccountType;
 import com.talkwithneighbors.exception.MatchingException;
 import com.talkwithneighbors.repository.FeedPostRepository;
 import com.talkwithneighbors.repository.HiddenContentRepository;
@@ -16,6 +22,7 @@ import com.talkwithneighbors.repository.PostCommentRepository;
 import com.talkwithneighbors.repository.PostLikeRepository;
 import com.talkwithneighbors.repository.UserBlockRepository;
 import com.talkwithneighbors.repository.UserRepository;
+import com.talkwithneighbors.repository.projection.PostEngagementCount;
 import com.talkwithneighbors.outbox.DomainEventPublisher;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -26,12 +33,15 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.HttpStatus;
 
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -131,6 +141,59 @@ class FeedServiceCrudTest {
     }
 
     @Test
+    void getPostForViewerReturnsRankedDtoWithEngagement() {
+        post.setCreatedAt(LocalDateTime.now().minusHours(2));
+        when(feedPostRepository.findById(post.getId())).thenReturn(Optional.of(post));
+        when(hiddenContentRepository.findTargetIds(otherUser.getId(), SafetyTargetType.FEED_POST))
+                .thenReturn(List.of());
+        when(userRepository.findById(otherUser.getId())).thenReturn(Optional.of(otherUser));
+        when(postLikeRepository.countByPostIds(List.of(post.getId())))
+                .thenReturn(List.of(new PostEngagementCount(post.getId(), 3L)));
+        when(postCommentRepository.countByPostIds(List.of(post.getId())))
+                .thenReturn(List.of(new PostEngagementCount(post.getId(), 2L)));
+        when(postLikeRepository.findLikedPostIds(otherUser.getId(), List.of(post.getId())))
+                .thenReturn(List.of(post.getId()));
+
+        var result = feedService.getPostForViewer(otherUser.getId(), post.getId());
+
+        assertThat(result.getId()).isEqualTo(post.getId());
+        assertThat(result.getAuthorId()).isEqualTo(author.getId());
+        assertThat(result.getLikeCount()).isEqualTo(3L);
+        assertThat(result.getCommentCount()).isEqualTo(2L);
+        assertThat(result.isLikedByCurrentUser()).isTrue();
+        assertThat(result.getRecommendationReasons()).containsExactly("RECENT");
+    }
+
+    @Test
+    void getPostForViewerRejectsHiddenPost() {
+        when(feedPostRepository.findById(post.getId())).thenReturn(Optional.of(post));
+        when(hiddenContentRepository.findTargetIds(otherUser.getId(), SafetyTargetType.FEED_POST))
+                .thenReturn(List.of(post.getId()));
+
+        assertThatThrownBy(() -> feedService.getPostForViewer(otherUser.getId(), post.getId()))
+                .isInstanceOfSatisfying(MatchingException.class, exception -> {
+                    assertThat(exception.getStatus()).isEqualTo(HttpStatus.NOT_FOUND);
+                    assertThat(exception.getCode()).isEqualTo("FEED_POST_NOT_FOUND");
+                });
+
+        verify(userRepository, never()).findById(otherUser.getId());
+    }
+
+    @Test
+    void getPostForViewerRejectsBlockedViewer() {
+        when(feedPostRepository.findById(post.getId())).thenReturn(Optional.of(post));
+        when(userBlockRepository.existsBetween(otherUser.getId(), author.getId())).thenReturn(true);
+
+        assertThatThrownBy(() -> feedService.getPostForViewer(otherUser.getId(), post.getId()))
+                .isInstanceOfSatisfying(MatchingException.class, exception -> {
+                    assertThat(exception.getStatus()).isEqualTo(HttpStatus.FORBIDDEN);
+                    assertThat(exception.getCode()).isEqualTo("FEED_BLOCKED");
+                });
+
+        verify(hiddenContentRepository, never()).findTargetIds(otherUser.getId(), SafetyTargetType.FEED_POST);
+    }
+
+    @Test
     void jsonPostRejectsInternalMediaUrl() {
         when(userRepository.findById(author.getId())).thenReturn(Optional.of(author));
         CreateFeedPostRequest request = new CreateFeedPostRequest();
@@ -196,6 +259,74 @@ class FeedServiceCrudTest {
                 .containsExactly("/uploads/feed/owned.webp", "/uploads/feed/owned-thumbnail.webp");
         assertThat(eventCaptor.getValue().aggregateType()).isEqualTo("FeedPost");
         assertThat(eventCaptor.getValue().aggregateId()).isEqualTo(post.getId());
+    }
+
+    @Test
+    void commentByNeighborPublishesPostCommentedEvent() {
+        when(feedPostRepository.findById(post.getId())).thenReturn(Optional.of(post));
+        when(userRepository.findById(otherUser.getId())).thenReturn(Optional.of(otherUser));
+        when(postCommentRepository.save(any(PostComment.class))).thenAnswer(invocation -> {
+            PostComment saved = invocation.getArgument(0);
+            saved.setId("comment-9");
+            return saved;
+        });
+        CreateCommentRequest request = new CreateCommentRequest();
+        request.setContent("  nice   photo  ");
+
+        feedService.addComment(otherUser.getId(), post.getId(), request);
+
+        ArgumentCaptor<PostCommentedEvent> eventCaptor = ArgumentCaptor.forClass(PostCommentedEvent.class);
+        verify(domainEventPublisher).publish(eventCaptor.capture());
+        PostCommentedEvent event = eventCaptor.getValue();
+        assertThat(event.postId()).isEqualTo(post.getId());
+        assertThat(event.commentId()).isEqualTo("comment-9");
+        assertThat(event.postAuthorId()).isEqualTo(author.getId());
+        assertThat(event.commenterId()).isEqualTo(otherUser.getId());
+        assertThat(event.commenterName()).isEqualTo("other");
+        assertThat(event.snippet()).isEqualTo("nice photo");
+        assertThat(event.aggregateType()).isEqualTo("FeedPost");
+    }
+
+    @Test
+    void commentByAuthorOrOnSystemPostPublishesNothing() {
+        when(feedPostRepository.findById(post.getId())).thenReturn(Optional.of(post));
+        when(userRepository.findById(author.getId())).thenReturn(Optional.of(author));
+        when(postCommentRepository.save(any(PostComment.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        CreateCommentRequest request = new CreateCommentRequest();
+        request.setContent("my own post");
+
+        feedService.addComment(author.getId(), post.getId(), request);
+
+        author.setAccountType(UserAccountType.SYSTEM);
+        when(userRepository.findById(otherUser.getId())).thenReturn(Optional.of(otherUser));
+        feedService.addComment(otherUser.getId(), post.getId(), request);
+
+        verify(domainEventPublisher, never()).publish(any(PostCommentedEvent.class));
+    }
+
+    @Test
+    void firstLikePublishesPostLikedEventButRepeatedLikeDoesNot() {
+        when(feedPostRepository.findById(post.getId())).thenReturn(Optional.of(post));
+        when(userRepository.findById(otherUser.getId())).thenReturn(Optional.of(otherUser));
+        AtomicBoolean liked = new AtomicBoolean(false);
+        when(postLikeRepository.existsByPost_IdAndUser_Id(post.getId(), otherUser.getId()))
+                .thenAnswer(invocation -> liked.get());
+        when(postLikeRepository.save(any(PostLike.class))).thenAnswer(invocation -> {
+            liked.set(true);
+            return invocation.getArgument(0);
+        });
+
+        feedService.likePost(otherUser.getId(), post.getId());
+        feedService.likePost(otherUser.getId(), post.getId());
+
+        verify(postLikeRepository).save(any(PostLike.class));
+        ArgumentCaptor<PostLikedEvent> eventCaptor = ArgumentCaptor.forClass(PostLikedEvent.class);
+        verify(domainEventPublisher).publish(eventCaptor.capture());
+        PostLikedEvent event = eventCaptor.getValue();
+        assertThat(event.postId()).isEqualTo(post.getId());
+        assertThat(event.postAuthorId()).isEqualTo(author.getId());
+        assertThat(event.likerId()).isEqualTo(otherUser.getId());
+        assertThat(event.likerName()).isEqualTo("other");
     }
 
     private PostComment comment(User owner) {

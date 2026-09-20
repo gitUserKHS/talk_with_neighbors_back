@@ -161,6 +161,8 @@ for required in \
   "$RELEASE_DIR/k3s-network-common.sh" \
   "$RELEASE_DIR/k3s-server-config.yaml" \
   "$RELEASE_DIR/install-mysql-backup.sh" \
+  "$RELEASE_DIR/install-duckdns-update.sh" \
+  "$RELEASE_DIR/duckdns-update.sh" \
   "$RELEASE_DIR/mysql-backup.sh" \
   "$RELEASE_DIR/mysql-backup-restore-verify.sh" \
   "$RELEASE_DIR/mysql-backup.conf" \
@@ -218,6 +220,9 @@ elif [[ -f "$NETWORK_MIGRATION_DONE" && ! -f "$MYSQL_RESTORE_DONE" ]]; then
 fi
 
 bash "$RELEASE_DIR/install-mysql-backup.sh" "$RELEASE_DIR"
+# The node has no Elastic IP; this timer keeps DuckDNS pointed at whatever
+# public address the next start hands out.
+bash "$RELEASE_DIR/install-duckdns-update.sh" "$RELEASE_DIR"
 if [[ "$RUN_DATABASE_MIGRATIONS" == "true" ]]; then
   set -a
   # The generated file contains only a validated bucket name and fixed prefix.

@@ -27,6 +27,7 @@ import com.talkwithneighbors.repository.MessageRepository;
 import com.talkwithneighbors.repository.MeetupWaitlistRepository;
 import com.talkwithneighbors.repository.UserRepository;
 import com.talkwithneighbors.repository.UserBlockRepository;
+import com.talkwithneighbors.service.ChatReadBroadcaster;
 import com.talkwithneighbors.service.ChatService;
 import com.talkwithneighbors.service.MeetupTimePolicy;
 import com.talkwithneighbors.service.NotificationService;
@@ -41,6 +42,8 @@ import org.springframework.http.HttpStatus;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.time.Instant;
 import java.time.LocalDateTime;
@@ -68,6 +71,7 @@ public class ChatServiceImpl implements ChatService {
     private final ChatScheduleRsvpRepository chatScheduleRsvpRepository;
     private final MeetupWaitlistRepository meetupWaitlistRepository;
     private final DomainEventPublisher domainEventPublisher;
+    private final ChatReadBroadcaster chatReadBroadcaster;
 
     @Override
     @Transactional
@@ -214,6 +218,7 @@ public class ChatServiceImpl implements ChatService {
             throw new ChatException("This hobby meetup is already full.", HttpStatus.CONFLICT);
         }
         chatRoom.getParticipants().add(user);
+        appendMembershipMessage(chatRoom, user, MessageType.ENTER, user.getUsername() + "님이 입장했어요");
         chatRoomRepository.save(chatRoom);
         if (chatRoom.getCreator() == null
                 || chatRoom.getCreator().getAccountType() != UserAccountType.SYSTEM) {
@@ -242,6 +247,7 @@ public class ChatServiceImpl implements ChatService {
         }
         if (chatRoom.getParticipants().remove(user)) {
             chatScheduleRsvpRepository.deleteBySchedule_Room_IdAndUser_Id(roomId, userId);
+            appendMembershipMessage(chatRoom, user, MessageType.LEAVE, user.getUsername() + "님이 나갔어요");
             chatRoomRepository.save(chatRoom);
             log.info("User {} left room {}", user.getId(), roomId);
         } else {
@@ -460,6 +466,38 @@ public class ChatServiceImpl implements ChatService {
         return message;
     }
 
+    /**
+     * 입장/퇴장 시스템 행을 남기고 남아 있는 참여자에게 실시간으로 전달한다.
+     * 참여자 변경이 끝난 뒤 호출하며, 현재 참여자 전원과 행위자를 읽음 처리해
+     * countVisibleUnreadMessages 가 시스템 행을 안 읽은 메시지로 세지 않게 한다.
+     * 채팅방 미리보기만 바꾸고 저장은 호출한 쪽의 단일 save 에 맡긴다.
+     */
+    private void appendMembershipMessage(ChatRoom room, User actor, MessageType type, String content) {
+        List<Long> participantIds = room.getParticipants().stream().map(User::getId).toList();
+
+        Message message = new Message();
+        message.setId(UUID.randomUUID().toString());
+        message.setChatRoom(room);
+        message.setSender(actor);
+        message.setContent(content);
+        message.setType(type);
+        message.setCreatedAt(LocalDateTime.now());
+        message.getReadByUsers().addAll(participantIds);
+        message.getReadByUsers().add(actor.getId());
+        messageRepository.save(message);
+
+        room.setLastMessage(lastMessagePreview(message));
+        room.setLastMessageTime(message.getCreatedAt());
+
+        // Delivery happens only after the database transaction commits.
+        applicationEventPublisher.publishEvent(
+                new ChatMessageCommittedEvent(
+                        MessageDto.fromEntity(message, actor.getId()),
+                        room.getId(),
+                        actor.getId(),
+                        participantIds));
+    }
+
     private void requireUserGeneratedMessage(Message message) {
         if (message.getType() != MessageType.TEXT
                 && message.getType() != MessageType.IMAGE
@@ -546,8 +584,12 @@ public class ChatServiceImpl implements ChatService {
         };
     }
 
+    /**
+     * 메시지 페이지 조회. 읽음 처리는 하지 않는다. 방을 열 때 클라이언트가
+     * POST /messages/read를 따로 보내며, 그쪽에서 한 문장으로 일괄 처리한다.
+     */
     @Override
-    @Transactional
+    @Transactional(readOnly = true)
     public Page<MessageDto> getMessagesByRoomId(String roomId, String userIdString, Pageable pageable) {
         Long userId = Long.parseLong(userIdString);
         User user = userRepository.findById(userId)
@@ -566,39 +608,6 @@ public class ChatServiceImpl implements ChatService {
         Page<Message> messagesPage = messageRepository
                 .findVisibleByChatRoomIdOrderByCreatedAtDesc(
                         roomId, MessageType.SCHEDULE, pageable);
-        
-        List<Message> messagesToUpdate = new java.util.ArrayList<>();
-        List<String> readMessageIds = new java.util.ArrayList<>();
-        
-        messagesPage.getContent().forEach(msg -> {
-            if (!msg.getReadByUsers().contains(user.getId())) {
-                msg.getReadByUsers().add(user.getId());
-                messagesToUpdate.add(msg);
-                readMessageIds.add(msg.getId());
-            }
-        });
-        
-        if (!messagesToUpdate.isEmpty()) {
-            try {
-                messageRepository.saveAll(messagesToUpdate);
-                log.info("[GetMessages] Marked {} messages as read for user {} in room {}", 
-                         messagesToUpdate.size(), user.getId(), roomId);
-                
-                // 읽음 상태 변경 알림 전송
-                for (String messageId : readMessageIds) {
-                    try {
-                        notificationService.sendMessageReadStatusUpdate(messageId, roomId, user.getId());
-                    } catch (Exception e) {
-                        log.error("[GetMessages] Failed to send read status update for messageId {}: {}", 
-                                  messageId, e.getMessage(), e);
-                    }
-                }
-                
-            } catch (Exception e) {
-                log.error("[GetMessages] Failed to save read status updates for user {} in room {}: {}", 
-                          user.getId(), roomId, e.getMessage(), e);
-            }
-        }
 
         return messagesPage.map(msg -> MessageDto.fromEntity(msg, user.getId()));
     }
@@ -749,50 +758,44 @@ public class ChatServiceImpl implements ChatService {
         }
     }
 
+    /**
+     * 방의 미읽음 메시지를 INSERT ... SELECT 한 문장으로 읽음 처리한다.
+     * 새로 읽은 행이 있을 때만 커밋 뒤에 다른 참가자에게 ROOM_READ 프레임 하나씩,
+     * 읽은 본인에게 UNREAD_COUNT_UPDATE(0)를 보낸다. 메시지별 MESSAGE_READ_STATUS_UPDATE는 보내지 않는다.
+     */
     @Override
     @Transactional
     public void markAllMessagesInRoomAsRead(String roomId, String userIdString) {
         Long userId = Long.parseLong(userIdString);
-        requireParticipant(roomId, userId);
+        ChatRoom room = requireParticipant(roomId, userId);
 
-        List<Message> allMessagesInRoom = messageRepository.findByChatRoomIdOrderByCreatedAtDesc(roomId, Pageable.unpaged()).getContent();
-        
-        List<Message> messagesToUpdate = new ArrayList<>();
-        List<String> readMessageIds = new ArrayList<>();
-        
-        for (Message message : allMessagesInRoom) {
-            if (message.getReadByUsers() == null) {
-                message.setReadByUsers(new HashSet<>());
-            }
-            if (message.getReadByUsers().add(userId)) {
-                messagesToUpdate.add(message);
-                readMessageIds.add(message.getId());
-            }
+        int affected = messageRepository.markAllVisibleAsRead(roomId, userId);
+        if (affected == 0) {
+            log.debug("No new messages to mark as read in room {} for user {}.", roomId, userId);
+            return;
         }
+        log.info("Marked {} messages in room {} as read for user {} with one bulk statement.", affected, roomId, userId);
 
-        if (!messagesToUpdate.isEmpty()) {
-            try {
-                messageRepository.saveAll(messagesToUpdate);
-                log.info("Successfully marked {} messages in room {} as read for user {}.", messagesToUpdate.size(), roomId, userIdString);
-                
-                // 읽음 상태 변경 알림 전송
-                for (String messageId : readMessageIds) {
-                    try {
-                        notificationService.sendMessageReadStatusUpdate(messageId, roomId, userId);
-                    } catch (Exception e) {
-                        log.error("Failed to send read status update for messageId {}: {}", messageId, e.getMessage(), e);
-                    }
+        List<Long> participantIds = room.getParticipants().stream().map(User::getId).toList();
+        LocalDateTime readAt = LocalDateTime.now();
+        Runnable delivery = () -> {
+            chatReadBroadcaster.broadcastRoomRead(roomId, userId, readAt, participantIds);
+            notificationService.sendUnreadCountUpdate(roomId, userId, 0);
+        };
+
+        // Delivery happens only after the database transaction commits.
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    delivery.run();
                 }
-                
-            } catch (Exception e) {
-                log.error("Error saving messages after marking them as read for room {} user {}: {}", roomId, userIdString, e.getMessage(), e);
-                throw new ChatException("Failed to save updated message read statuses.", HttpStatus.INTERNAL_SERVER_ERROR);
-            }
+            });
         } else {
-            log.info("No new messages to mark as read in room {} for user {}.", roomId, userIdString);
+            delivery.run();
         }
     }
-    
+
     @Override
     @Transactional
     public ChatRoomDto updateRoom(String roomId, Long requesterId, UpdateChatRoomRequest request) {

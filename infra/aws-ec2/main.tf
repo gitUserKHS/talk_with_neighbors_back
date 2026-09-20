@@ -1,5 +1,7 @@
 data "aws_partition" "current" {}
 
+data "aws_caller_identity" "current" {}
+
 data "aws_ssm_parameter" "ubuntu_arm64_ami" {
   name = "/aws/service/canonical/ubuntu/server/24.04/stable/current/arm64/hvm/ebs-gp3/ami-id"
 }
@@ -16,6 +18,18 @@ locals {
   github_oidc_provider_arn = coalesce(
     var.github_oidc_provider_arn,
     try(aws_iam_openid_connect_provider.github[0].arn, null)
+  )
+
+  # The node has no Elastic IP: an auto-assigned public IPv4 address is free
+  # while the instance is stopped but changes on every start. The node and
+  # the GitHub deploy role read the DuckDNS token from this SSM parameter so
+  # the public DNS record can follow the current address.
+  duckdns_token_parameter_arn = var.duckdns_token_parameter_name == null ? null : format(
+    "arn:%s:ssm:%s:%s:parameter%s",
+    data.aws_partition.current.partition,
+    var.aws_region,
+    data.aws_caller_identity.current.account_id,
+    var.duckdns_token_parameter_name
   )
 
   # Terraform core has no cidrcontains function. Normalize each IPv4 CIDR to
@@ -797,6 +811,16 @@ data "aws_iam_policy_document" "instance_s3" {
     ]
     resources = ["${aws_s3_bucket.mysql_backup.arn}/${local.mysql_backup_prefix}*"]
   }
+
+  dynamic "statement" {
+    for_each = local.duckdns_token_parameter_arn == null ? [] : [local.duckdns_token_parameter_arn]
+
+    content {
+      sid       = "ReadDuckDnsToken"
+      actions   = ["ssm:GetParameter"]
+      resources = [statement.value]
+    }
+  }
 }
 
 resource "aws_iam_role_policy" "instance_s3" {
@@ -827,6 +851,9 @@ resource "aws_iam_instance_profile" "app" {
   role = aws_iam_role.instance.name
 }
 
+# The node has no Elastic IP: an auto-assigned public IPv4 costs nothing while
+# the instance is stopped but changes on every start, so the DuckDNS record
+# follows it (deploy/k8s/duckdns-update.sh).
 resource "aws_instance" "app" {
   ami                         = local.ubuntu_arm64_ami_id
   instance_type               = var.instance_type
@@ -885,20 +912,6 @@ resource "aws_instance" "app" {
     aws_route_table_association.public,
     aws_vpc_security_group_egress_rule.all_ipv4
   ]
-}
-
-resource "aws_eip" "app" {
-  domain = "vpc"
-
-  tags = {
-    Name      = "${var.project_name}-public"
-    Component = "k3s-node"
-  }
-}
-
-resource "aws_eip_association" "app" {
-  allocation_id = aws_eip.app.id
-  instance_id   = aws_instance.app.id
 }
 
 resource "aws_iam_openid_connect_provider" "github" {
@@ -1021,12 +1034,19 @@ data "aws_iam_policy_document" "github_deploy" {
   }
 
   statement {
-    sid = "ReadNodeState"
-    actions = [
-      "ec2:DescribeAddresses",
-      "ec2:DescribeInstances"
-    ]
+    sid       = "ReadNodeState"
+    actions   = ["ec2:DescribeInstances"]
     resources = ["*"]
+  }
+
+  dynamic "statement" {
+    for_each = local.duckdns_token_parameter_arn == null ? [] : [local.duckdns_token_parameter_arn]
+
+    content {
+      sid       = "ReadDuckDnsToken"
+      actions   = ["ssm:GetParameter"]
+      resources = [statement.value]
+    }
   }
 }
 

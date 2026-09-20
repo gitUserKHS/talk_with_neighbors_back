@@ -5,6 +5,7 @@ import com.talkwithneighbors.dto.feed.FeedPostDto;
 import com.talkwithneighbors.dto.feed.FeedMode;
 import com.talkwithneighbors.dto.feed.PostCommentDto;
 import com.talkwithneighbors.dto.feed.UpdateFeedPostRequest;
+import com.talkwithneighbors.exception.MatchingException;
 import com.talkwithneighbors.repository.MessageRepository;
 import com.talkwithneighbors.security.UserSession;
 import com.talkwithneighbors.service.FeedService;
@@ -19,6 +20,7 @@ import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMock
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.context.annotation.Import;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
@@ -39,7 +41,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @WebMvcTest(controllers = FeedController.class)
 @AutoConfigureMockMvc
 @ActiveProfiles("test")
-@Import({TestSecurityConfig.class, ChatExceptionHandler.class})
+@Import(TestSecurityConfig.class)
 class FeedControllerWebTest {
     private static final String SESSION_ID = "feed-session";
 
@@ -77,6 +79,34 @@ class FeedControllerWebTest {
                 ArgumentCaptor.forClass(UpdateFeedPostRequest.class);
         verify(feedService).updatePost(eq(1L), eq("post-1"), requestCaptor.capture());
         assertThat(requestCaptor.getValue().interestTags()).containsExactly("walk");
+    }
+
+    @Test
+    void getPostReturnsDtoForViewer() throws Exception {
+        FeedPostDto response = new FeedPostDto();
+        response.setId("post-1");
+        response.setCaption("hello");
+        when(feedService.getPostForViewer(1L, "post-1")).thenReturn(response);
+
+        mockMvc.perform(get("/api/feed/{postId}", "post-1")
+                        .cookie(new Cookie("TWN_SESSION", SESSION_ID)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value("post-1"))
+                .andExpect(jsonPath("$.caption").value("hello"));
+
+        verify(feedService).getPostForViewer(1L, "post-1");
+    }
+
+    @Test
+    void getPostReturnsNotFoundForMissingPost() throws Exception {
+        when(feedService.getPostForViewer(1L, "missing"))
+                .thenThrow(new MatchingException(
+                        "삭제되었거나 볼 수 없는 글이에요.", HttpStatus.NOT_FOUND, "FEED_POST_NOT_FOUND"));
+
+        mockMvc.perform(get("/api/feed/{postId}", "missing")
+                        .cookie(new Cookie("TWN_SESSION", SESSION_ID)))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("FEED_POST_NOT_FOUND"));
     }
 
     @Test

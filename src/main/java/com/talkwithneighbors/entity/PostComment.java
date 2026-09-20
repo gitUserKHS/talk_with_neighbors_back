@@ -4,6 +4,7 @@ import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.FetchType;
 import jakarta.persistence.Id;
+import jakarta.persistence.Index;
 import jakarta.persistence.JoinColumn;
 import jakarta.persistence.ManyToOne;
 import jakarta.persistence.PrePersist;
@@ -16,7 +17,10 @@ import java.time.LocalDateTime;
 import java.util.UUID;
 
 @Entity
-@Table(name = "post_comments")
+@Table(
+        name = "post_comments",
+        indexes = @Index(name = "idx_post_comments_post_created", columnList = "post_id,created_at")
+)
 @Getter
 @Setter
 @NoArgsConstructor

@@ -14,6 +14,7 @@ import com.talkwithneighbors.entity.User;
 import com.talkwithneighbors.exception.ChatException;
 import com.talkwithneighbors.config.TestConfig;
 import com.talkwithneighbors.outbox.DomainEventPublisher;
+import com.talkwithneighbors.service.ChatReadBroadcaster;
 import com.talkwithneighbors.service.ChatService;
 import com.talkwithneighbors.service.NotificationService;
 import com.talkwithneighbors.service.impl.ChatServiceImpl;
@@ -86,6 +87,9 @@ class ChatRoomDeletionMySqlIntegrationTest {
 
     @MockBean
     private DomainEventPublisher domainEventPublisher;
+
+    @MockBean
+    private ChatReadBroadcaster chatReadBroadcaster;
 
     @Test
     void deletesOneToOneRoomAfterMessageWasSoftDeletedAndReadByBothUsers() {

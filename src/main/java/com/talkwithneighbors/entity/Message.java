@@ -17,7 +17,10 @@ import java.util.UUID;
  * 사용자 간의 대화 내용을 저장합니다.
  */
 @Entity
-@Table(name = "messages")
+@Table(
+        name = "messages",
+        indexes = @Index(name = "idx_messages_room_created", columnList = "chat_room_id,created_at")
+)
 @Getter
 @Setter
 @NoArgsConstructor
@@ -108,7 +111,8 @@ public class Message {
     @CollectionTable(
         name = "message_read_by",
         joinColumns = @JoinColumn(name = "message_id", referencedColumnName = "id"),
-        foreignKey = @ForeignKey(name = "fk_message_read_by_message_id")
+        foreignKey = @ForeignKey(name = "fk_message_read_by_message_id"),
+        indexes = @Index(name = "idx_message_read_by_user_message", columnList = "user_id,message_id")
     )
     @Column(name = "user_id")
     private Set<Long> readByUsers = new HashSet<>();

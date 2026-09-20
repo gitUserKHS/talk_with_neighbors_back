@@ -5,6 +5,7 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.EntityGraph;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
@@ -72,6 +73,31 @@ public interface MessageRepository extends JpaRepository<Message, String> {
             @Param("userId") Long userId,
             @Param("excludedType") Message.MessageType excludedType);
     
+    /**
+     * 방의 메시지 중 본인이 보내지 않았고 삭제되지 않았으며 아직 읽지 않은 것 전부를
+     * 한 문장으로 읽음 처리합니다. 메시지마다 컬렉션을 로드해 행을 넣는 대신
+     * INSERT ... SELECT 한 번으로 끝내며, NOT EXISTS 덕분에 중복 호출에도 안전합니다.
+     * H2와 MySQL 8.4에서 같은 SQL이 동작합니다.
+     *
+     * @param roomId 채팅방 ID
+     * @param userId 읽은 사용자 ID
+     * @return 새로 추가된 읽음 행 수
+     */
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Query(value = """
+            INSERT INTO message_read_by (message_id, user_id)
+            SELECT m.id, :userId
+            FROM messages m
+            WHERE m.chat_room_id = :roomId
+              AND m.is_deleted = false
+              AND m.sender_id <> :userId
+              AND NOT EXISTS (
+                SELECT 1 FROM message_read_by r
+                WHERE r.message_id = m.id AND r.user_id = :userId
+              )
+            """, nativeQuery = true)
+    int markAllVisibleAsRead(@Param("roomId") String roomId, @Param("userId") Long userId);
+
     @Query("SELECT COUNT(m) FROM Message m WHERE m.chatRoom.id = :roomId AND :userId NOT IN (SELECT u FROM m.readByUsers u)")
     long countUnreadMessages(@Param("roomId") String roomId, @Param("userId") Long userId);
 

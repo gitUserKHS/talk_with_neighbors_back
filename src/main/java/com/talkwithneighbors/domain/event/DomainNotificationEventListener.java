@@ -83,6 +83,64 @@ public class DomainNotificationEventListener {
     }
 
     @EventListener
+    public void onPostCommented(PostCommentedEvent event) {
+        if (event.postAuthorId() == null || event.postAuthorId().equals(event.commenterId())) {
+            return;
+        }
+
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("postId", event.postId());
+        data.put("commentId", event.commentId());
+        data.put("actorId", event.commenterId());
+
+        String snippet = event.snippet() == null ? "" : event.snippet();
+        WebSocketNotification<Map<String, Object>> notification = new WebSocketNotification<>(
+                "POST_COMMENTED",
+                data,
+                displayName(event.commenterName()) + "님이 회원님의 글에 댓글을 남겼어요: " + snippet,
+                "/feed/" + event.postId()
+        );
+
+        deliver(
+                event.postAuthorId(),
+                "/queue/system-notifications",
+                notification,
+                OfflineNotification.NotificationType.POST_COMMENTED,
+                4
+        );
+    }
+
+    @EventListener
+    public void onPostLiked(PostLikedEvent event) {
+        if (event.postAuthorId() == null || event.postAuthorId().equals(event.likerId())) {
+            return;
+        }
+
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("postId", event.postId());
+        data.put("actorId", event.likerId());
+
+        WebSocketNotification<Map<String, Object>> notification = new WebSocketNotification<>(
+                "POST_LIKED",
+                data,
+                displayName(event.likerName()) + "님이 회원님의 글을 좋아해요",
+                "/feed/" + event.postId()
+        );
+
+        deliver(
+                event.postAuthorId(),
+                "/queue/system-notifications",
+                notification,
+                OfflineNotification.NotificationType.POST_LIKED,
+                4
+        );
+    }
+
+    private String displayName(String name) {
+        return name == null || name.isBlank() ? "이웃" : name;
+    }
+
+    @EventListener
     public void onChatRoomDeleted(ChatRoomDeletedEvent event) {
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("eventId", event.eventId());
@@ -140,6 +198,11 @@ public class DomainNotificationEventListener {
                     notification.getNavigateTo(),
                     priority
             );
+            if (saved != null && Boolean.TRUE.equals(saved.getIsSent())) {
+                // The save returned an existing row that was already delivered (e.g. a
+                // re-like after an unlike); the user has seen it, so do not toast again.
+                return;
+            }
             if (redisSessionService.isUserOnline(userId.toString())) {
                 try {
                     messagingTemplate.convertAndSendToUser(

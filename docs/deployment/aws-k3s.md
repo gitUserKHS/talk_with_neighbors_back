@@ -2,7 +2,9 @@
 
 이 문서는 `talk_with_neighbors`를 서울 리전의 저비용 AWS 환경에 배포하는 절차를 설명한다. 대상은 실제 상용 서비스가 아니라 **DevOps·백엔드 포트폴리오와 짧은 데모**다. 관리형 EKS 대신 ARM64 EC2 한 대의 k3s를 사용하고, 미디어만 비공개 S3로 분리한다.
 
-> **현재 상태 — 2026-07-15:** `talk-with-neighbors.duckdns.org`용 Elastic IP, Traefik HTTP-01 인증서 자동 발급·갱신과 HTTP→HTTPS 전환, 실제 E2E 검증을 완료했다. DB migration gate, 별도 S3 논리 백업과 복원 검증, 불변 digest 릴리스 이력, 프런트 단독 배포와 전용 백업 모니터 OIDC 역할도 코드로 관리한다. **Elastic IP를 포함한 AWS 리소스는 비용이 발생할 수 있다.**
+> **현재 상태 — 2026-09-20:** 중지한 모든 시간에도 과금되던 Elastic IP(`aws_eip.app`·`aws_eip_association.app`)를 제거했다. 노드는 `associate_public_ip_address = true`의 자동 할당 퍼블릭 IPv4만 사용한다. 중지 중에는 퍼블릭 IPv4 요금이 없고, 대신 주소가 stop/start마다 바뀐다. DuckDNS A 레코드는 배포·`start` 워크플로의 `deploy/k8s/sync-public-dns.sh`와 노드의 `talk-with-neighbors-duckdns-update.timer`가 현재 주소로 자동 갱신한다. DuckDNS 토큰은 Terraform 밖에서 SSM Parameter Store SecureString `/talk-with-neighbors/duckdns/token`에 한 번만 저장한다. **실행 중 EC2와 그 퍼블릭 IPv4, EBS, S3 같은 AWS 리소스는 여전히 비용이 발생할 수 있다.**
+>
+> **2026-07-15:** `talk-with-neighbors.duckdns.org`용 Elastic IP(현재는 제거), Traefik HTTP-01 인증서 자동 발급·갱신과 HTTP→HTTPS 전환, 실제 E2E 검증을 완료했다. DB migration gate, 별도 S3 논리 백업과 복원 검증, 불변 digest 릴리스 이력, 프런트 단독 배포와 전용 백업 모니터 OIDC 역할도 코드로 관리한다.
 
 이 구성은 고가용성이나 무중단 배포를 보장하지 않는다. 자동 논리 백업과 동일 노드 격리 복원 시험은 제공하지만, 노드 전체 상실을 가정한 별도 복원 훈련과 관리형 DB 수준의 재해 복구를 대신하지 않는다.
 
@@ -11,7 +13,7 @@
 ```mermaid
 flowchart LR
     U["사용자 브라우저"] -->|"HTTPS 443"| DNS["talk-with-neighbors.duckdns.org"]
-    DNS --> IP["EC2 Elastic IP"]
+    DNS --> IP["EC2 자동 할당 퍼블릭 IPv4"]
     IP --> T["k3s Traefik · Let's Encrypt"]
     U -. "HTTP 80 → HTTPS redirect" .-> T
     T -->|"/"| F["React + Nginx"]
@@ -39,7 +41,7 @@ flowchart LR
 | 미디어 | 비공개·버전 관리 S3 | 앱이 `/uploads/**`로 프록시한다. 브라우저에 버킷이나 AWS 키를 노출하지 않는다. |
 | DB 백업 | 별도 비공개·버전 관리 S3 + systemd timer | migration 전과 매일 논리 백업을 만들고 주간 격리 복원 시험을 수행한다. 노드 역할에는 백업 삭제 권한을 주지 않는다. |
 | 배포 | GitHub OIDC → S3 번들 → SSM | 장기 AWS 액세스 키와 SSH 22 포트를 사용하지 않는다. |
-| 네트워크 | Public subnet + Internet Gateway + Elastic IP | 포트폴리오 URL을 고정한다. Load Balancer와 NAT Gateway 비용은 피하지만 Elastic IP는 중지 중에도 과금된다. |
+| 네트워크 | Public subnet + Internet Gateway + 자동 할당 퍼블릭 IPv4 | Load Balancer·NAT Gateway·Elastic IP 비용을 모두 피한다. 주소는 stop/start마다 바뀌지만 DuckDNS A 레코드가 자동으로 따라가므로 포트폴리오 URL은 그대로다. |
 | 클러스터 CIDR | VPC `10.42.0.0/16`, Pod `10.244.0.0/16`, Service `10.96.0.0/16`, DNS `10.96.0.10` | VPC·Pod·Service 대역을 서로 겹치지 않게 고정한다. Terraform plan 단계에서 subnet 포함 관계와 CIDR 중첩을 거부한다. |
 | 외부 프로토콜 | HTTPS 443, HTTP 80 redirect·ACME | Traefik이 HTTP-01로 인증서를 갱신하고 ACME 상태를 local-path PVC에 보존한다. |
 
@@ -53,7 +55,7 @@ S3 Gateway VPC Endpoint를 사용해 EC2와 S3 사이 경로에 NAT Gateway가 �
 - 시간당 요금이 없는 S3 Gateway VPC Endpoint
 - 80·443만 인바운드로 허용하고 22는 열지 않는 Security Group
 - Canonical Ubuntu 24.04 ARM64 AMI의 `t4g.small` EC2
-- EC2 중지·시작 후에도 유지되는 VPC Elastic IP
+- 중지 중에는 과금되지 않고 stop/start마다 바뀌는 자동 할당 퍼블릭 IPv4(`associate_public_ip_address = true`). Elastic IP는 만들지 않는다
 - 암호화·종료 시 삭제되는 30 GiB gp3 루트 볼륨
 - 2 GiB swap, 고정된 k3s 버전, secrets encryption을 설정하는 최초 부팅 스크립트
 - VPC·Pod·Service CIDR의 비중첩과 public subnet 포함 관계를 적용 전 차단하는 Terraform precondition
@@ -65,6 +67,7 @@ S3 Gateway VPC Endpoint를 사용해 EC2와 S3 사이 경로에 NAT Gateway가 �
 - 배포 번들을 하루 뒤 정리하고 성공한 불변 digest 조합은 기본 90일 보존하는 S3 lifecycle
 - GitHub `production` Environment subject만 신뢰하는 OIDC 배포 Role
 - GitHub `production-monitor` Environment subject만 신뢰하고 대상 EC2의 SSM 상태 조회에만 쓰는 OIDC 모니터 Role
+- DuckDNS 토큰 파라미터 한 개(`duckdns_token_parameter_name`, 기본 `/talk-with-neighbors/duckdns/token`)에 대한 `ssm:GetParameter` 권한. EC2 Instance Role과 GitHub 배포 Role 모두에 `ReadDuckDnsToken` 문으로 부여한다. 파라미터 자체는 Terraform 밖에서 만들며, 변수를 `null`로 두면 아무 권한도 주지 않는다
 - 이메일을 지정했을 때만 생성되는 월 비용 Budget
 
 미디어와 배포 버킷은 기본적으로 `force_destroy = false`다. 실수로 Terraform을 실행해도 비어 있지 않은 버킷을 즉시 삭제하지 못하게 하는 보호 장치다.
@@ -88,12 +91,14 @@ S3 Gateway VPC Endpoint를 사용해 EC2와 S3 사이 경로에 NAT Gateway가 �
 | 비용 항목 | 언제 비용이 생기는가 | 절약 방법 |
 |---|---|---|
 | EC2 compute | 인스턴스가 `running`인 시간 | 데모할 때만 시작하고 끝나면 중지한다. `t4g.small` CPU credit은 `standard`로 고정해 unlimited 추가 요금을 피한다. |
-| Public IPv4 / Elastic IP | 실행 여부와 관계없이 할당된 공인 IPv4 사용 시간. 계정 혜택 적용 여부는 Billing에서 확인한다. | 장기간 데모를 닫을 때는 Terraform으로 Elastic IP까지 해제해야 과금이 멈춘다. |
+| Public IPv4 | 인스턴스가 `running`인 동안 자동 할당된 공인 IPv4 사용 시간. AWS는 2024년부터 사용 중인 모든 공인 IPv4에 과금한다. 계정 혜택 적용 여부는 Billing에서 확인한다. | Elastic IP를 두지 않으므로 중지 중에는 퍼블릭 IPv4 요금이 0이다. 예약해 둔 Elastic IP는 서울 리전 기준 유휴 시간당 약 USD 0.005, 대부분 중지해 두는 데모 노드에서는 월 약 USD 3.6으로 USD 10 예산의 큰 몫이었다. |
 | EBS gp3 | 30 GiB 볼륨이 존재하는 동안. EC2를 중지해도 계속 존재한다. | 이미지·로그를 정리하고 필요 없으면 `terraform destroy`로 종료한다. |
 | S3 미디어 | 현재 객체와 보존 중인 비현재 버전의 GB-month, PUT·GET·LIST, 인터넷 전송 | 비현재 버전은 기본 30일 뒤 만료한다. 큰 테스트 파일과 불필요한 현재 객체는 직접 삭제한다. |
 | S3 배포 번들 | 배포할 때의 짧은 저장·요청 | 성공·실패 시 스크립트가 삭제하고, 누락된 객체도 하루 뒤 lifecycle로 만료한다. |
 | 스냅샷·데이터 전송 | 수동 EBS snapshot, 인터넷 outbound 등 | 스냅샷 보존 기한을 정하고 Billing에서 전송량을 확인한다. |
 | AWS Budget | 이메일을 지정했을 때 월 Budget 생성 | 알림은 지출을 차단하지 않는다. 실제 사용 중지·삭제는 별도로 해야 한다. |
+
+정리하면 중지 상태의 비용은 30 GiB gp3 EBS(와 S3 몇 센트)뿐이고, 실행 상태의 비용은 EC2 compute + 퍼블릭 IPv4 시간당 요금 + EBS다. 예전처럼 중지 중에도 붙던 Elastic IP 요금은 없다.
 
 `budget_alert_email`을 설정하면 기본 USD 10 월 Budget에서 실제 80%, 예측 100% 알림을 보낸다. 크레딧이 있어도 **Billing → Credits, Free Tier, Bills, Cost Explorer**를 함께 확인한다.
 
@@ -124,6 +129,7 @@ terraform version
 - Terraform `fmt`, provider 초기화, `validate`
 - Kustomize 렌더링과 kubeconform Kubernetes 스키마 검사
 - 배포 Bash의 ShellCheck
+- `deploy/k8s/tests/public-dns-contract.sh`와 `deploy/k8s/tests/public-dns-sync-runner.sh`의 공개 DNS 동기화 계약 검증
 - GitHub Actions의 actionlint
 
 로컬에서도 먼저 정적 검증과 mock 기반 기본값 테스트를 실행할 수 있다.
@@ -229,22 +235,52 @@ terraform show tfplan
 - AMI는 Ubuntu 24.04 ARM64이고 인스턴스는 `t4g.small`인가
 - 루트 볼륨은 암호화된 gp3 30 GiB이며 `delete_on_termination = true`인가
 - 인바운드는 80·443뿐이고 22·3306·6379·8080은 공개되지 않았는가
-- NAT Gateway, Load Balancer, EKS는 없고 Elastic IP가 정확히 한 개인가
+- NAT Gateway, Load Balancer, EKS는 없고 Elastic IP도 없는가
+- EC2가 `associate_public_ip_address = true`이고, 두 IAM Role의 `ReadDuckDnsToken` 문이 지정한 SSM 파라미터 하나만 허용하는가
 - OIDC subject가 정확히 `repo:gitUserKHS/talk_with_neighbors_back:environment:production`인가
 - 미디어 버킷은 versioning·public access block·30일 비현재 버전 lifecycle을 갖는가
 - `force_destroy`가 두 버킷 모두 `false`인가
 - Budget 이메일과 한도가 의도한 값인가
 
-### 6.3 Elastic IP를 포함한 변경 적용
+### 6.3 Elastic IP 제거와 DuckDNS 자동 갱신 적용
 
-기존 인프라는 2026-07-14에 적용했지만 Elastic IP 추가분은 별도 apply가 필요하다. 다음 명령은 공인 IPv4를 할당해 인스턴스 중지 중에도 비용이 생길 수 있으므로, 검토한 `tfplan`에 `aws_eip.app`과 `aws_eip_association.app` 외 예상치 못한 교체·삭제가 없는지 확인한 뒤 실행한다.
+Elastic IP는 인스턴스를 중지한 모든 시간에도 과금되므로 제거했다. 노드는 자동 할당 퍼블릭 IPv4만 사용하고, 주소가 바뀌면 DuckDNS A 레코드가 따라간다. 이미 만들어 둔 환경은 다음 순서로 전환한다.
 
-```powershell
-terraform apply tfplan
-terraform output
-```
+1. DuckDNS 토큰을 Terraform 밖에서 SSM Parameter Store SecureString으로 한 번 저장한다. 표준 티어 파라미터에는 요금이 없다.
 
-apply가 끝나면 `terraform output -raw instance_public_ip`의 새 주소로 DuckDNS의 `talk-with-neighbors` A 레코드를 한 번 갱신한다. 기존 동적 주소 `3.36.89.5`를 Elastic IP로 변환할 수는 없으므로 새 주소가 나오는 것이 정상이다. DNS가 새 주소를 반환하기 전에는 HTTPS 배포를 실행하지 않는다.
+   ```powershell
+   aws ssm put-parameter `
+     --region ap-northeast-2 `
+     --name /talk-with-neighbors/duckdns/token `
+     --type SecureString `
+     --value "<DuckDNS token>"
+   ```
+
+2. 6.2절의 `terraform plan -out=tfplan`을 다시 만들고 다음 변경만 있는지 확인한다. 다른 교체·삭제가 보이면 멈춘다.
+
+   - `aws_eip.app`과 `aws_eip_association.app` 삭제
+   - IAM Role 정책 두 개 갱신: `instance_s3`에 `ReadDuckDnsToken` sid 추가, `github_deploy`에 같은 sid 추가와 `ec2:DescribeAddresses` 제거
+   - `aws_caller_identity` data 조회 추가
+
+3. `terraform apply`를 실행한다.
+
+   ```powershell
+   terraform apply tfplan
+   terraform output
+   ```
+
+   Elastic IP 연결이 끊기면 AWS가 실행 중인 인스턴스에 새 자동 할당 퍼블릭 IPv4를 준다. 주소가 비어 있으면 인스턴스를 한 번 중지했다 시작한다.
+
+4. **Control portfolio EC2** 워크플로를 `start`로 실행하거나 일반 배포를 실행해 DuckDNS를 새 주소로 맞춘다. 이 변경 이후 첫 배포 전까지 노드에는 아직 자체 갱신 timer가 없으므로 runner 쪽 `deploy/k8s/sync-public-dns.sh`가 첫 갱신을 담당한다.
+
+5. DNS와 HTTPS를 확인한다.
+
+   ```powershell
+   Resolve-DnsName talk-with-neighbors.duckdns.org -Type A
+   curl.exe --fail --show-error "https://talk-with-neighbors.duckdns.org/healthz"
+   ```
+
+Let's Encrypt 인증서는 IP가 아니라 도메인에 묶여 있으므로 주소가 바뀌어도 그대로 동작한다. `terraform output instance_public_ip`는 마지막 apply·refresh 시점의 자동 할당 주소라서 stop/start 뒤에는 오래된 값이 된다. `elastic_ip_allocation_id` 출력은 더 이상 없다.
 
 최초 부팅은 swap, AWS CLI, SSM Agent, k3s를 설치한다. 몇 분 걸릴 수 있다. SSH 대신 다음으로 상태를 확인한다.
 
@@ -312,8 +348,21 @@ Terraform 출력값을 Environment variables로 등록한다.
 | `FRONTEND_DISPATCH_ACTOR` | GitHub App bot actor. 현재 `talk-neighbors-deploy-gituserkhs[bot]` |
 | `PUBLIC_ORIGIN` | 선택. 기본값은 `https://talk-with-neighbors.duckdns.org`; 다른 환경에서만 경로 없는 HTTPS origin으로 덮어쓴다. |
 | `ACME_EMAIL` | 선택. 설정하면 Let's Encrypt 계정 연락처로 사용하고, 비우면 이메일 없이 등록한다. |
+| `DUCKDNS_TOKEN_PARAMETER` | 선택. DuckDNS 토큰이 든 SSM SecureString 파라미터 이름. 비우면 `/talk-with-neighbors/duckdns/token` |
 | `K3S_NETWORK_REINITIALIZE_ALLOWED` | 평소 `false` 또는 미설정. 승인된 1회 CIDR 복구 창에만 잠시 `true` |
 | `AUTH_EMAIL_REQUIRED` | 기본 `false`. 아래 SES 준비·Terraform 적용·Secret 등록을 모두 끝낸 뒤에만 `true` |
+
+DuckDNS 토큰은 GitHub Secret이 아니라 AWS SSM Parameter Store에 SecureString으로 한 번만 저장한다. Terraform은 이 파라미터 하나에 대한 `ssm:GetParameter`만 EC2 Instance Role과 배포 Role `talk-with-neighbors-github-deploy`에 부여하고, 파라미터 자체는 만들지 않는다. 표준 티어 파라미터에는 요금이 없다.
+
+```powershell
+aws ssm put-parameter `
+  --region ap-northeast-2 `
+  --name /talk-with-neighbors/duckdns/token `
+  --type SecureString `
+  --value "<DuckDNS token>"
+```
+
+이름을 바꿨다면 Terraform 변수 `duckdns_token_parameter_name`과 GitHub Actions variable `DUCKDNS_TOKEN_PARAMETER`를 같은 값으로 맞춘다. Terraform 변수를 `null`로 두면 어떤 SSM 권한도 부여하지 않으며, 이때 워크플로는 A 레코드를 직접 갱신하지 않고 외부 갱신을 기다리기만 한다.
 
 Environment secrets는 다음과 같다.
 
@@ -408,7 +457,7 @@ ghcr.io/gituserkhs/talk_with_neighbors_front@sha256:<64자리 digest>
 
 ### 8.2 배포 실행
 
-일반 배포는 위 CD를 사용한다. 백엔드 게시의 전체 자동 경로는 `start_if_stopped=true`, `reinitialize_k3s_network=false`, 빈 재초기화 확인 문구로 고정된다. 워크플로는 인스턴스에 Terraform의 Elastic IP가 연결되어 있고 공개 DNS A 레코드가 그 주소와 일치하는지 먼저 확인한다. 조건이 맞아야 Traefik ACME 설정과 TLS Ingress를 적용하고 `Secure` 쿠키를 켠다. 프런트 게시 경로는 이미 실행 중이고 초기화된 클러스터만 허용하며 프런트 rollout과 외부 스모크만 수행한다. 두 경로 모두 `main` 전용 `production` Environment와 정확한 OIDC subject를 사용한다. 현재는 Required reviewer가 없어 자동으로 이어지며, 비용·변경 승인이 필요하면 Environment reviewer를 별도로 추가한다.
+일반 배포는 위 CD를 사용한다. 백엔드 게시의 전체 자동 경로는 `start_if_stopped=true`, `reinitialize_k3s_network=false`, 빈 재초기화 확인 문구로 고정된다. 워크플로는 인스턴스를 실행한 뒤 현재 자동 할당 퍼블릭 IPv4를 읽어 DuckDNS A 레코드를 그 주소로 갱신하고, DNS가 실제로 그 주소를 반환할 때까지 최대 5분 기다린다. 조건이 맞아야 Traefik ACME 설정과 TLS Ingress를 적용하고 `Secure` 쿠키를 켠다. 프런트 게시 경로는 이미 실행 중이고 초기화된 클러스터만 허용하며 프런트 rollout과 외부 스모크만 수행한다. 두 경로 모두 `main` 전용 `production` Environment와 정확한 OIDC subject를 사용한다. 현재는 Required reviewer가 없어 자동으로 이어지며, 비용·변경 승인이 필요하면 Environment reviewer를 별도로 추가한다.
 
 명시적 digest 재배포·롤백, HTTPS origin 지정, 승인된 네트워크 복구, 진단 수집은 기존 수동 경로를 사용한다. 백엔드 저장소의 **Actions → Deploy EC2 k3s production → Run workflow**에서 `main`을 선택한다.
 
@@ -428,7 +477,7 @@ ghcr.io/gituserkhs/talk_with_neighbors_front@sha256:<64자리 digest>
 1. 성공한 백엔드 게시와 `main` 출처를 검증하고 두 `:main` 태그를 OCI digest로 고정한다. 수동 일반 배포는 입력 digest를 사용하고, 수동 롤백은 S3에 기록된 최근 또는 직전 성공 조합을 해석한다. 프런트 App 이벤트는 별도 경로에서 provenance와 현재 프런트 `:main` digest를 검증한다.
 2. 모든 경로에서 `main`·Environment 출처, digest 정규식, secret 길이와 롤백 확인 문구를 검증한다.
 3. OIDC로 AWS 임시 자격 증명을 받는다.
-4. 자동 실행 또는 수동 선택 시 EC2를 시작하고 Elastic IP, DNS 일치와 SSM `Online` 상태를 확인한다.
+4. 자동 실행 또는 수동 선택 시 EC2를 시작하고, `deploy/k8s/sync-public-dns.sh`로 DuckDNS를 현재 퍼블릭 IPv4에 맞춘 뒤 DNS 일치와 SSM `Online` 상태를 확인한다.
 5. S3·DB·선택적 GHCR 설정과 Traefik ACME 구성이 든 private 배포 번들을 만든다.
 6. 번들을 SSE-S3로 업로드하고 SSM `AWS-RunShellScript`를 실행한다.
 7. 승인된 수동 1회 복구 입력일 때만 root 전용 백업 후 k3s 네트워크를 재초기화한다.
@@ -492,9 +541,9 @@ curl.exe --fail --show-error "$Origin/api/auth/check-duplicates?username=smoke"
 
 배포 자동화의 스모크 테스트가 전체 사용자 여정을 대신하지는 않는다.
 
-## 9. 중지·시작과 Elastic IP
+## 9. 중지·시작과 퍼블릭 IP
 
-백엔드 저장소의 **Actions → Control portfolio EC2**에서 `status`, `start`, `stop`을 실행할 수 있다. 이 워크플로도 `production` 승인과 OIDC를 사용한다.
+백엔드 저장소의 **Actions → Control portfolio EC2**에서 `status`, `start`, `stop`을 실행할 수 있다. 이 워크플로도 `production` 승인과 OIDC를 사용한다. `start`는 인스턴스가 이미 실행 중이었더라도 공개 DNS 동기화를 한 번 수행한다.
 
 CLI로 직접 실행하려면 다음과 같다.
 
@@ -509,19 +558,34 @@ aws ec2 describe-instances --region ap-northeast-2 --instance-ids $InstanceId `
   --query "Reservations[0].Instances[0].PublicIpAddress" --output text
 ```
 
-중지는 종료가 아니다. 중지 중에는 EC2 compute 과금이 멈추지만 EBS, S3와 Elastic IP 과금은 계속될 수 있다. 연결된 Elastic IP는 stop/start 뒤에도 유지되므로 DuckDNS를 다시 바꿀 필요는 없다. 자동 배포는 인스턴스를 시작한 뒤 DNS가 그 Elastic IP를 가리키는지 검증하고 HTTPS 스모크 테스트까지 수행한다.
+중지는 종료가 아니다. 중지 중에는 EC2 compute와 퍼블릭 IPv4 과금이 멈추지만 EBS와 S3 과금은 계속된다. 이 노드에는 Elastic IP가 없으므로 퍼블릭 IPv4 주소는 stop/start마다 바뀐다. 주소 추적은 두 경로가 담당한다.
+
+- **Runner 쪽** — `deploy-k3s.yml`의 전체 배포와 프런트 단독 배포, `ec2-power.yml`의 `start`가 인스턴스 실행 직후 `deploy/k8s/sync-public-dns.sh`를 호출한다. 스크립트는 노드의 현재 퍼블릭 IPv4를 읽고, 공개 호스트가 `.duckdns.org`로 끝나면 SSM SecureString 파라미터의 토큰으로 DuckDNS를 갱신한다. 다른 DNS 공급자는 갱신하지 않고 기다리기만 한다. 그다음 A 레코드가 그 주소를 반환할 때까지 최대 5분 기다리고, 시간이 지나면 무엇을 고쳐야 하는지 알려주며 실패한다. 파라미터 이름은 GitHub Actions variable `DUCKDNS_TOKEN_PARAMETER`로 덮어쓸 수 있고 기본값은 `/talk-with-neighbors/duckdns/token`이다.
+- **노드 쪽** — 모든 배포에서 `deploy-on-node.sh`가 `install-mysql-backup.sh` 직후 `deploy/k8s/install-duckdns-update.sh`를 실행해 `deploy/k8s/duckdns-update.sh`를 `/usr/local/sbin/talk-with-neighbors-duckdns-update`로 설치하고, `talk-with-neighbors-duckdns-update.service`와 `.timer`(`OnBootSec=45s`, `OnUnitActiveSec=5min`)를 활성화한다. 설정 파일 `/etc/talk-with-neighbors/duckdns.conf`(`DUCKDNS_DOMAIN`, `DUCKDNS_TOKEN_PARAMETER`)는 `build-bundle.sh`가 DuckDNS 호스트일 때만 번들에 넣는다. updater는 IMDSv2에서 퍼블릭 IP와 리전을 읽어 현재 DNS 응답과 비교하고, 값이 다를 때만 DuckDNS를 호출한다. 그래서 AWS 콘솔에서 인스턴스를 시작해도 레코드가 따라온다.
+
+이 변경 이후 첫 배포 전까지는 노드에 updater가 없다. 그 첫 배포는 runner 쪽 동기화가 담당한다.
+
+노드 쪽 상태는 SSH 없이 SSM Session Manager나 Run Command로 확인한다.
+
+```bash
+systemctl list-timers talk-with-neighbors-duckdns-update.timer
+sudo systemctl status talk-with-neighbors-duckdns-update.service
+sudo journalctl -u talk-with-neighbors-duckdns-update -n 100 --no-pager
+```
+
+자동 배포는 인스턴스를 시작한 뒤 DNS가 현재 퍼블릭 IPv4를 가리키는지 검증하고 HTTPS 스모크 테스트까지 수행한다. `terraform output -raw instance_public_ip`는 마지막 apply·refresh 시점의 값이므로, 실제 주소는 위 `describe-instances` 명령이나 DNS 조회로 확인한다.
 
 ## 10. HTTPS 전환과 남은 운영 한계
 
 Traefik은 단일 replica에서 Let's Encrypt HTTP-01을 사용한다. `web` 포트는 ACME와 HTTPS 영구 redirect에, `websecure`는 애플리케이션에 사용한다. 인증서 계정과 키는 `kube-system`의 local-path PVC에 보존돼 Pod 재시작 뒤에도 자동 갱신할 수 있다. 이 방식은 포트폴리오 단일 노드에는 적합하지만 고가용성 인증서 저장소는 아니다.
 
-구성과 비용 판단은 [AWS Elastic IP 문서](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/elastic-ip-addresses-eip.html), [Traefik ACME 문서](https://doc.traefik.io/traefik/reference/install-configuration/tls/certificate-resolvers/acme/), [Let's Encrypt](https://letsencrypt.org/), [DuckDNS](https://www.duckdns.org/about.jsp)를 기준으로 한다.
+구성과 비용 판단은 [AWS EC2 인스턴스 IP 주소 문서](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/using-instance-addressing.html), [Traefik ACME 문서](https://doc.traefik.io/traefik/reference/install-configuration/tls/certificate-resolvers/acme/), [Let's Encrypt](https://letsencrypt.org/), [DuckDNS](https://www.duckdns.org/about.jsp)를 기준으로 한다.
 
 최초 전환 순서는 다음과 같다.
 
-1. Terraform plan을 검토하고 Elastic IP 추가분을 apply한다.
-2. DuckDNS A 레코드를 새 `instance_public_ip`로 갱신한다.
-3. `Resolve-DnsName talk-with-neighbors.duckdns.org`이 새 주소를 반환하는지 확인한다.
+1. Terraform plan을 검토하고 apply한다. 6.3절의 Elastic IP 제거 전환을 포함한다.
+2. **Control portfolio EC2**의 `start` 또는 일반 배포를 실행해 DuckDNS A 레코드를 노드의 현재 퍼블릭 IPv4로 맞춘다.
+3. `Resolve-DnsName talk-with-neighbors.duckdns.org`이 그 주소를 반환하는지 확인한다.
 4. 프런트 이미지를 먼저 게시한 뒤 백엔드 게시·자동 배포를 승인한다.
 5. Actions의 HTTP redirect·HTTPS API 스모크 테스트와 브라우저의 인증서, `wss://`, 카카오 지도를 확인한다.
 
@@ -646,7 +710,8 @@ terraform destroy
 - [ ] 미디어·배포·MySQL 백업 S3 Public Access Block과 TLS deny policy가 유지된다.
 - [ ] 백업 버킷은 버전 관리·암호화·보존 정책이 켜져 있고 EC2 역할에 객체 삭제 권한이 없다.
 - [ ] 배포 뒤 rollout, readiness, 외부 API, 채팅, 다중 미디어 시나리오를 확인했다.
-- [ ] EC2를 다시 시작한 뒤 새 동적 IP로 재배포했다.
+- [ ] EC2를 다시 시작한 뒤 DuckDNS A 레코드가 새 퍼블릭 IPv4를 반환하고 HTTPS 스모크가 통과했다.
+- [ ] Elastic IP가 없고, DuckDNS 토큰은 SSM SecureString 파라미터에만 있으며 GitHub Secret으로 복사하지 않았다.
 - [ ] 1회 네트워크 복구 후 `K3S_NETWORK_REINITIALIZE_ALLOWED`를 `false`로 바꾸거나 삭제했고 이후 배포 입력도 reset 비활성 상태다.
 - [ ] 36시간 이내의 완료된 DB 논리 백업과 8일 이내의 격리 schema 복구 시험이 있다.
 - [ ] HTTP 데모에는 실제 사용자 자격 증명이나 민감 정보를 넣지 않는다.
