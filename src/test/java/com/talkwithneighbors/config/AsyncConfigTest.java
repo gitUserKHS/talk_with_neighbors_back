@@ -1,6 +1,5 @@
 package com.talkwithneighbors.config;
 
-import com.talkwithneighbors.service.OfflineNotificationService;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.Bean;
@@ -16,7 +15,6 @@ import java.util.concurrent.ThreadPoolExecutor;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.Mockito.mock;
 
 class AsyncConfigTest {
 
@@ -54,13 +52,15 @@ class AsyncConfigTest {
 
     @Test
     void scheduledJobsGetTheirOwnSchedulerPool() {
+        // 스케줄러 풀을 정의하는 설정은 어떤 서비스도 주입받지 않는다. 주입받으면 그 서비스가
+        // 필요로 하는 WebSocket 브로커가 다시 이 TaskScheduler를 찾아 순환 참조가 된다.
         new ApplicationContextRunner()
                 .withUserConfiguration(SchedulingConfig.class)
-                .withBean(OfflineNotificationService.class, () -> mock(OfflineNotificationService.class))
                 .run(context -> {
                     ThreadPoolTaskScheduler scheduler = context.getBean("taskScheduler", ThreadPoolTaskScheduler.class);
 
-                    assertThat(scheduler.getPoolSize()).isEqualTo(2);
+                    // getPoolSize()는 설정값이 아니라 지금 살아 있는 스레드 수라 작업 전에는 의미가 없다.
+                    assertThat(scheduler.getScheduledThreadPoolExecutor().getCorePoolSize()).isEqualTo(2);
                     assertThat(scheduler.getThreadNamePrefix()).isEqualTo("sched-");
                 });
     }

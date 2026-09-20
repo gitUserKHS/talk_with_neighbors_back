@@ -31,8 +31,10 @@ variable "duckdns_token_parameter_name" {
   type        = string
   default     = "/talk-with-neighbors/duckdns/token"
 
+  # RE2 rejects a repetition count above 1000, so the name is bounded by its
+  # shape rather than by a {1,2048} quantifier; AWS enforces the real limit.
   validation {
-    condition     = var.duckdns_token_parameter_name == null || can(regex("^/[A-Za-z0-9_./-]{1,2047}$", var.duckdns_token_parameter_name))
+    condition     = var.duckdns_token_parameter_name == null || can(regex("^/[A-Za-z0-9_./-]+$", var.duckdns_token_parameter_name))
     error_message = "duckdns_token_parameter_name must be a fully qualified SSM parameter name that starts with /."
   }
 }
